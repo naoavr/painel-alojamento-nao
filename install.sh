@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  MiniPainel v1.4.0 — instalador
+#  MiniPainel v1.5.0 — instalador
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.4.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.5.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -16,7 +16,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.4.0"
+MP_VERSION="1.5.0"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -494,7 +494,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * MiniPainel v1.4.0 — painel web
+ * MiniPainel v1.5.0 — painel web
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -502,7 +502,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.4.0';
+const MP_VERSION = '1.5.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -649,6 +649,7 @@ const ICONS = [
     'edit'   => '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     'move'   => '<path d="M5 12h14M15 8l4 4-4 4M5 5v14"/>',
     'up'     => '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    'chev'   => '<path d="M6 9l6 6 6-6"/>',
 ];
 function ic(string $n, string $cls = ''): string {
     return '<svg class="i' . ($cls !== '' ? ' ' . $cls : '') . '" viewBox="0 0 24 24" aria-hidden="true">' . (ICONS[$n] ?? '') . '</svg>';
@@ -713,12 +714,14 @@ function mp_head(string $title): string {
 function mp_css(): string {
     return <<<'CSS'
 <style>
-:root{--bg:#f3f5f8;--card:#fff;--ink:#172230;--ink-2:#5b6b7b;--ink-3:#8a98a6;--line:#e3e8ee;--line-2:#eef1f5;--hover:#f7f9fb;
---side:#13202c;--side-ink:#9fb0c0;--side-on:#1e3142;--acc:#12a4a6;--acc-2:#0d8587;--acc-bg:#dff4f3;--acc-ink:#0b7a7c;
+:root{--bg:#e8edf2;--card:#fff;--ink:#14222f;--ink-2:#5f6e7c;--ink-3:#8d9aa6;--line:#e1e7ed;--line-2:#edf1f5;--hover:#f6f9fb;
+--side:#13283a;--side-ink:#a9b8c6;--side-on:#1f5f8b;--acc:#1f5f8b;--acc-2:#184d72;--acc-bg:#e2edf6;--acc-ink:#1f5f8b;
+--field:#eef3f9;--field-line:#d8e2ec;--hl:#1f5f8b;--c1:#1f5f8b;--c2:#66a8d8;--c3:#e0a33a;
 --ok:#1c6b40;--ok-bg:#e2f5ea;--err:#b3261e;--err-bg:#fdecea;--warn:#9a5b08;--warn-bg:#fdf1dc;--blue-bg:#e8ecfb;--blue-ink:#3b4fb0;--vio-bg:#f1e9fb;--vio-ink:#6a3fa8;
 --shadow:0 1px 2px rgba(16,24,40,.05);--pop:0 16px 40px rgba(16,24,40,.16);color-scheme:light}
-[data-theme=dark]{--bg:#0e161e;--card:#16212c;--ink:#e6edf3;--ink-2:#a3b1bf;--ink-3:#728191;--line:#253342;--line-2:#1e2b38;--hover:#1a2733;
---side:#0a1117;--side-ink:#8fa1b3;--side-on:#17293a;--acc:#17a9ab;--acc-2:#1fbfc1;--acc-bg:#123a3d;--acc-ink:#6fd9da;
+[data-theme=dark]{--bg:#0d151d;--card:#16212c;--ink:#e6edf3;--ink-2:#a3b1bf;--ink-3:#728191;--line:#253342;--line-2:#1e2b38;--hover:#1a2733;
+--side:#0a131b;--side-ink:#8fa1b3;--side-on:#2a6f9f;--acc:#3584bd;--acc-2:#4996cf;--acc-bg:#16334a;--acc-ink:#8cc4ec;
+--field:#1b2836;--field-line:#2a3a4a;--hl:#235b84;--c1:#4a9ad3;--c2:#a8cdee;--c3:#f0b75a;
 --ok:#7ed3a4;--ok-bg:#15372a;--err:#f19c95;--err-bg:#3d1b1a;--warn:#f0c27a;--warn-bg:#3a2b12;--blue-bg:#1e2a52;--blue-ink:#a9b6f5;--vio-bg:#2d2143;--vio-ink:#c8adf0;
 --shadow:none;--pop:0 16px 40px rgba(0,0,0,.45);color-scheme:dark}
 *{box-sizing:border-box}
@@ -952,6 +955,98 @@ dialog.fm-ed{width:min(1100px,100vw)}
 .fm-ed textarea{flex:1;min-height:0;width:100%;border:0;resize:none;padding:16px 22px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--card);color:var(--ink);tab-size:4;outline:0;white-space:pre;overflow:auto}
 .fm-ed .dlg-f{align-items:center}
 .fm-ed .dlg-f .mu{flex:1}
+/* ---------- tema v1.5 ---------- */
+body{font-size:14.5px}
+h1,h2,h3,.brand,.stat .v,.hl .v{letter-spacing:-.015em}
+.app{grid-template-columns:282px minmax(0,1fr)}
+.side{top:12px;margin:12px 0 12px 12px;height:calc(100vh - 24px);border-radius:24px;padding:24px 14px 18px;gap:2px;overflow-y:auto}
+.brand{padding:2px 12px 16px;font-size:18px}
+.logo{border-radius:11px;background:var(--side-on)}
+.nav-sec{padding:18px 14px 8px;font-size:12px;font-weight:600;color:#7f95a8}
+.nav a{padding:11px 14px;border-radius:13px;color:#d3dee8;font-weight:600}
+.nav a:hover{background:rgba(255,255,255,.05);color:#fff}
+.nav a.on{background:var(--side-on);color:#fff}
+.nav a.on svg{color:#fff}
+.side-foot{display:block;margin-top:auto;border-top:0;padding:16px 14px 0;color:#7f95a8;font-size:12px}
+.top{padding:24px 34px 6px 30px;gap:12px;align-items:center}
+.crumb{font-size:12.5px;font-weight:600;color:var(--ink-2);margin-bottom:2px}
+.top h1{font-size:26px;font-weight:750}
+.top p{margin-top:4px}
+.top-actions{gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.chip{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 18px;border-radius:999px;background:var(--card);box-shadow:0 1px 2px rgba(16,40,64,.05),0 4px 14px rgba(16,40,64,.05);border:0;color:var(--ink);font:inherit;font-weight:600;cursor:pointer;text-decoration:none;white-space:nowrap}
+.chip:hover{color:var(--acc-ink)}
+.chip svg.i{width:17px;height:17px}
+.chip.sm{height:32px;padding:0 14px;font-size:13px;box-shadow:none;background:var(--line-2)}
+.chip.ghost{background:transparent;box-shadow:none;color:var(--ink-2);font-weight:500;padding:0 4px;cursor:default}
+.chip.prim{background:var(--acc);color:#fff}
+.chip.prim:hover{background:var(--acc-2);color:#fff}
+.chip.icon{width:44px;padding:0;justify-content:center}
+.chip.soft{background:var(--acc-bg);color:var(--acc-ink);box-shadow:none}
+.chip.soft:hover{filter:brightness(.97)}
+details.me>summary{list-style:none;padding:0 14px 0 7px}
+details.me>summary::-webkit-details-marker{display:none}
+.av-me{width:32px;height:32px;border-radius:50%;background:var(--acc);color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px;text-transform:uppercase}
+svg.i.chev{width:15px;height:15px;color:var(--ink-3)}
+.content{padding:16px 34px 40px 30px;gap:24px}
+.card,.stat{border:0;border-radius:24px;box-shadow:0 1px 2px rgba(16,40,64,.04),0 10px 30px rgba(16,40,64,.05)}
+.card-h{padding:24px 28px;border-bottom:1px solid var(--line-2)}
+.card-h h2{font-size:17px;font-weight:700}
+.card-h>div>p{margin:4px 0 0}
+.card-b{padding:24px 28px}
+.card-f{padding:16px 28px}
+.stat{padding:20px 22px}
+.tile{border-radius:14px}
+.btn{height:42px;border-radius:12px}
+.btn.sm{height:34px;border-radius:10px}
+.in{height:46px;border-radius:12px;background:var(--field);border-color:var(--field-line)}
+.in:focus{background:var(--card);border-color:var(--acc);box-shadow:0 0 0 4px var(--acc-bg)}
+.list th{padding:14px 28px;font-size:12.5px}
+.list td{padding:16px 28px}
+.row-list .item{padding:15px 28px}
+.lead{padding:16px 28px 0}
+.exts{padding:18px 28px 24px}
+.ext{border-radius:16px}
+.pill{padding:4px 12px}
+.pills a{padding:7px 15px;font-weight:600}
+.pills a.on{background:var(--acc);border-color:var(--acc)}
+dialog{border-radius:24px}
+dialog.drawer{border-radius:24px 0 0 24px}
+.dlg-h,.dlg-b,.dlg-f{padding-left:26px;padding-right:26px}
+.dd-menu,.fm-menu{border-radius:16px}
+.toast{border-radius:16px}
+.ups{border-radius:20px}
+.fm-bar,.fm-selbar{padding-left:28px;padding-right:28px}
+.chart{padding:22px 28px 12px 0}
+.ch-plot path.a{stroke:none;fill-opacity:.1}
+.ch-plot path.dot{fill:none;stroke-width:7;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.hero{display:grid;grid-template-columns:minmax(0,2.3fr) minmax(0,1fr);gap:24px;align-items:stretch}
+.hl{background:var(--hl);color:#fff;border-radius:24px;padding:28px 30px 0;display:flex;flex-direction:column;overflow:hidden;min-height:320px;box-shadow:0 10px 30px rgba(16,40,64,.12)}
+.hl .k{font-weight:700;font-size:15px;color:rgba(255,255,255,.9)}
+.hl .v{font-size:60px;font-weight:800;line-height:1.05;margin-top:12px}
+.hl .s{color:rgba(255,255,255,.85);font-weight:600;font-size:14px;margin-top:8px}
+.hl svg{display:block;margin:auto -30px 0;width:calc(100% + 60px);height:130px}
+.bars .item{display:grid;grid-template-columns:minmax(170px,1.3fr) minmax(0,1.4fr) 64px 104px 40px;gap:16px;align-items:center}
+.bars .mu{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bars .num{text-align:right;font-variant-numeric:tabular-nums}
+.bars .bar{height:8px;border-radius:4px;background:var(--line-2);overflow:hidden}
+.bars .bar i{display:block;height:100%;background:var(--acc);border-radius:4px}
+.bars .pill{justify-self:start}
+.auth{background:var(--card)}
+.auth-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh}
+.auth-side{background-color:#13283a;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:48px 48px;color:#fff;padding:52px 56px;display:flex;flex-direction:column;justify-content:space-between;gap:40px}
+.auth-side .brand{color:#fff;padding:0}
+.auth-side .logo{background:#1f5f8b}
+.auth-hero h1{margin:0;font-size:clamp(36px,3.6vw,56px);line-height:1.08;font-weight:800;letter-spacing:-.025em}
+.auth-hero h1 span{color:#9db8cf}
+.auth-hero p{margin:20px 0 0;max-width:460px;color:#c6d3de;font-size:17px;line-height:1.55}
+.auth-foot{color:#8ea4b7;font-size:13px}
+.auth-main{display:grid;place-items:center;padding:40px 28px;background:var(--card)}
+.auth-form{width:min(380px,100%);display:flex;flex-direction:column;gap:18px}
+.auth-form h2{margin:0;font-size:28px;font-weight:750;letter-spacing:-.02em}
+.auth-form>p{margin:-10px 0 6px;color:var(--ink-2)}
+.auth-form .fld{color:var(--ink);font-weight:600;font-size:14px}
+.auth-form .btn{height:52px;border-radius:14px;font-size:15px;margin-top:4px}
+.auth-form .err{padding:12px 14px;border-radius:12px;background:var(--err-bg);color:var(--err);font-size:13.5px}
 @media (max-width:1180px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:1fr}.stats5{grid-template-columns:repeat(3,minmax(0,1fr))}.grid2e{grid-template-columns:1fr}}
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
@@ -997,6 +1092,33 @@ dialog.fm-ed{width:min(1100px,100vw)}
   .toasts{top:auto;bottom:16px;right:16px}
 }
 @media (max-width:420px){.stats{grid-template-columns:1fr 1fr}.stat .v small{display:block}}
+@media (max-width:1180px){.hero{grid-template-columns:1fr}.hl{min-height:260px}}
+@media (max-width:900px){
+  .side{margin:0;top:0;height:100vh;border-radius:0 24px 24px 0}
+  .top{padding:14px 16px 4px}
+  .top .hide-m,.chip .lbl{display:none}
+  .top{flex-wrap:wrap}
+  .top-actions{order:3;width:100%;justify-content:flex-start}
+  .ch-x span:nth-child(even){display:none}
+  .hl{min-height:220px}
+  .chip.prim,.chip{height:40px}
+  .chip.prim{width:40px;padding:0;justify-content:center}
+  details.me>summary{padding:0 4px}
+  .content{padding:12px 16px 28px;gap:18px}
+  .card-h,.card-b,.card-f,.row-list .item,.lead,.exts,.fm-bar,.fm-selbar{padding-left:18px;padding-right:18px}
+  .chart{padding:16px 16px 10px 0}
+  .hl{padding:22px 22px 0}
+  .hl svg{margin:auto -22px 0;width:calc(100% + 44px)}
+  .hl .v{font-size:46px}
+  .bars .item{grid-template-columns:minmax(0,1fr) auto auto;gap:10px 12px}
+  .bars .bar{grid-column:1 / -1;order:9}
+  .bars .num{order:2}
+  .auth-wrap{grid-template-columns:1fr}
+  .auth-side{padding:28px 24px;gap:26px}
+  .auth-hero h1{font-size:32px}
+  .auth-hero p{font-size:15px}
+  .auth-foot{display:none}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation-duration:2s!important}}
 </style>
 CSS;
@@ -1006,16 +1128,27 @@ function render_login(string $err): void { ?>
 <!doctype html>
 <html lang="pt-PT">
 <head><?= mp_head('Entrar') ?></head>
-<body>
-<div class="login">
-<form method="post" action="./">
-  <span class="brand"><span class="logo"><?= ic('server') ?></span>MiniPainel</span>
-  <?php if ($err !== ''): ?><div class="err"><?= h($err) ?></div><?php endif; ?>
-  <?= csrf_field() ?>
-  <label class="fld">Utilizador<input class="in" name="user" autocomplete="username" required autofocus></label>
-  <label class="fld">Password<input class="in" type="password" name="pass" autocomplete="current-password" required></label>
-  <button class="btn" type="submit">Entrar</button>
-</form>
+<body class="auth">
+<div class="auth-wrap">
+  <section class="auth-side">
+    <span class="brand"><span class="logo"><?= ic('server') ?></span>MiniPainel</span>
+    <div class="auth-hero">
+      <h1>Gerir o servidor<br><span>e todos os sites.</span></h1>
+      <p>Sites, bases de dados, ficheiros e serviços, a partir de um só painel.</p>
+    </div>
+    <div class="auth-foot">© <?= date('Y') ?> MiniPainel · v<?= h(MP_VERSION) ?></div>
+  </section>
+  <section class="auth-main">
+    <form method="post" action="./" class="auth-form">
+      <h2>Iniciar sessão</h2>
+      <p>Acede ao painel de alojamento.</p>
+      <?php if ($err !== ''): ?><div class="err"><?= h($err) ?></div><?php endif; ?>
+      <?= csrf_field() ?>
+      <label class="fld">Utilizador<input class="in" name="user" autocomplete="username" required autofocus></label>
+      <label class="fld">Password<input class="in" type="password" name="pass" autocomplete="current-password" required></label>
+      <button class="btn" type="submit">Entrar</button>
+    </form>
+  </section>
 </div>
 </body>
 </html>
@@ -1361,6 +1494,60 @@ function fmt_axis(float $v, string $fmt): string {
     return fmt_dec($v, $v < 10 ? 1 : 0);
 }
 /* Gráfico de linhas em SVG (sem bibliotecas). $series: [[nome, cor, coluna, divisor]] */
+/* Curva suave monótona (Fritsch-Carlson): passa por todos os pontos sem ultrapassá-los */
+function smooth_path(array $p, float $lo, float $hi): string {
+    $n = count($p);
+    if ($n === 0) return '';
+    $d = 'M' . $p[0][0] . ' ' . $p[0][1];
+    if ($n === 1) return $d . 'h1';
+    $dl = []; $m = [];
+    for ($i = 0; $i < $n - 1; $i++) { $dx = $p[$i + 1][0] - $p[$i][0]; $dl[$i] = $dx != 0 ? ($p[$i + 1][1] - $p[$i][1]) / $dx : 0; }
+    $m[0] = $dl[0]; $m[$n - 1] = $dl[$n - 2];
+    for ($i = 1; $i < $n - 1; $i++) $m[$i] = ($dl[$i - 1] * $dl[$i] <= 0) ? 0 : ($dl[$i - 1] + $dl[$i]) / 2;
+    for ($i = 0; $i < $n - 1; $i++) {
+        if ($dl[$i] == 0) { $m[$i] = 0; $m[$i + 1] = 0; continue; }
+        $a = $m[$i] / $dl[$i]; $b = $m[$i + 1] / $dl[$i]; $q = $a * $a + $b * $b;
+        if ($q > 9) { $t = 3 / sqrt($q); $m[$i] = $t * $a * $dl[$i]; $m[$i + 1] = $t * $b * $dl[$i]; }
+    }
+    for ($i = 0; $i < $n - 1; $i++) {
+        $h3 = ($p[$i + 1][0] - $p[$i][0]) / 3;
+        $c1y = max($lo, min($hi, $p[$i][1] + $m[$i] * $h3));
+        $c2y = max($lo, min($hi, $p[$i + 1][1] - $m[$i + 1] * $h3));
+        $d .= 'C' . round($p[$i][0] + $h3, 1) . ' ' . round($c1y, 1) . ' ' . round($p[$i + 1][0] - $h3, 1) . ' ' . round($c2y, 1) . ' ' . $p[$i + 1][0] . ' ' . $p[$i + 1][1];
+    }
+    return $d;
+}
+function sparkline(array $v): string {
+    $n = count($v);
+    if ($n < 2) return '';
+    $mx = max(1, max($v)); $pts = [];
+    foreach (array_values($v) as $i => $x) $pts[] = [round($i * 1000 / ($n - 1), 1), round(112 - ($x / $mx) * 92, 1)];
+    $line = smooth_path($pts, 0, 120);
+    return '<svg viewBox="0 0 1000 120" preserveAspectRatio="none" aria-hidden="true"><path d="' . $line . 'L1000 120L0 120Z" style="fill:#fff;fill-opacity:.13;stroke:none"/>'
+        . '<path d="' . $line . '" style="fill:none;stroke:#fff;stroke-opacity:.9;stroke-width:2.5" vector-effect="non-scaling-stroke"/></svg>';
+}
+/* Pedidos por hora (24 h) somando todos os sites, e totais por site */
+function traffic_24h(array $sites): array {
+    $now = time(); $from = $now - 86400;
+    $hours = [];
+    for ($t = intdiv($from, 3600) * 3600 + 3600; $t <= intdiv($now, 3600) * 3600; $t += 3600) $hours[$t] = 0;
+    $per = [];
+    foreach ($sites as $s) {
+        $n = (string)($s['name'] ?? '');
+        if (!valid_site($n)) continue;
+        $per[$n] = [0, 0.0];
+        $fh = @fopen(MP_STATS . '/traffic/' . $n . '.csv', 'r');
+        if ($fh === false) continue;
+        while (($l = fgets($fh)) !== false) {
+            $c = explode(',', trim($l));
+            if (count($c) < 3 || (int)$c[0] < $from - 3599) continue;
+            $per[$n][0] += (int)$c[1]; $per[$n][1] += (float)$c[2];
+            if (isset($hours[(int)$c[0]])) $hours[(int)$c[0]] += (int)$c[1];
+        }
+        fclose($fh);
+    }
+    return ['hours' => $hours, 'per' => $per];
+}
 function chart_html(array $H, array $series, string $fmt, ?float $ymax = null, ?float $ref = null, int $tz = 0): string {
     $rows = downsample($H['rows'], 480);
     $from = (int)$H['from']; $to = (int)$H['to']; $span = max(1, $to - $from);
@@ -1374,19 +1561,26 @@ function chart_html(array $H, array $series, string $fmt, ?float $ymax = null, ?
     $svg = '';
     for ($k = 1; $k <= 3; $k++) { $y = 50 * $k; $svg .= '<line class="g" x1="0" x2="1000" y1="' . $y . '" y2="' . $y . '"/>'; }
     if ($ref !== null && $ref < $ymax) { $y = round(200 * (1 - $ref / $ymax), 1); $svg .= '<line class="ref" x1="0" x2="1000" y1="' . $y . '" y2="' . $y . '"/>'; }
+    $dots = count($rows) <= 40;
     foreach ($series as $si => $s) {
-        $d = ''; $prevT = null; $segLen = 0;
+        $segs = []; $cur = []; $prevT = null;
         foreach ($rows as $i => $r) {
-            $x = round(($r[0] - $from) / $span * 1000, 1);
-            $y = round(200 * (1 - min($vals[$si][$i], $ymax) / $ymax), 1);
-            if ($prevT === null || $r[0] - $prevT > $gap) {
-                if ($segLen === 1) $d .= 'h1';          // ponto isolado: desenha um traço curto
-                $d .= 'M' . $x . ' ' . $y; $segLen = 1;
-            } else { $d .= 'L' . $x . ' ' . $y; $segLen++; }
-            $prevT = $r[0];
+            $pt = [round(($r[0] - $from) / $span * 1000, 1), round(200 * (1 - min($vals[$si][$i], $ymax) / $ymax), 1)];
+            if ($prevT !== null && $r[0] - $prevT > $gap) { $segs[] = $cur; $cur = []; }
+            $cur[] = $pt; $prevT = $r[0];
         }
-        if ($segLen === 1) $d .= 'h1';
-        if ($d !== '') $svg .= '<path class="s" stroke="' . h($s[1]) . '" d="' . $d . '"/>';
+        if ($cur) $segs[] = $cur;
+        $col = 'stroke:' . $s[1];
+        $line = ''; $area = ''; $dotp = '';
+        foreach ($segs as $seg) {
+            $p = smooth_path($seg, 0, 200);
+            $line .= $p;
+            if ($si === 0 && count($seg) > 1) $area .= $p . 'L' . $seg[count($seg) - 1][0] . ' 200L' . $seg[0][0] . ' 200Z';
+            if ($dots) foreach ($seg as $pt) $dotp .= 'M' . $pt[0] . ' ' . $pt[1] . 'h0.01';
+        }
+        if ($area !== '') $svg .= '<path class="a" style="fill:' . h($s[1]) . '" d="' . $area . '"/>';
+        if ($line !== '') $svg .= '<path class="s" style="' . h($col) . '" d="' . $line . '"/>';
+        if ($dotp !== '') $svg .= '<path class="dot" style="' . h($col) . '" d="' . $dotp . '"/>';
     }
     $ylab = '';
     for ($k = 0; $k <= 4; $k++) $ylab .= '<span style="top:' . ($k * 25) . '%">' . h(fmt_axis($ymax * (4 - $k) / 4, $fmt)) . '</span>';
@@ -1428,6 +1622,11 @@ $titles = [
     'recursos' => 'Utilização do servidor e de cada site, atualizada a cada 5 segundos.',
     'ficheiros'=> 'Ficheiros de cada site, geridos com o utilizador do próprio site.',
 ];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'bd', 'php'], 'Sistema' => ['servicos', 'conta']];
+$section = 'Geral';
+foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
+$lvTop = live_stats();
+$today = gmdate('d/m/Y', time() + tz_off($lvTop));
 $openOnLoad = '';
 if (qget('novo') === 'site') $openOnLoad = 'dlg-site-new';
 elseif (qget('novo') === 'bd') $openOnLoad = 'dlg-db-new';
@@ -1442,15 +1641,15 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   <aside class="side" id="side">
     <a class="brand" href="?p=resumo"><span class="logo"><?= ic('server') ?></span>MiniPainel</a>
     <nav class="nav">
-      <?php foreach ($pages as $k => $pd): ?>
-        <a href="?p=<?= h($k) ?>"<?= $k === $page ? ' class="on" aria-current="page"' : '' ?>><?= ic($pd[1]) ?><?= h($pd[0]) ?></a>
-        <?php if ($k === 'bd' && $pmaOn): ?><a href="/phpmyadmin/" target="_blank" rel="noopener"><?= ic('table') ?>phpMyAdmin<?= ic('ext', 'tail') ?></a><?php endif; ?>
+      <?php foreach ($groups as $gl => $keys): ?>
+        <div class="nav-sec"><?= h($gl) ?></div>
+        <?php foreach ($keys as $k): $pd = $pages[$k]; ?>
+          <a href="?p=<?= h($k) ?>"<?= $k === $page ? ' class="on" aria-current="page"' : '' ?>><?= ic($pd[1]) ?><?= h($pd[0]) ?></a>
+          <?php if ($k === 'bd' && $pmaOn): ?><a href="/phpmyadmin/" target="_blank" rel="noopener"><?= ic('table') ?>phpMyAdmin<?= ic('ext', 'tail') ?></a><?php endif; ?>
+        <?php endforeach; ?>
       <?php endforeach; ?>
     </nav>
-    <div class="side-foot">
-      <div><b><?= h($_SESSION['user']) ?></b><span>MiniPainel v<?= h(MP_VERSION) ?></span></div>
-      <form method="post"><?= act_fields('sair') ?><button class="iconbtn" type="submit" title="Sair" aria-label="Sair"><?= ic('out') ?></button></form>
-    </div>
+    <div class="side-foot">MiniPainel v<?= h(MP_VERSION) ?></div>
   </aside>
   <div class="scrim" data-nav-close></div>
 
@@ -1458,17 +1657,28 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     <header class="top">
       <button class="iconbtn burger" type="button" data-nav-open aria-label="Abrir menu"><?= ic('menu') ?></button>
       <div class="grow">
+        <div class="crumb"><?= h($section) ?></div>
         <h1><?= h($pages[$page][0]) ?></h1>
         <p><?= h($titles[$page]) ?></p>
       </div>
       <div class="top-actions">
         <?php if ($page === 'sites' || $page === 'resumo'): ?>
-          <button class="btn" type="button" data-open="dlg-site-new"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
+          <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
         <?php elseif ($page === 'bd'): ?>
-          <button class="btn" type="button" data-open="dlg-db-new"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
+          <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
         <?php endif; ?>
-        <form method="post"><?= act_fields('refresh') ?><button class="iconbtn" type="submit" title="Atualizar estado" aria-label="Atualizar estado"><?= ic('reload') ?></button></form>
-        <button class="iconbtn" type="button" data-theme-toggle title="Mudar tema" aria-label="Mudar tema"><?= ic('moon') ?></button>
+        <form method="post" style="margin:0"><?= act_fields('refresh') ?><button class="chip" type="submit" title="Atualizar estado" aria-label="Atualizar estado"><?= ic('reload') ?><span class="lbl">Atualizar</span></button></form>
+        <span class="chip sm hide-m">v<?= h(MP_VERSION) ?></span>
+        <span class="chip ghost hide-m"><?= h($today) ?></span>
+        <button class="chip icon" type="button" data-theme-toggle title="Mudar tema" aria-label="Mudar tema"><?= ic('moon') ?></button>
+        <details class="dd me">
+          <summary class="chip" aria-label="Conta"><span class="av-me"><?= h(substr((string)$_SESSION['user'], 0, 1)) ?></span><span class="lbl"><?= h($_SESSION['user']) ?></span><?= ic('chev', 'chev') ?></summary>
+          <div class="dd-menu">
+            <a href="?p=conta"><?= ic('user') ?>Conta e password</a>
+            <hr>
+            <form method="post"><?= act_fields('sair') ?><button type="submit"><?= ic('out') ?>Sair</button></form>
+          </div>
+        </details>
       </div>
     </header>
 
@@ -1481,7 +1691,28 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $lv = live_stats();
     $disk = (int)round($lv['fresh'] ? (float)($lv['disk']['pct'] ?? 0) : (float)($sys['disk'] ?? 0));
     $ram  = (int)round($lv['fresh'] ? (float)($lv['mem']['pct'] ?? 0) : (float)($sys['ram'] ?? 0));
-    $hot  = $disk >= 90 || $ram >= 90; ?>
+    $hot  = $disk >= 90 || $ram >= 90;
+    $H24  = hist_load('24h');
+    $tr   = traffic_24h($sites);
+    $reqTot = 0; $byTot = 0.0;
+    foreach ($tr['per'] as $pv) { $reqTot += $pv[0]; $byTot += $pv[1]; }
+    $reqMax = 1;
+    foreach ($tr['per'] as $pv) $reqMax = max($reqMax, $pv[0]);
+    $sorted = $sites;
+    usort($sorted, function ($x, $y) use ($tr) { return ($tr['per'][$y['name'] ?? ''][0] ?? 0) <=> ($tr['per'][$x['name'] ?? ''][0] ?? 0); }); ?>
+      <div class="hero">
+        <section class="card">
+          <div class="card-h"><div><h2>Utilização do servidor</h2><p>CPU e memória nas últimas 24 horas</p></div><a class="chip sm soft" href="?p=recursos">Ver recursos</a></div>
+          <?= chart_html($H24, [['CPU', 'var(--c1)', 1, 10], ['Memória', 'var(--c2)', 2, 10]], 'pct', 100, null, tz_off($lv)) ?>
+        </section>
+        <section class="hl">
+          <div class="k">Pedidos nas últimas 24 horas</div>
+          <div class="v"><?= h(fmt_int($reqTot)) ?></div>
+          <div class="s"><?= h(fmt_bytes($byTot)) ?> transferidos · <?= $active ?> de <?= count($sites) ?> sites ativos</div>
+          <?= sparkline(array_values($tr['hours'])) ?>
+        </section>
+      </div>
+
       <section class="stats">
         <div class="stat"><span class="tile t-acc"><?= ic('world') ?></span><div><div class="k">Sites ativos</div><div class="v"><?= $active ?> <small>de <?= count($sites) ?></small></div></div></div>
         <div class="stat"><span class="tile t-blue"><?= ic('db') ?></span><div><div class="k">Bases de dados</div><div class="v"><?= count($dbs) ?></div></div></div>
@@ -1491,17 +1722,18 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 
       <div class="grid2">
         <section class="card">
-          <div class="card-h"><h2>Sites</h2><a href="?p=sites">Ver todos</a></div>
+          <div class="card-h"><div><h2>Sites</h2><p>Pedidos nas últimas 24 horas</p></div><a class="chip sm soft" href="?p=sites">Ver todos</a></div>
           <?php if (!$sites): ?>
             <div class="empty"><b>Ainda não há sites</b>Cria o primeiro; fica logo acessível numa porta própria.<br><button class="btn" type="button" data-open="dlg-site-new"><?= ic('plus') ?>Novo site</button></div>
           <?php else: ?>
-          <div class="row-list">
-            <?php foreach (array_slice($sites, 0, 8) as $s): $n = (string)$s['name']; $port = (int)$s['port']; $on = !empty($s['enabled']); ?>
+          <div class="row-list bars">
+            <?php foreach (array_slice($sorted, 0, 8) as $s): $n = (string)$s['name']; $port = (int)$s['port']; $on = !empty($s['enabled']); $rq = (int)($tr['per'][$n][0] ?? 0); ?>
               <div class="item">
-                <span class="av <?= tone($n) ?>"><?= h(substr($n, 0, 1)) ?></span>
-                <div class="grow"><div class="nm"><?= h($n) ?></div><div class="mu"><span class="mono">:<?= $port ?></span> · PHP <?= h($s['php'] ?? '') ?></div></div>
+                <div class="who"><span class="av <?= tone($n) ?>"><?= h(substr($n, 0, 1)) ?></span><div style="min-width:0"><div class="nm"><?= h($n) ?></div><div class="mu"><span class="mono">:<?= $port ?></span> · PHP <?= h($s['php'] ?? '') ?></div></div></div>
+                <div class="bar"><i style="width:<?= round($rq * 100 / $reqMax, 1) ?>%"></i></div>
+                <b class="num"><?= h(fmt_int($rq)) ?></b>
                 <span class="pill <?= $on ? 'p-ok' : 'p-off' ?>"><?= $on ? 'Ativo' : 'Desativado' ?></span>
-                <?php if ($on): ?><a class="iconbtn" href="<?= h(site_url($host, $port)) ?>" target="_blank" rel="noopener" title="Abrir" aria-label="Abrir <?= h($n) ?>"><?= ic('ext') ?></a><?php endif; ?>
+                <?php if ($on): ?><a class="iconbtn" href="<?= h(site_url($host, $port)) ?>" target="_blank" rel="noopener" title="Abrir" aria-label="Abrir <?= h($n) ?>"><?= ic('ext') ?></a><?php else: ?><span></span><?php endif; ?>
               </div>
             <?php endforeach; ?>
           </div>
@@ -1509,7 +1741,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </section>
 
         <section class="card">
-          <div class="card-h"><h2>Serviços</h2><?php if ($svcDown > 0): ?><span class="pill p-err"><?= $svcDown ?> parado<?= $svcDown === 1 ? '' : 's' ?></span><?php else: ?><a href="?p=servicos">Gerir</a><?php endif; ?></div>
+          <div class="card-h"><div><h2>Serviços</h2><p>Estado atual</p></div><?php if ($svcDown > 0): ?><span class="pill p-err"><?= $svcDown ?> parado<?= $svcDown === 1 ? '' : 's' ?></span><?php else: ?><a class="chip sm soft" href="?p=servicos">Gerir</a><?php endif; ?></div>
           <div class="row-list">
             <?php foreach ($svcs as $s): $on = !empty($s['active']); ?>
               <div class="item">
@@ -1583,9 +1815,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $swp = is_array($live['swap'] ?? null) ? $live['swap'] : [];
     $load = is_array($live['load'] ?? null) ? $live['load'] : [0, 0, 0];
     $net = is_array($live['net'] ?? null) ? $live['net'] : [];
-    $sCpu = [['CPU', '#12a4a6', 1, 10], ['Memória', '#7f77dd', 2, 10], ['Swap', '#e0a33a', 3, 10]];
-    $sNet = [['Receção', '#12a4a6', 6, 1], ['Envio', '#7f77dd', 7, 1]];
-    $sLoad = [['Carga (1 min)', '#e0a33a', 5, 100]];
+    $sCpu = [['CPU', 'var(--c1)', 1, 10], ['Memória', 'var(--c2)', 2, 10], ['Swap', 'var(--c3)', 3, 10]];
+    $sNet = [['Receção', 'var(--c1)', 6, 1], ['Envio', 'var(--c2)', 7, 1]];
+    $sLoad = [['Carga (1 min)', 'var(--c3)', 5, 100]];
     $pills = '<div class="pills">';
     foreach (['24h' => '24 h', '7d' => '7 dias', '30d' => '30 dias'] as $rk => $rl) $pills .= '<a class="' . ($rk === $range ? 'on' : '') . '" href="?p=recursos&amp;r=' . $rk . '">' . $rl . '</a>';
     $pills .= '</div>';
@@ -1612,7 +1844,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?= chart_html($H, $sNet, 'bps', null, null, $tz) ?>
         </section>
         <section class="card">
-          <div class="card-h"><h2>Carga do sistema</h2><div class="legend"><span><i style="background:#e0a33a"></i>Carga (1 min)</span><span><i class="dash"></i><?= $ncpu ?> vCPU</span></div></div>
+          <div class="card-h"><h2>Carga do sistema</h2><div class="legend"><span><i style="background:var(--c3)"></i>Carga (1 min)</span><span><i class="dash"></i><?= $ncpu ?> vCPU</span></div></div>
           <?= chart_html($H, $sLoad, 'load', null, (float)$ncpu, $tz) ?>
         </section>
       </div>
@@ -1992,7 +2224,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
 })();
 </script>
-<?php if ($page === 'recursos'): ?>
+<?php if ($page === 'recursos' || $page === 'resumo'): ?>
 <script>
 (function () {
   function dec(v, d) { return Number(v || 0).toFixed(d === undefined ? 1 : d).replace('.', ','); }
@@ -2021,7 +2253,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       .catch(function () {})
       .then(function () { setTimeout(upd, 5000); });
   }
-  setTimeout(upd, 5000);
+  if (document.querySelector('[data-live]')) setTimeout(upd, 5000);
 
   document.querySelectorAll('.chart').forEach(function (c) {
     var d; try { d = JSON.parse(c.getAttribute('data-chart')); } catch (e) { return; }
@@ -2408,7 +2640,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * MiniPainel v1.4.0 — gestor de ficheiros (API)
+ * MiniPainel v1.5.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -2804,11 +3036,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — MiniPainel CLI v1.4.0
+#  mpanel — MiniPainel CLI v1.5.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.4.0"
+MP_VERSION="1.5.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -3828,7 +4060,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-MiniPainel CLI v1.4.0
+MiniPainel CLI v1.5.0
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -3962,7 +4194,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do MiniPainel v1.4.0
+#  mpanel-stats — recolhedor de estatísticas do MiniPainel v1.5.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
