@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  MiniPainel v1.5.0 — instalador
+#  IDDigital Hosting v1.6.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.5.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.6.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -16,7 +16,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.5.0"
+MP_VERSION="1.6.0"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -89,7 +89,7 @@ if [ "$UPGRADE" -eq 0 ] && [ "$FORCE" -eq 0 ]; then
   for f in /etc/nginx/sites-enabled/*; do [ "$(basename "$f")" = default ] || extra+=("$f"); done
   shopt -u nullglob
   if [ ${#extra[@]} -gt 0 ]; then
-    die "O nginx já tem configurações (${extra[*]}). O MiniPainel substitui o nginx.conf; usa --force para continuar."
+    die "O nginx já tem configurações (${extra[*]}). O IDDigital Hosting substitui o nginx.conf; usa --force para continuar."
   fi
   if [ -n "$(ss -Hltn "sport = :$PANEL_PORT" 2>/dev/null)" ]; then
     die "A porta $PANEL_PORT já está em uso. Escolhe outra com --panel-port."
@@ -146,7 +146,7 @@ selinux_on(){ command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/nu
 say "A instalar pacotes base ($OS_ID $OS_VER)..."
 if [ "$OS_FAMILY" = debian ]; then
   apt-get update -q
-  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nginx mariadb-server mariadb-client
+  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables nginx mariadb-server mariadb-client
   if [ "$OS_ID" = ubuntu ]; then
     pkg_install software-properties-common
     add-apt-repository -y ppa:ondrej/php
@@ -163,7 +163,7 @@ else
   dnf install -y -q dnf-plugins-core || true
   dnf config-manager --set-enabled crb >/dev/null 2>&1 || true
   rpm -q remi-release >/dev/null 2>&1 || dnf install -y -q "https://rpms.remirepo.net/enterprise/remi-release-${EL_MAJOR}.rpm"
-  pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate policycoreutils-python-utils
+  pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate nftables policycoreutils-python-utils
 fi
 ok "Pacotes base instalados."
 
@@ -494,7 +494,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * MiniPainel v1.5.0 — painel web
+ * IDDigital Hosting v1.6.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -502,7 +502,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.5.0';
+const MP_VERSION = '1.6.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -583,6 +583,17 @@ function go(string $p, array $q = []): void {
     header('Location: ?' . http_build_query(['p' => $p] + $q));
     exit;
 }
+function valid_net(string $s): bool {
+    $ip = $s; $bits = null;
+    if (strpos($s, '/') !== false) { [$ip, $bits] = explode('/', $s, 2); if (!ctype_digit($bits)) return false; }
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) return $bits === null || ((int)$bits >= 8 && (int)$bits <= 32);
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) return $bits === null || ((int)$bits >= 32 && (int)$bits <= 128);
+    return false;
+}
+function fw_secs_php(string $d): int {
+    if (!preg_match('/^(\d+)([smhd]?)$/', $d, $m)) return 0;
+    return (int)$m[1] * ['' => 1, 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86400][$m[2]];
+}
 function valid_site(string $s): bool { return (bool)preg_match(RX_SITE, $s) && substr($s, -1) !== '-'; }
 function site_limits(array $s): array {
     $l = is_array($s['limits'] ?? null) ? $s['limits'] : [];
@@ -650,7 +661,19 @@ const ICONS = [
     'move'   => '<path d="M5 12h14M15 8l4 4-4 4M5 5v14"/>',
     'up'     => '<path d="M12 19V5M6 11l6-6 6 6"/>',
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
+    'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
 ];
+/* Logótipo IDDigital Hosting (SVG em linha; o texto usa Arial ou equivalente métrico) */
+function brand_logo(string $cls = 'brand-logo'): string {
+    return '<svg class="' . h($cls) . '" viewBox="0 0 62.97 18.26" role="img" aria-label="IDDigital Hosting" xmlns="http://www.w3.org/2000/svg">'
+        . '<path fill="#fff" d="M 10.696104,17.232981 C 9.5129773,16.842176 8.7260574,16.372185 7.9458244,15.590365 c -1.114,-1.116262 -1.7157692,-2.493883 -1.784426,-4.085056 -0.014374,-0.333159 -0.00865,-0.457078 0.029917,-0.647164 0.099813,-0.491997 0.3189197,-0.9047228 0.6668116,-1.2560559 0.8274806,-0.8356635 2.1314767,-1.0014038 3.189827,-0.405435 0.261545,0.1472777 0.723354,0.5928945 0.865202,0.8348679 0.214006,0.365059 0.316112,0.722462 0.350283,1.226095 0.0346,0.509923 0.209212,0.888772 0.54975,1.192761 0.343775,0.306876 0.717013,0.444297 1.196753,0.440625 0.525886,-0.004 0.905248,-0.154464 1.248715,-0.495181 0.235108,-0.233227 0.351055,-0.432298 0.431021,-0.740031 0.05275,-0.202983 0.05767,-0.273977 0.0419,-0.604108 C 14.662552,9.6065015 14.075119,8.3362136 12.999265,7.3056355 12.048684,6.3950566 10.862731,5.8387523 9.4907979,5.6598913 9.0218609,5.5987579 8.1134294,5.6186003 7.6756472,5.6995508 6.3679108,5.9413587 5.3155828,6.4713126 4.423572,7.3373012 3.910517,7.8353884 3.5632817,8.3130464 3.2715718,8.9219956 2.8556734,9.7901897 2.6909166,10.742689 2.7685575,11.830049 c 0.055923,0.783182 0.1672461,1.327816 0.436759,2.136766 0.1797827,0.539622 0.1806174,0.605202 0.00988,0.77594 -0.094738,0.09474 -0.119626,0.105283 -0.248473,0.105283 -0.1660019,0 -0.2799034,-0.05074 -0.3567817,-0.158919 C 2.5458511,14.598936 2.3598961,14.029801 2.2414377,13.561284 1.9117912,12.2575 1.8815863,10.789106 2.1618329,9.6914849 2.5560106,8.147645 3.6460195,6.7437251 5.1475424,5.8459267 7.3224606,4.545487 10.115883,4.5274669 12.319362,5.7996657 c 1.715935,0.9907074 2.873217,2.6135551 3.201846,4.4899243 0.07645,0.436502 0.110227,0.99086 0.07811,1.282039 -0.09176,0.832016 -0.604065,1.554468 -1.370112,1.932141 -0.425591,0.209822 -0.613626,0.24943 -1.177703,0.248064 -0.448773,-0.0011 -0.503433,-0.007 -0.732963,-0.07746 -0.87301,-0.268526 -1.522411,-0.925309 -1.734383,-1.754115 -0.02862,-0.111896 -0.06518,-0.356227 -0.08124,-0.542947 -0.03397,-0.394862 -0.102412,-0.627427 -0.25685,-0.872738 C 10.033828,10.167463 9.6093692,9.8704218 9.1869714,9.7634095 8.9528412,9.7040972 8.5620269,9.7097502 8.3021585,9.7762077 7.7275959,9.9231553 7.3086886,10.298932 7.111982,10.843844 c -0.074054,0.205143 -0.079853,0.249702 -0.077714,0.597194 0.00823,1.338483 0.5321468,2.601535 1.4809618,3.57036 0.7632773,0.779376 1.5081182,1.232518 2.5716382,1.564519 0.385877,0.120458 0.468886,0.189169 0.489653,0.405307 0.01075,0.111391 0.0027,0.152793 -0.03858,0.199197 -0.06269,0.07051 -0.307281,0.189422 -0.384621,0.187006 -0.03048,-9.44e-4 -0.236233,-0.06145 -0.457226,-0.134457 z M 6.6904661,17.164437 C 6.6024841,17.126114 6.1242485,16.631374 5.8040522,16.247429 5.3889771,15.749717 4.8134382,14.798822 4.5796876,14.224554 4.2080316,13.311486 4.0390981,12.44863 4.0344449,11.439633 4.0315488,10.812052 4.0523334,10.622866 4.1714275,10.192654 4.4032301,9.3552972 4.7979022,8.7065962 5.4566054,8.0802783 6.6288369,6.9656805 8.3477125,6.53442 9.9677565,6.9484445 11.395991,7.3134498 12.624593,8.385578 13.130529,9.7084047 c 0.179752,0.4699833 0.277045,0.9492623 0.284758,1.4027433 0.0039,0.2333 -0.0034,0.280082 -0.05759,0.367839 -0.07922,0.128173 -0.185,0.182331 -0.356132,0.182331 -0.271196,0 -0.421017,-0.180507 -0.42109,-0.50734 C 12.580366,10.630453 12.386096,9.9467474 12.106308,9.4850986 11.519961,8.5176305 10.503356,7.8549032 9.3382846,7.6806177 8.9765395,7.6265032 8.2377737,7.6433484 7.9250422,7.712841 6.3064884,8.0725247 5.1663437,9.216776 4.9019127,10.74686 c -0.048713,0.281867 -0.040483,1.037965 0.016134,1.482521 0.1392626,1.093469 0.435231,1.866856 1.1081841,2.895762 0.2908723,0.444728 0.4825181,0.683363 0.8959562,1.115635 0.2592815,0.271092 0.3388777,0.372163 0.3531957,0.448482 0.04265,0.227351 -0.069562,0.416401 -0.2855706,0.48112 -0.138344,0.04144 -0.193019,0.04037 -0.299346,-0.0059 z m 5.5207159,-1.54205 C 11.244805,15.510073 10.366448,15.094396 9.6752993,14.422292 8.8680425,13.637276 8.3961892,12.623707 8.3226635,11.516734 c -0.014569,-0.219391 -0.00898,-0.29249 0.029947,-0.394527 0.085794,-0.224661 0.3138299,-0.316951 0.5552824,-0.224741 0.1893172,0.0723 0.2336623,0.167004 0.2626962,0.561026 0.047867,0.649573 0.2164175,1.171521 0.5465019,1.692305 0.478925,0.755612 1.285532,1.346508 2.129856,1.56027 0.515341,0.130473 0.954321,0.158609 1.522371,0.09758 0.25322,-0.02721 0.502392,-0.04158 0.553715,-0.03196 0.0597,0.01126 0.129162,0.05719 0.192819,0.127645 0.08538,0.09451 0.0995,0.129217 0.0995,0.244514 0,0.157022 -0.07723,0.291864 -0.21238,0.370795 -0.171403,0.100097 -1.271672,0.163198 -1.791791,0.102753 z M 1.5515958,7.1526948 C 1.4873796,7.1293278 1.3569964,7.0003509 1.3135813,6.9172481 1.2251437,6.7479642 1.2653004,6.6170208 1.5014118,6.304768 2.2840541,5.2697396 3.2799235,4.4288405 4.4123052,3.8468473 5.3878281,3.345472 6.3437639,3.0512582 7.537093,2.8851119 c 0.4932469,-0.068671 1.9175775,-0.068671 2.4108249,0 2.4273701,0.3379607 4.3925631,1.4211281 5.8350501,3.2161431 0.273249,0.3400272 0.399842,0.5400029 0.399842,0.6316181 0,0.2252296 -0.195182,0.4254658 -0.414722,0.4254658 -0.07467,0 -0.158537,-0.019956 -0.201131,-0.047867 C 15.526779,7.0841417 15.377686,6.9100193 15.235648,6.7235286 14.506048,5.7655897 13.583182,5.007309 12.512436,4.485975 11.291939,3.8917299 10.097979,3.6209526 8.7009401,3.6215672 7.275676,3.6221957 6.0752471,3.8976143 4.8738546,4.4996332 3.7786794,5.0484254 2.900244,5.7808957 2.1395936,6.779554 2.0080624,6.952241 1.8662182,7.1112306 1.8243846,7.132865 1.7480846,7.172322 1.6292648,7.18096 1.5515958,7.1526948 Z M 3.8100123,2.7920664 C 3.497075,2.6920703 3.4166986,2.3074566 3.6618987,2.0833121 3.8117352,1.9463439 4.7695509,1.5215205 5.4243361,1.3016113 6.1572227,1.0554732 6.9907558,0.87692327 7.7864887,0.79561623 8.1981408,0.75355388 9.2857142,0.75413562 9.7123764,0.79666083 10.709221,0.89598665 11.56665,1.0988344 12.497294,1.4555195 12.959321,1.6326 13.75672,1.9956248 13.830686,2.0625642 13.908374,2.1328789 13.975124,2.3346744 13.95533,2.4394218 13.925446,2.5975653 13.842688,2.700374 13.702032,2.7540914 13.537356,2.8169826 13.504967,2.807915 12.926808,2.5369619 11.598059,1.9142622 10.445355,1.6422506 8.9975808,1.6097578 7.2861158,1.5713503 5.8249633,1.8966278 4.3478231,2.6448848 4.0272707,2.8072624 3.9358377,2.8322874 3.8100123,2.7920828 Z"/>'
+        . '<g font-family="Arial,\'Liberation Sans\',Helvetica,sans-serif" font-weight="700">'
+        . '<text x="18.0823" y="12.868" font-size="11.6841" fill="#16a596">id</text>'
+        . '<text x="28.9553" y="12.7322" font-size="11.4367" fill="#fff">digital</text>'
+        . '<text x="60.362" y="15.427" font-size="2.88254" font-weight="400" fill="#fff" text-anchor="end">hosting</text>'
+        . '</g></svg>';
+}
+
 function ic(string $n, string $cls = ''): string {
     return '<svg class="i' . ($cls !== '' ? ' ' . $cls : '') . '" viewBox="0 0 24 24" aria-hidden="true">' . (ICONS[$n] ?? '') . '</svg>';
 }
@@ -707,7 +730,7 @@ function rl_clear(): void { @unlink(rl_file()); }
 
 /* ---------- estilos ---------- */
 function mp_head(string $title): string {
-    return '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . h($title) . ' · MiniPainel</title>'
+    return '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . h($title) . ' · IDDigital Hosting</title>'
         . '<script>(function(){var t=null;try{t=localStorage.getItem("mp-theme")}catch(e){}if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.setAttribute("data-theme",t)})();</script>'
         . mp_css();
 }
@@ -1031,6 +1054,15 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .bars .bar{height:8px;border-radius:4px;background:var(--line-2);overflow:hidden}
 .bars .bar i{display:block;height:100%;background:var(--acc);border-radius:4px}
 .bars .pill{justify-self:start}
+.brand{display:flex;align-items:center}
+.brand-logo{display:block;height:46px;width:auto;max-width:100%}
+.auth-side .brand-logo{height:58px}
+.cn-search{width:260px;height:40px}
+.cn-hot{color:var(--err)}
+.p-me{background:var(--acc-bg);color:var(--acc-ink)}
+.p-me::before{display:none}
+.btn.danger-o{background:var(--card);color:var(--err);border:1px solid #e3b4af}
+.btn.danger-o:hover{background:var(--err-bg)}
 .auth{background:var(--card)}
 .auth-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh}
 .auth-side{background-color:#13283a;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:48px 48px;color:#fff;padding:52px 56px;display:flex;flex-direction:column;justify-content:space-between;gap:40px}
@@ -1131,12 +1163,12 @@ function render_login(string $err): void { ?>
 <body class="auth">
 <div class="auth-wrap">
   <section class="auth-side">
-    <span class="brand"><span class="logo"><?= ic('server') ?></span>MiniPainel</span>
+    <span class="brand"><?= brand_logo() ?></span>
     <div class="auth-hero">
       <h1>Gerir o servidor<br><span>e todos os sites.</span></h1>
       <p>Sites, bases de dados, ficheiros e serviços, a partir de um só painel.</p>
     </div>
-    <div class="auth-foot">© <?= date('Y') ?> MiniPainel · v<?= h(MP_VERSION) ?></div>
+    <div class="auth-foot">© <?= date('Y') ?> IDDigital Hosting · v<?= h(MP_VERSION) ?></div>
   </section>
   <section class="auth-main">
     <form method="post" action="./" class="auth-form">
@@ -1164,6 +1196,7 @@ $pages = [
     'bd'       => ['Bases de dados', 'db'],
     'php'      => ['PHP', 'code'],
     'servicos' => ['Serviços', 'pulse'],
+    'ligacoes' => ['Ligações', 'ban'],
     'conta'    => ['Conta', 'user'],
 ];
 $pg   = qget('p');
@@ -1179,6 +1212,15 @@ if (qget('stats') === 'live') {
     if (empty($_SESSION['user'])) { http_response_code(401); echo '{}'; exit; }
     session_write_close();
     $d = @file_get_contents(MP_STATS . '/live.json');
+    echo $d !== false ? $d : '{}';
+    exit;
+}
+
+if (qget('stats') === 'conns') {
+    header('Content-Type: application/json');
+    if (empty($_SESSION['user'])) { http_response_code(401); echo '{}'; exit; }
+    session_write_close();
+    $d = @file_get_contents(MP_STATS . '/conns.json');
     echo $d !== false ? $d : '{}';
     exit;
 }
@@ -1218,6 +1260,15 @@ if (empty($_SESSION['user'])) {
     exit;
 }
 $_SESSION['seen'] = time();
+$myIp = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+if ($myIp !== '' && (int)($_SESSION['ipmark'] ?? 0) < time() - 300) {
+    $aif = MP_DATA . '/logs/admin-ips.json';
+    $aid = jload($aif) ?? [];
+    $aid[$myIp] = time();
+    foreach ($aid as $k => $v) { if ((int)$v < time() - 7 * 86400) unset($aid[$k]); }
+    @file_put_contents($aif, (string)json_encode($aid), LOCK_EX);
+    $_SESSION['ipmark'] = time();
+}
 
 /* ---------- ações ---------- */
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
@@ -1311,6 +1362,34 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!preg_match(RX_SVC, $svc) || !in_array($act, ['reload', 'restart', 'start', 'stop'], true)) { $bad('Pedido inválido.'); break; }
             $names = ['reload' => 'Recarregar', 'restart' => 'Reiniciar', 'start' => 'Iniciar', 'stop' => 'Parar'];
             job_submit('service', [$svc, $act], $names[$act] . ' ' . $svc);
+            break;
+
+        case 'fw_block':
+            $ip = post('ip'); $dur = post('dur');
+            if (!valid_net($ip)) { $bad('IP ou rede inválida (ex.: 185.220.101.47 ou 45.148.10.0/24; redes de /8 a /32).'); break; }
+            if (!in_array($dur, ['1h', '24h', '7d', 'perm'], true)) $dur = '24h';
+            $why = substr(preg_replace('/[^\p{L}\p{N} .,:;()\/_-]/u', '', post('reason')) ?? '', 0, 80);
+            job_submit('block', [$ip, '--for', $dur, '--reason', $why, '--protect', $myIp], 'Bloquear ' . $ip);
+            break;
+
+        case 'fw_unblock':
+            $ip = post('ip');
+            if (!valid_net($ip)) { $bad('IP inválido.'); break; }
+            job_submit('unblock', [$ip], 'Desbloquear ' . $ip);
+            break;
+
+        case 'fw_allow_add':
+        case 'fw_allow_del':
+            $ip = post('ip');
+            if (!valid_net($ip)) { $bad('IP ou rede inválida.'); break; }
+            job_submit($a === 'fw_allow_add' ? 'allow-add' : 'allow-del', [$ip], ($a === 'fw_allow_add' ? 'Confiar em ' : 'Deixar de confiar em ') . $ip);
+            break;
+
+        case 'fw_auto':
+            $lim = post('limit'); $dur = post('dur');
+            if (!ctype_digit($lim) || (int)$lim < 10 || (int)$lim > 100000) { $bad('O limite tem de ser um número entre 10 e 100000.'); break; }
+            if (!in_array($dur, ['600s', '1h', '24h', '7d'], true)) $dur = '1h';
+            job_submit('fw-auto', [post('on') === 'on' ? 'on' : 'off', '--limit', (string)(int)$lim, '--duration', $dur], 'Bloqueio automático');
             break;
 
         case 'db_add':
@@ -1621,8 +1700,9 @@ $titles = [
     'conta'    => 'Acesso ao painel.',
     'recursos' => 'Utilização do servidor e de cada site, atualizada a cada 5 segundos.',
     'ficheiros'=> 'Ficheiros de cada site, geridos com o utilizador do próprio site.',
+    'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'bd', 'php'], 'Sistema' => ['servicos', 'conta']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'conta']];
 $section = 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -1639,7 +1719,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <noscript><?php if ($pending > 0): ?><meta http-equiv="refresh" content="3"><?php endif; ?><div style="padding:10px 16px;background:#fdf1dc;color:#9a5b08">O painel precisa de JavaScript para as janelas e menus.</div></noscript>
 <div class="app">
   <aside class="side" id="side">
-    <a class="brand" href="?p=resumo"><span class="logo"><?= ic('server') ?></span>MiniPainel</a>
+    <a class="brand" href="?p=resumo" aria-label="IDDigital Hosting — Resumo"><?= brand_logo() ?></a>
     <nav class="nav">
       <?php foreach ($groups as $gl => $keys): ?>
         <div class="nav-sec"><?= h($gl) ?></div>
@@ -1649,7 +1729,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php endforeach; ?>
       <?php endforeach; ?>
     </nav>
-    <div class="side-foot">MiniPainel v<?= h(MP_VERSION) ?></div>
+    <div class="side-foot">IDDigital Hosting v<?= h(MP_VERSION) ?></div>
   </aside>
   <div class="scrim" data-nav-close></div>
 
@@ -1666,6 +1746,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
         <?php elseif ($page === 'bd'): ?>
           <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
+        <?php elseif ($page === 'ligacoes'): ?>
+          <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
         <?php endif; ?>
         <form method="post" style="margin:0"><?= act_fields('refresh') ?><button class="chip" type="submit" title="Atualizar estado" aria-label="Atualizar estado"><?= ic('reload') ?><span class="lbl">Atualizar</span></button></form>
         <span class="chip sm hide-m">v<?= h(MP_VERSION) ?></span>
@@ -2043,6 +2125,113 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
       <?php endif; ?>
 
+<?php elseif ($page === 'ligacoes'):
+    $cj = jload(MP_STATS . '/conns.json') ?? [];
+    $fw = jload(MP_STATS . '/fw.json') ?? [];
+    $fwAuto = is_array($fw['auto'] ?? null) ? $fw['auto'] : ['on' => false, 'limit' => 150, 'duration' => 3600];
+    $fwBlocks = array_values(array_filter(is_array($fw['blocks'] ?? null) ? $fw['blocks'] : [], function ($b) { return (int)($b['exp'] ?? 0) === 0 || (int)$b['exp'] > time(); }));
+    $fwAllow = is_array($fw['allow'] ?? null) ? $fw['allow'] : [];
+    $portLabels = [];
+    foreach ($sites as $s) $portLabels[(string)(int)($s['port'] ?? 0)] = (string)($s['name'] ?? '');
+    $portLabels[(string)(int)($sys['panel_port'] ?? 2443)] = 'Painel';
+    $portLabels += ['22' => 'SSH', '3306' => 'MariaDB', '80' => 'HTTP', '443' => 'HTTPS'];
+    $durs = ['600s' => '10 minutos', '1h' => '1 hora', '24h' => '24 horas', '7d' => '7 dias'];
+    $curDur = (int)($fwAuto['duration'] ?? 3600);
+    $tzl = tz_off(live_stats());
+?>
+      <?php if (empty($fw['nft'])): ?>
+        <div class="card"><div class="empty"><b>A firewall do painel não está ativa</b>No servidor: <span class="mono">mpanel fw-restore</span> (requer o pacote nftables).</div></div>
+      <?php endif; ?>
+      <section class="stats" id="cn-stats">
+        <div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Ligações abertas</div><div class="v" data-c="total"><?= (int)($cj['total'] ?? 0) ?></div></div></div>
+        <div class="stat"><span class="tile t-blue"><?= ic('world') ?></span><div><div class="k">IPs distintos</div><div class="v" data-c="distinct"><?= (int)($cj['distinct'] ?? 0) ?></div></div></div>
+        <div class="stat"><span class="tile t-warn"><?= ic('reload') ?></span><div><div class="k">Em espera (SYN)</div><div class="v" data-c="syn"><?= (int)($cj['syn'] ?? 0) ?></div></div></div>
+        <div class="stat"><span class="tile t-vio"><?= ic('ban') ?></span><div><div class="k">IPs bloqueados</div><div class="v"><?= count($fwBlocks) ?></div></div></div>
+      </section>
+
+      <section class="card" id="cn" data-me="<?= h($myIp) ?>" data-limit="<?= (int)$fwAuto['limit'] ?>" data-auto="<?= !empty($fwAuto['on']) ? 1 : 0 ?>"
+        data-labels="<?= h((string)json_encode($portLabels)) ?>" data-allow="<?= h((string)json_encode(array_values($fwAllow))) ?>" data-init="<?= h((string)json_encode($cj)) ?>">
+        <div class="card-h">
+          <div><h2>Ligações por IP</h2><p>Atualiza a cada 5 segundos. Só ligações a serviços deste servidor.</p></div>
+          <input class="in cn-search" id="cn-q" type="search" placeholder="Procurar IP…" aria-label="Procurar IP" autocomplete="off">
+        </div>
+        <table class="list cards">
+          <thead><tr><th>IP de origem</th><th class="r">Ligações</th><th>Destino</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody id="cn-rows"><tr><td colspan="4" class="empty">A carregar…</td></tr></tbody>
+        </table>
+        <div class="card-f mu" id="cn-foot"></div>
+      </section>
+
+      <section class="card">
+          <div class="card-h"><div><h2>IPs bloqueados</h2><p>Bloqueados em todas as portas, incluindo SSH.</p></div></div>
+          <?php if (!$fwBlocks): ?>
+            <div class="empty">Nenhum IP bloqueado.</div>
+          <?php else: ?>
+          <table class="list cards">
+            <thead><tr><th>IP / rede</th><th>Origem</th><th>Motivo</th><th>Expira</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+            <tbody>
+            <?php foreach ($fwBlocks as $b): $exp = (int)($b['exp'] ?? 0); $left = $exp - time(); ?>
+              <tr>
+                <td class="first" data-label="IP"><div class="nm mono"><?= h($b['ip'] ?? '') ?></div></td>
+                <td data-label="Origem"><span class="pill <?= ($b['by'] ?? '') === 'auto' ? 'p-err' : 'p-off' ?>"><?= ($b['by'] ?? '') === 'auto' ? 'Automático' : 'Manual' ?></span> <span class="mu"><?= h(gmdate('d/m/Y H:i', (int)($b['created'] ?? 0) + $tzl)) ?></span></td>
+                <td data-label="Motivo" class="mu"><?= h(($b['reason'] ?? '') !== '' ? $b['reason'] : '—') ?></td>
+                <td data-label="Expira"><?= $exp === 0 ? 'Permanente' : 'em ' . h($left >= 86400 ? round($left / 86400) . ' d' : ($left >= 3600 ? round($left / 3600) . ' h' : max(1, round($left / 60)) . ' min')) ?></td>
+                <td class="act r"><form method="post" style="margin:0"><?= act_fields('fw_unblock', ['ip' => (string)($b['ip'] ?? '')]) ?><button class="btn sm sec" type="submit">Desbloquear</button></form></td>
+              </tr>
+            <?php endforeach; ?>
+            </tbody>
+          </table>
+          <?php endif; ?>
+      </section>
+
+      <div class="grid2e">
+          <section class="card">
+            <div class="card-h"><div><h2>Bloqueio automático</h2><p>Bloqueia IPs com demasiadas ligações abertas em simultâneo.</p></div><span class="pill <?= !empty($fwAuto['on']) ? 'p-ok' : 'p-off' ?>"><?= !empty($fwAuto['on']) ? 'Ativo' : 'Desativado' ?></span></div>
+            <form method="post" class="card-b">
+              <?= act_fields('fw_auto') ?>
+              <div class="fgrid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+                <label class="fld">Estado<select class="in" name="on"><option value="on"<?= !empty($fwAuto['on']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($fwAuto['on']) ? ' selected' : '' ?>>Desativado</option></select></label>
+                <label class="fld">Limite por IP<input class="in" name="limit" inputmode="numeric" pattern="[0-9]{2,6}" required value="<?= (int)$fwAuto['limit'] ?>"><small>ligações abertas</small></label>
+                <label class="fld">Duração<select class="in" name="dur"><?php foreach ($durs as $dk => $dl): $ds = (int)fw_secs_php($dk); ?><option value="<?= h($dk) ?>"<?= $ds === $curDur ? ' selected' : '' ?>><?= h($dl) ?></option><?php endforeach; ?></select></label>
+              </div>
+              <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+            </form>
+            <div class="card-f mu">Nunca são bloqueados: este servidor, os IPs de confiança e os IPs de onde usaste o painel nos últimos 7 dias.</div>
+          </section>
+
+          <section class="card">
+            <div class="card-h"><div><h2>IPs de confiança</h2><p>Nunca são bloqueados, nem manual nem automaticamente.</p></div></div>
+            <?php if ($fwAllow): ?>
+            <div class="row-list">
+              <?php foreach ($fwAllow as $a): ?>
+                <div class="item"><span class="grow mono"><?= h($a) ?></span><form method="post" style="margin:0"><?= act_fields('fw_allow_del', ['ip' => (string)$a]) ?><button class="btn sm sec" type="submit">Remover</button></form></div>
+              <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
+            <form method="post" class="card-b" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+              <?= act_fields('fw_allow_add') ?>
+              <label class="fld" style="flex:1;min-width:200px">IP ou rede<input class="in mono" name="ip" required placeholder="ex.: <?= h($myIp !== '' ? $myIp : '89.155.12.30') ?>" autocomplete="off"></label>
+              <button class="btn sec" type="submit">Adicionar</button>
+            </form>
+          </section>
+      </div>
+
+      <dialog id="dlg-block">
+        <form method="post">
+          <?= act_fields('fw_block') ?>
+          <div class="dlg-h"><h3>Bloquear IP ou rede</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+          <div class="dlg-b">
+            <label class="fld">IP ou rede<input class="in mono" name="ip" id="blk-ip" required placeholder="ex.: 185.220.101.47 ou 45.148.10.0/24" autocomplete="off"></label>
+            <div class="fgrid">
+              <label class="fld">Duração<select class="in" name="dur"><option value="1h">1 hora</option><option value="24h" selected>24 horas</option><option value="7d">7 dias</option><option value="perm">Permanente</option></select></label>
+              <label class="fld">Motivo (opcional)<input class="in" name="reason" maxlength="80" autocomplete="off"></label>
+            </div>
+            <div class="warnbox">O IP fica bloqueado em todas as portas, incluindo SSH, e as ligações abertas são cortadas de imediato.</div>
+          </div>
+          <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Bloquear</button></div>
+        </form>
+      </dialog>
+
 <?php elseif ($page === 'servicos'): ?>
       <section class="card">
         <?php if (!$svcs): ?>
@@ -2224,6 +2413,53 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
 })();
 </script>
+<?php if ($page === 'ligacoes'): ?>
+<script>
+(function () {
+  var box = document.getElementById('cn'); if (!box) return;
+  var L = JSON.parse(box.getAttribute('data-labels') || '{}'), allow = JSON.parse(box.getAttribute('data-allow') || '[]');
+  var me = box.getAttribute('data-me'), lim = +box.getAttribute('data-limit') || 0, auto = box.getAttribute('data-auto') === '1';
+  var data = JSON.parse(box.getAttribute('data-init') || '{}'), q = document.getElementById('cn-q');
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function lab(p) { return L[p] ? L[p] + ' :' + p : ':' + p; }
+  function render() {
+    var rows = (data.ips || []), f = (q.value || '').trim(), h = '';
+    if (f) rows = rows.filter(function (r) { return r.ip.indexOf(f) !== -1; });
+    rows.slice(0, 200).forEach(function (r) {
+      var ports = Object.keys(r.ports || {}).sort(function (a, b) { return r.ports[b] - r.ports[a]; })
+        .map(function (p) { return esc(lab(p)) + ' (' + r.ports[p] + ')'; }).join(' · ');
+      var isMe = r.ip === me, ok = allow.indexOf(r.ip) !== -1, hot = lim && r.n >= lim * 0.8;
+      var act = isMe ? '<span class="mu">protegido</span>' : ok ? '<span class="mu">confiança</span>'
+        : '<button class="btn sm danger-o" type="button" data-block="' + esc(r.ip) + '">Bloquear</button>';
+      h += '<tr><td class="first" data-label="IP"><span class="nm mono">' + esc(r.ip) + '</span>' + (isMe ? ' <span class="pill p-me">tu</span>' : '') +
+        (r.syn ? '<div class="mu">' + r.syn + ' em espera (SYN)</div>' : '') + '</td>' +
+        '<td class="r" data-label="Ligações"><b class="' + (hot ? 'cn-hot' : '') + '">' + r.n + '</b></td>' +
+        '<td class="mu" data-label="Destino">' + ports + '</td><td class="act r">' + act + '</td></tr>';
+    });
+    if (!h) h = '<tr><td colspan="4" class="empty">' + (f ? 'Nenhum IP corresponde à pesquisa.' : 'Sem ligações abertas de momento.') + '</td></tr>';
+    document.getElementById('cn-rows').innerHTML = h;
+    document.querySelectorAll('[data-c]').forEach(function (e) { var k = e.getAttribute('data-c'); if (data[k] !== undefined) e.textContent = data[k]; });
+    var t = data.ts ? new Date(data.ts * 1000) : null;
+    document.getElementById('cn-foot').textContent = (rows.length > 200 ? 'A mostrar 200 de ' + rows.length + ' IPs. ' : '') +
+      (auto ? 'Bloqueio automático ativo acima de ' + lim + ' ligações por IP. ' : 'Bloqueio automático desativado. ') +
+      (t ? 'Última leitura às ' + t.toLocaleTimeString('pt-PT') + '.' : '');
+  }
+  document.getElementById('cn-rows').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-block]'); if (!b) return;
+    document.getElementById('blk-ip').value = b.getAttribute('data-block');
+    document.getElementById('dlg-block').showModal();
+  });
+  q.addEventListener('input', render);
+  function poll() {
+    fetch('?stats=conns', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { if (r.status === 401) { location.reload(); return null; } return r.json(); })
+      .then(function (d) { if (d && d.ts) { data = d; render(); } })
+      .catch(function () {}).then(function () { setTimeout(poll, 5000); });
+  }
+  render(); setTimeout(poll, 5000);
+})();
+</script>
+<?php endif; ?>
 <?php if ($page === 'recursos' || $page === 'resumo'): ?>
 <script>
 (function () {
@@ -2640,7 +2876,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * MiniPainel v1.5.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v1.6.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -3036,11 +3272,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — MiniPainel CLI v1.5.0
+#  mpanel — IDDigital Hosting CLI v1.6.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.5.0"
+MP_VERSION="1.6.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -3923,6 +4159,214 @@ cmd_service(){
   return 0
 }
 
+# ---------- firewall: ligações e bloqueio de IPs (nftables, tabela própria) ----------
+FW_BLOCKS=/etc/minipainel/blocks.list   # ip|expira (epoch, 0 = permanente)|criado|origem|motivo
+FW_ALLOW=/etc/minipainel/allow.list     # um IP ou rede por linha
+FW_CONF=/etc/minipainel/firewall.conf   # AUTO, LIMIT, DURATION
+FW_STATE=$DATA/stats/fw.json
+FW_ADMIN=$DATA/logs/admin-ips.json      # IPs de onde o painel foi usado (escrito pelo painel)
+
+fw_has_nft(){ command -v nft >/dev/null 2>&1; }
+fw_ip_valid(){
+  local re4='^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[12][0-9]|3[0-2]))?$'
+  local re6='^[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7}(/([0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?$'
+  if [[ "$1" =~ $re4 ]]; then
+    local o x; IFS=. read -ra o <<<"${1%%/*}"
+    for x in "${o[@]}"; do [ "$((10#$x))" -le 255 ] || return 1; done
+    return 0
+  fi
+  [[ "$1" =~ $re6 ]]
+}
+fw_fam(){ if [[ "$1" == *:* ]]; then echo 6; else echo 4; fi; }
+fw_prefix(){ if [[ "$1" == */* ]]; then echo "${1#*/}"; elif [[ "$1" == *:* ]]; then echo 128; else echo 32; fi; }
+ip2int(){ local a b c d; IFS=. read -r a b c d <<<"${1%%/*}"; echo $(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d )); }
+in_cidr4(){ # ip cidr
+  local bits mask; bits=$(fw_prefix "$2")
+  mask=$(( bits == 0 ? 0 : (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+  [ $(( $(ip2int "$1") & mask )) -eq $(( $(ip2int "$2") & mask )) ]
+}
+fw_overlap(){ # a b — verdadeiro se uma rede contém a outra (IPv6: só igualdade exata)
+  local a=$1 b=$2
+  [ "$(fw_fam "$a")" = "$(fw_fam "$b")" ] || return 1
+  if [ "$(fw_fam "$a")" = 4 ]; then in_cidr4 "${a%%/*}" "$b" || in_cidr4 "${b%%/*}" "$a"; return; fi
+  [ "${a%%/*}" = "${b%%/*}" ]
+}
+fw_protected_list(){
+  echo 127.0.0.1; echo ::1
+  hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$'
+  [ -f "$FW_ALLOW" ] && grep -v '^\s*\(#\|$\)' "$FW_ALLOW" | awk '{print $1}'
+  if [ -s "$FW_ADMIN" ]; then
+    jq -r --argjson lim $(( EPOCHSECONDS - 7 * 86400 )) 'to_entries[] | select(.value > $lim) | .key' "$FW_ADMIN" 2>/dev/null
+  fi
+  return 0
+}
+fw_conf_get(){ local v; v=$(grep -m1 "^$1=" "$FW_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+fw_secs(){
+  local re='^[0-9]{1,7}[smhd]?$'
+  case "$1" in perm|permanente|0) echo 0; return 0 ;; esac
+  [[ "$1" =~ $re ]] || return 1
+  case "$1" in
+    *s) echo "${1%s}" ;; *m) echo $(( ${1%m} * 60 )) ;; *h) echo $(( ${1%h} * 3600 )) ;; *d) echo $(( ${1%d} * 86400 )) ;; *) echo "$1" ;;
+  esac
+}
+fw_init(){
+  fw_has_nft || die "O nftables (nft) não está instalado."
+  nft list table inet minipainel >/dev/null 2>&1 && return 0
+  nft -f - <<'NFT' || die "Não foi possível criar a tabela nftables do painel."
+table inet minipainel {
+  set block4 { type ipv4_addr; flags interval, timeout; }
+  set block6 { type ipv6_addr; flags interval, timeout; }
+  chain input {
+    type filter hook input priority -10; policy accept;
+    ip saddr @block4 drop
+    ip6 saddr @block6 drop
+  }
+}
+NFT
+}
+fw_nft_add(){ # ip segundos
+  local set el="$1"
+  set="block$(fw_fam "$1")"
+  [ "$2" -gt 0 ] && el="$1 timeout ${2}s"
+  nft delete element inet minipainel "$set" "{ $1 }" >/dev/null 2>&1
+  nft add element inet minipainel "$set" "{ $el }"
+}
+fw_nft_del(){ nft delete element inet minipainel "block$(fw_fam "$1")" "{ $1 }" >/dev/null 2>&1; return 0; }
+fw_list_set(){ # reescreve a lista sem a linha do IP indicado e sem expirados
+  local skip=$1 tmp="$FW_BLOCKS.tmp"
+  [ -f "$FW_BLOCKS" ] || : > "$FW_BLOCKS"
+  awk -F'|' -v s="$skip" -v now="$EPOCHSECONDS" '$1 != s && ($2 == 0 || $2 > now)' "$FW_BLOCKS" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$FW_BLOCKS"
+}
+fw_write_state(){
+  local blocks allow nftok=false
+  fw_has_nft && nft list table inet minipainel >/dev/null 2>&1 && nftok=true
+  blocks=$( [ -f "$FW_BLOCKS" ] && awk -F'|' -v now="$EPOCHSECONDS" '$2 == 0 || $2 > now' "$FW_BLOCKS" | while IFS='|' read -r ip ex cr by rs; do
+      jq -cn --arg ip "$ip" --arg ex "$ex" --arg cr "$cr" --arg by "$by" --arg rs "$rs" '{ip:$ip, exp:($ex|tonumber), created:($cr|tonumber), by:$by, reason:$rs}'
+    done | jq -cs '.')
+  allow=$( [ -f "$FW_ALLOW" ] && grep -v '^\s*\(#\|$\)' "$FW_ALLOW" | awk '{print $1}' | jq -R . | jq -cs '.')
+  jq -n --argjson b "${blocks:-[]}" --argjson a "${allow:-[]}" --argjson nft "$nftok" \
+    --arg on "$(fw_conf_get AUTO 0)" --arg lim "$(fw_conf_get LIMIT 150)" --arg dur "$(fw_conf_get DURATION 3600)" \
+    '{nft:$nft, auto:{on:($on=="1"), limit:($lim|tonumber), duration:($dur|tonumber)}, blocks:$b, allow:$a}' > "$FW_STATE.tmp" \
+    && chown root:"$PANEL_SYSUSER" "$FW_STATE.tmp" && chmod 640 "$FW_STATE.tmp" && mv -f "$FW_STATE.tmp" "$FW_STATE"
+  return 0
+}
+
+cmd_block(){
+  local ip="${1:-}" dur="24h" reason="" by="manual" extra="" secs exp p
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --for) dur="${2:-}"; shift 2 || shift ;;
+      --reason) reason="${2:-}"; shift 2 || shift ;;
+      --by) by="${2:-}"; shift 2 || shift ;;
+      --protect) extra="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  fw_ip_valid "$ip" || die "IP ou rede inválida: $ip"
+  if [ "$(fw_fam "$ip")" = 4 ] && [ "$(fw_prefix "$ip")" -lt 8 ]; then die "Rede demasiado grande (mínimo /8)."; fi
+  if [ "$(fw_fam "$ip")" = 6 ] && [ "$(fw_prefix "$ip")" -lt 32 ]; then die "Rede demasiado grande (mínimo /32)."; fi
+  case "$by" in manual|auto) ;; *) by=manual ;; esac
+  secs=$(fw_secs "$dur") || die "Duração inválida: $dur (ex.: 3600s, 1h, 24h, 7d ou perm)."
+  reason=$(printf '%s' "$reason" | tr -d '|\r\n' | cut -c1-80)
+  p=$( { fw_protected_list; if [ -n "$extra" ] && fw_ip_valid "$extra"; then echo "$extra"; fi; } | sort -u | while read -r q; do
+         if [ -n "$q" ] && fw_ip_valid "$q" && fw_overlap "$ip" "$q"; then echo "$q"; break; fi
+       done )
+  [ -z "$p" ] || die "Não é possível bloquear $ip: abrange $p, que está protegido (este servidor, IP de confiança ou IP de onde usas o painel)."
+  fw_init
+  fw_nft_add "$ip" "$secs" || die "O nftables recusou o bloqueio de $ip."
+  exp=0; [ "$secs" -gt 0 ] && exp=$(( EPOCHSECONDS + secs ))
+  fw_list_set "$ip"
+  echo "$ip|$exp|$EPOCHSECONDS|$by|$reason" >> "$FW_BLOCKS"
+  ss -K dst "$ip" >/dev/null 2>&1
+  fw_write_state
+  if [ "$secs" -gt 0 ]; then echo "$ip bloqueado até $(date -d "@$exp" '+%d/%m/%Y %H:%M'). Ligações abertas cortadas."
+  else echo "$ip bloqueado permanentemente. Ligações abertas cortadas."; fi
+  return 0
+}
+cmd_unblock(){
+  local ip="${1:-}"
+  fw_ip_valid "$ip" || die "IP ou rede inválida: $ip"
+  fw_has_nft && fw_nft_del "$ip"
+  fw_list_set "$ip"
+  fw_write_state
+  echo "$ip desbloqueado."
+  return 0
+}
+cmd_block_list(){
+  printf '%-40s %-17s %-8s %s\n' "IP / REDE" "EXPIRA" "ORIGEM" "MOTIVO"
+  [ -f "$FW_BLOCKS" ] && awk -F'|' -v now="$EPOCHSECONDS" '$2 == 0 || $2 > now' "$FW_BLOCKS" | while IFS='|' read -r ip ex cr by rs; do
+    printf '%-40s %-17s %-8s %s\n' "$ip" "$([ "$ex" = 0 ] && echo permanente || date -d "@$ex" '+%d/%m/%Y %H:%M')" "$by" "$rs"
+  done
+  return 0
+}
+cmd_allow_add(){
+  local ip="${1:-}"
+  fw_ip_valid "$ip" || die "IP ou rede inválida: $ip"
+  touch "$FW_ALLOW"; chmod 600 "$FW_ALLOW"
+  grep -qxF "$ip" "$FW_ALLOW" || echo "$ip" >> "$FW_ALLOW"
+  if [ -f "$FW_BLOCKS" ] && cut -d'|' -f1 "$FW_BLOCKS" | grep -qxF "$ip"; then fw_has_nft && fw_nft_del "$ip"; fw_list_set "$ip"; fi
+  fw_write_state
+  echo "$ip adicionado aos IPs de confiança (nunca é bloqueado)."
+  return 0
+}
+cmd_allow_del(){
+  local ip="${1:-}"
+  fw_ip_valid "$ip" || die "IP ou rede inválida: $ip"
+  if [ -f "$FW_ALLOW" ]; then grep -vxF "$ip" "$FW_ALLOW" > "$FW_ALLOW.tmp"; mv -f "$FW_ALLOW.tmp" "$FW_ALLOW"; fi
+  [ -f "$FW_ALLOW" ] && grep -qxF "$ip" "$FW_ALLOW" && die "Não foi possível remover $ip."
+  chmod 600 "$FW_ALLOW" 2>/dev/null
+  fw_write_state
+  echo "$ip removido dos IPs de confiança."
+  return 0
+}
+cmd_fw_auto(){
+  local on="${1:-}" lim dur secs re='^[0-9]{1,6}$'
+  case "$on" in on|1) on=1 ;; off|0) on=0 ;; *) die "Usa: mpanel fw-auto on|off [--limit N] [--duration 1h]" ;; esac
+  shift
+  lim=$(fw_conf_get LIMIT 150); dur=$(fw_conf_get DURATION 3600)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --limit) lim="${2:-}"; shift 2 || shift ;;
+      --duration) dur="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [[ "$lim" =~ $re ]] && [ "$lim" -ge 10 ] || die "O limite tem de ser um número igual ou superior a 10."
+  secs=$(fw_secs "$dur") || die "Duração inválida: $dur"
+  [ "$secs" -gt 0 ] || die "O bloqueio automático tem de ter duração (não pode ser permanente)."
+  printf 'AUTO=%s\nLIMIT=%s\nDURATION=%s\n' "$on" "$lim" "$secs" > "$FW_CONF"; chmod 644 "$FW_CONF"
+  fw_write_state
+  if [ "$on" = 1 ]; then echo "Bloqueio automático ativo: IPs com mais de $lim ligações abertas ficam bloqueados durante $(( secs / 60 )) min."
+  else echo "Bloqueio automático desativado."; fi
+  return 0
+}
+cmd_fw_restore(){
+  local ip ex cr by rs left
+  fw_has_nft || { warn "O nftables não está instalado."; return 0; }
+  nft delete table inet minipainel >/dev/null 2>&1
+  fw_init
+  fw_list_set ""
+  [ -f "$FW_BLOCKS" ] && while IFS='|' read -r ip ex cr by rs; do
+    left=0; [ "$ex" != 0 ] && left=$(( ex - EPOCHSECONDS ))
+    [ "$ex" != 0 ] && [ "$left" -le 0 ] && continue
+    fw_nft_add "$ip" "$left" >/dev/null 2>&1 || warn "Não foi possível repor o bloqueio de $ip."
+  done < "$FW_BLOCKS"
+  fw_write_state
+  echo "Bloqueios repostos: $( [ -f "$FW_BLOCKS" ] && wc -l < "$FW_BLOCKS" || echo 0)."
+  return 0
+}
+cmd_conn_list(){
+  local f=$DATA/stats/conns.json ip="${1:-}"
+  [ -s "$f" ] || die "Ainda não há dados. Verifica: systemctl status minipainel-stats"
+  if [ -n "$ip" ]; then
+    jq -r --arg ip "$ip" '.ips[] | select(.ip == $ip) | "\(.ip): \(.n) ligações (\(.syn) em espera)", (.ports | to_entries[] | "  porta \(.key): \(.value)")' "$f"
+  else
+    jq -r '"Ligações abertas: \(.total)   IPs distintos: \(.distinct)   Em espera (SYN): \(.syn)", (.ips[:30][] | "  \(.n)\t\(.ip)\t" + (.ports | to_entries | map("\(.key)(\(.value))") | join(" ")))' "$f"
+  fi
+  return 0
+}
+
 write_auth(){
   local u=$1 hsh=$2
   jq -n --arg u "$u" --arg h "$hsh" '{user:$u,hash:$h}' > "$AUTH.tmp" || return 1
@@ -4042,7 +4486,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|panel-passwd-hash|service|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -4060,7 +4504,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-MiniPainel CLI v1.5.0
+IDDigital Hosting — CLI v1.6.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -4093,6 +4537,15 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Ligações e firewall (bloqueio em todas as portas, incluindo SSH)
+  conn-list [ip]                       ligações abertas por IP
+  block <ip|rede> [--for 1h|24h|7d|perm] [--reason texto]
+  unblock <ip|rede>
+  block-list
+  allow-add <ip|rede> | allow-del <ip|rede>   IPs de confiança (nunca bloqueados)
+  fw-auto on|off [--limit N] [--duration 1h]  bloqueio automático por excesso de ligações
+  fw-restore                           repõe a tabela nftables e os bloqueios
 
 Gestor de ficheiros
   fm-sync               recria os processos do gestor de ficheiros de todos os sites
@@ -4128,6 +4581,14 @@ dispatch(){
     php-list)          cmd_php_list ;;
     service)           cmd_service "$@" ;;
     stats)             cmd_stats ;;
+    conn-list)         cmd_conn_list "$@" ;;
+    block)             cmd_block "$@" ;;
+    unblock)           cmd_unblock "$@" ;;
+    block-list)        cmd_block_list ;;
+    allow-add)         cmd_allow_add "$@" ;;
+    allow-del)         cmd_allow_del "$@" ;;
+    fw-auto)           cmd_fw_auto "$@" ;;
+    fw-restore)        cmd_fw_restore ;;
     fm-sync)           cmd_fm_sync ;;
     status)            cmd_status ;;
     passwd)            cmd_passwd "$@" ;;
@@ -4141,11 +4602,11 @@ dispatch(){
 cmd="${1:-help}"
 case "$cmd" in
   help|-h|--help)       usage; exit 0 ;;
-  version|-v|--version) echo "MiniPainel $MP_VERSION"; exit 0 ;;
+  version|-v|--version) echo "IDDigital Hosting $MP_VERSION (MiniPainel)"; exit 0 ;;
 esac
 [ "$(id -u)" -eq 0 ] || die "Tem de ser executado como root."
 exec 9>"$LOCK"
-flock -w 300 9 || die "Outra operação do MiniPainel está em curso."
+flock -w 300 9 || die "Outra operação do painel está em curso."
 
 if [ "$cmd" = worker ]; then cmd_worker; exit 0; fi
 
@@ -4166,7 +4627,7 @@ chmod 750 /usr/local/sbin/mpanel
 say "A configurar o worker..."
 cat > /etc/systemd/system/minipainel-worker.service <<'EOF'
 [Unit]
-Description=MiniPainel - processa as tarefas do painel
+Description=IDDigital Hosting - processa as tarefas do painel
 After=network.target mariadb.service nginx.service
 
 [Service]
@@ -4176,7 +4637,7 @@ TimeoutStartSec=1800
 EOF
 cat > /etc/systemd/system/minipainel-worker.path <<'EOF'
 [Unit]
-Description=MiniPainel - vigia a fila de tarefas do painel
+Description=IDDigital Hosting - vigia a fila de tarefas do painel
 
 [Path]
 DirectoryNotEmpty=/var/lib/minipainel/queue
@@ -4194,7 +4655,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do MiniPainel v1.5.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.6.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -4340,6 +4801,57 @@ aggregate(){ # origem destino início fim máximo
   perm "$2"; trim "$2" "$5"
 }
 
+# ---------- ligações abertas (só às portas em escuta neste servidor) ----------
+declare -A FW_RECENT=()
+FW_AUTO=0; FW_LIMIT=150; FW_DUR=3600
+read_fw_conf(){
+  local f=/etc/minipainel/firewall.conf
+  FW_AUTO=$(grep -m1 '^AUTO=' "$f" 2>/dev/null | cut -d= -f2); FW_AUTO=${FW_AUTO:-0}
+  FW_LIMIT=$(grep -m1 '^LIMIT=' "$f" 2>/dev/null | cut -d= -f2); FW_LIMIT=${FW_LIMIT:-150}
+  FW_DUR=$(grep -m1 '^DURATION=' "$f" 2>/dev/null | cut -d= -f2); FW_DUR=${FW_DUR:-3600}
+}
+sample_conns(){
+  local lp raw tot syn dist ips c ip k
+  lp=$(ss -Htln 2>/dev/null | awk '{n = split($4, a, ":"); print a[n]}' | sort -u | tr '\n' ' ')
+  raw=$(ss -Htna 2>/dev/null | awk -v lp=" $lp " '
+    BEGIN { n = split(lp, L, " "); for (i = 1; i <= n; i++) if (L[i] != "") lport[L[i]] = 1 }
+    $1 == "ESTAB" || $1 == "SYN-RECV" {
+      k = split($4, a, ":"); p = a[k]
+      if (!(p in lport)) next
+      ip = $5; sub(/:[0-9]+$/, "", ip); gsub(/[\[\]]/, "", ip); sub(/^::ffff:/, "", ip); sub(/%.*/, "", ip)
+      if (ip == "127.0.0.1" || ip == "::1") next
+      cnt[ip]++; if ($1 == "SYN-RECV") syn[ip]++
+      pc[ip, p]++
+    }
+    END {
+      for (key in pc) { split(key, q, SUBSEP); ports[q[1]] = ports[q[1]] (ports[q[1]] == "" ? "" : ",") q[2] ":" pc[key] }
+      for (ip in cnt) printf "%d\t%s\t%d\t%s\n", cnt[ip], ip, syn[ip] + 0, ports[ip]
+    }')
+  read -r tot syn dist < <(printf '%s\n' "$raw" | awk -F'\t' 'NF >= 2 { t += $1; s += $3; n++ } END { print t + 0, s + 0, n + 0 }')
+  ips=$(printf '%s\n' "$raw" | grep -v '^$' | sort -t$'\t' -k1,1nr | head -n 500 | awk -F'\t' '
+    BEGIN { printf "[" }
+    { m = split($4, P, ","); ps = ""; for (i = 1; i <= m; i++) { split(P[i], kv, ":"); ps = ps (i > 1 ? "," : "") "\"" kv[1] "\":" kv[2] }
+      printf "%s{\"ip\":\"%s\",\"n\":%d,\"syn\":%d,\"ports\":{%s}}", (NR > 1 ? "," : ""), $2, $1, $3, ps }
+    END { printf "]" }')
+  put "$DIR/conns.json" "{\"ts\":$EPOCHSECONDS,\"total\":${tot:-0},\"syn\":${syn:-0},\"distinct\":${dist:-0},\"ips\":${ips:-[]}}"
+  # bloqueio automático
+  if [ "$FW_AUTO" = 1 ] && [ -x /usr/local/sbin/mpanel ]; then
+    for k in "${!FW_RECENT[@]}"; do [ "${FW_RECENT[$k]}" -lt "$EPOCHSECONDS" ] && unset "FW_RECENT[$k]"; done
+    while IFS=$'\t' read -r c ip _ _; do
+      [ -n "$ip" ] || continue
+      [ "$c" -gt "$FW_LIMIT" ] || break
+      [ -n "${FW_RECENT[$ip]:-}" ] && continue
+      FW_RECENT[$ip]=$(( EPOCHSECONDS + 300 ))
+      ( timeout 90 /usr/local/sbin/mpanel block "$ip" --for "${FW_DUR}s" --by auto --reason "Automático: $c ligações abertas" >/dev/null 2>&1 & )
+    done < <(printf '%s\n' "$raw" | grep -v '^$' | sort -t$'\t' -k1,1nr)
+  fi
+}
+fw_selfheal(){
+  command -v nft >/dev/null 2>&1 || return 0
+  [ -s /etc/minipainel/blocks.list ] || [ -f /etc/minipainel/firewall.conf ] || return 0
+  nft list table inet minipainel >/dev/null 2>&1 || ( timeout 90 /usr/local/sbin/mpanel fw-restore >/dev/null 2>&1 & )
+}
+
 # ---------- ciclo principal ----------
 for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
 read -r p_tot p_idle <<<"$(read_cpu)"
@@ -4351,6 +4863,7 @@ acc_n=0; a_cpu=0; a_mem=0; a_swap=0; a_disk=0; a_load=0; a_rx=0; a_tx=0
 DISK_TS=0; last_hour=-1
 sample_sites 1 1
 first=0
+read_fw_conf
 
 while :; do
   sleep "$INTERVAL"
@@ -4379,6 +4892,7 @@ while :; do
   printf -v tz '%(%z)T' -1
   put "$DIR/live.json" "{\"ts\":$EPOCHSECONDS,\"tz\":\"$tz\",\"cpus\":$NCPU,\"cpu\":$(d10 "$cpu"),\"mem\":{\"pct\":$(d10 "$mem"),\"used\":$mu,\"total\":$mt},\"swap\":{\"pct\":$(d10 "$swap"),\"used\":$su,\"total\":$st},\"disk\":{\"pct\":$(d10 "$disk"),\"used\":${dk_u:-0},\"total\":${dk_t:-0}},\"load\":[$l1,$l5,$l15],\"net\":{\"rx\":$rxb,\"tx\":$txb},\"sites\":{$sj}}"
 
+  sample_conns
   acc_n=$(( acc_n + 1 )); a_cpu=$(( a_cpu + cpu )); a_mem=$(( a_mem + mem )); a_swap=$(( a_swap + swap ))
   a_disk=$(( a_disk + disk )); a_load=$(( a_load + load )); a_rx=$(( a_rx + rxb )); a_tx=$(( a_tx + txb ))
 
@@ -4394,6 +4908,8 @@ while :; do
       s60=$(( cur_min / 60 * 3600 )); aggregate "$DIR/hist-1m.csv" "$DIR/hist-1h.csv" "$s60" $(( s60 + 3600 )) 720
     fi
     update_traffic
+    read_fw_conf
+    fw_selfheal
     h=$(( EPOCHSECONDS / 3600 ))
     if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
     write_sites_json
@@ -4406,7 +4922,7 @@ MPSTATS
 chmod 750 /usr/local/sbin/mpanel-stats
 cat > /etc/systemd/system/minipainel-stats.service <<'EOF'
 [Unit]
-Description=MiniPainel - recolha de estatísticas de recursos
+Description=IDDigital Hosting - recolha de estatísticas e ligações
 After=network.target
 
 [Service]
@@ -4423,6 +4939,27 @@ EOF
 systemctl daemon-reload
 systemctl enable minipainel-stats.service >/dev/null 2>&1
 systemctl restart minipainel-stats.service
+
+say "A configurar a firewall de ligações (nftables)..."
+[ -f /etc/minipainel/firewall.conf ] || printf 'AUTO=0\nLIMIT=150\nDURATION=3600\n' > /etc/minipainel/firewall.conf
+touch /etc/minipainel/blocks.list /etc/minipainel/allow.list
+chmod 600 /etc/minipainel/blocks.list /etc/minipainel/allow.list
+cat > /etc/systemd/system/minipainel-firewall.service <<'EOF'
+[Unit]
+Description=IDDigital Hosting - bloqueios de IPs (nftables)
+After=network-pre.target nftables.service firewalld.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/mpanel fw-restore
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable minipainel-firewall.service >/dev/null 2>&1 || true
 
 cat > /etc/logrotate.d/minipainel <<'EOF'
 /srv/www/*/logs/*.log /var/lib/minipainel/logs/*.log /var/lib/minipainel-pma/logs/*.log {
@@ -4504,6 +5041,7 @@ systemctl enable nginx >/dev/null 2>&1 || true
 systemctl reload-or-restart nginx
 
 /usr/local/sbin/mpanel fm-sync || warn "Não foi possível configurar o gestor de ficheiros (mpanel fm-sync)."
+/usr/local/sbin/mpanel fw-restore >/dev/null || warn "Não foi possível ativar a firewall de ligações (mpanel fw-restore)."
 /usr/local/sbin/mpanel state || warn "Não foi possível gerar o estado inicial (mpanel state)."
 
 # ----------------------------------------------------------------------------
@@ -4515,7 +5053,7 @@ SRV_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [ -n "$ADMIN_PASS" ]; then
   umask 077
   cat > /root/minipainel-credenciais.txt <<EOF
-MiniPainel v$MP_VERSION
+IDDigital Hosting v$MP_VERSION
 Painel:     https://$SRV_IP:$PANEL_PORT  (ou https://localhost:$PANEL_PORT)
 Utilizador: $PANEL_USER
 Password:   $ADMIN_PASS
@@ -4533,7 +5071,7 @@ fi
 
 echo
 echo "=============================================================="
-echo " MiniPainel v$MP_VERSION instalado"
+echo " IDDigital Hosting v$MP_VERSION instalado"
 echo "=============================================================="
 echo " Painel:      https://$SRV_IP:$PANEL_PORT"
 echo "              https://localhost:$PANEL_PORT"
