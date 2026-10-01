@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  MiniPainel v1.3.1 — instalador
+#  MiniPainel v1.3.2 — instalador
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.3.1.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.3.2.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -15,7 +15,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.3.1"
+MP_VERSION="1.3.2"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -475,7 +475,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * MiniPainel v1.3.1 — painel web
+ * MiniPainel v1.3.2 — painel web
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -483,7 +483,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.3.1';
+const MP_VERSION = '1.3.2';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1605,7 +1605,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 </body>
 </html>
 MPPANEL
-chown -R root:root /opt/minipainel
+chown -R root:root /opt/minipainel/public
 chmod 644 /opt/minipainel/public/index.php
 
 # ----------------------------------------------------------------------------
@@ -1615,11 +1615,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — MiniPainel CLI v1.3.1
+#  mpanel — MiniPainel CLI v1.3.2
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.3.1"
+MP_VERSION="1.3.2"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -2281,6 +2281,16 @@ EOF
   chmod 640 "$PMA_CONF"
 }
 
+# Garante que o config.inc.php existe e é legível pelo pool do phpMyAdmin
+pma_fix_config(){
+  [ -d "$PMA_DIR" ] || return 0
+  pma_write_config
+  cp -p "$PMA_CONF" "$PMA_DIR/config.inc.php"
+  chown root:"$PMA_USER" "$PMA_DIR/config.inc.php"
+  chmod 640 "$PMA_DIR/config.inc.php"
+  se_restore "$PMA_DIR/config.inc.php"
+}
+
 cmd_pma_update(){
   local force=0 latest cur tmp url want got
   [ "${1:-}" = "--force" ] && force=1
@@ -2288,7 +2298,11 @@ cmd_pma_update(){
   latest=$(curl -fsSL --max-time 30 https://www.phpmyadmin.net/home_page/version.txt 2>/dev/null | head -n1 | tr -d '\r')
   [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Não foi possível obter a versão do phpMyAdmin (sem acesso a phpmyadmin.net?)."
   cur=$(pma_version)
-  if [ "$cur" = "$latest" ] && [ "$force" = 0 ]; then echo "O phpMyAdmin já está na versão mais recente ($cur)."; return 0; fi
+  if [ "$cur" = "$latest" ] && [ "$force" = 0 ]; then
+    pma_fix_config
+    echo "O phpMyAdmin já está na versão mais recente ($cur)."
+    return 0
+  fi
   tmp=$(mktemp -d /var/tmp/mp-pma.XXXXXX) || die "Não foi possível criar pasta temporária."
   url="https://files.phpmyadmin.net/phpMyAdmin/$latest/phpMyAdmin-$latest-all-languages.tar.gz"
   if ! curl -fsSL --max-time 600 -o "$tmp/pma.tgz" "$url" || ! curl -fsSL --max-time 30 -o "$tmp/pma.sha256" "$url.sha256"; then
@@ -2539,7 +2553,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-MiniPainel CLI v1.3.1
+MiniPainel CLI v1.3.2
 Uso: mpanel <comando> [argumentos]
 
 Sites
