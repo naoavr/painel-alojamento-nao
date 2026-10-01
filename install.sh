@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v1.6.0 — instalador (MiniPainel)
+#  IDDigital Hosting v1.7.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.6.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.7.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -16,7 +16,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.6.0"
+MP_VERSION="1.7.0"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -146,7 +146,7 @@ selinux_on(){ command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/nu
 say "A instalar pacotes base ($OS_ID $OS_VER)..."
 if [ "$OS_FAMILY" = debian ]; then
   apt-get update -q
-  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables nginx mariadb-server mariadb-client
+  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables cron nginx mariadb-server mariadb-client
   if [ "$OS_ID" = ubuntu ]; then
     pkg_install software-properties-common
     add-apt-repository -y ppa:ondrej/php
@@ -163,7 +163,7 @@ else
   dnf install -y -q dnf-plugins-core || true
   dnf config-manager --set-enabled crb >/dev/null 2>&1 || true
   rpm -q remi-release >/dev/null 2>&1 || dnf install -y -q "https://rpms.remirepo.net/enterprise/remi-release-${EL_MAJOR}.rpm"
-  pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate nftables policycoreutils-python-utils
+  pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate nftables cronie policycoreutils-python-utils
 fi
 ok "Pacotes base instalados."
 
@@ -494,7 +494,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v1.6.0 — painel web (MiniPainel)
+ * IDDigital Hosting v1.7.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -502,7 +502,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.6.0';
+const MP_VERSION = '1.7.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -590,6 +590,38 @@ function valid_net(string $s): bool {
     if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) return $bits === null || ((int)$bits >= 32 && (int)$bits <= 128);
     return false;
 }
+/* Descrição em português de uma expressão cron (casos comuns; o resto fica "personalizada") */
+function cron_human(string $w): string {
+    $w = trim(preg_replace('/\s+/', ' ', $w));
+    $macros = ['@hourly' => 'De hora a hora', '@daily' => 'Todos os dias à meia-noite', '@weekly' => 'Aos domingos à meia-noite', '@monthly' => 'No dia 1 de cada mês à meia-noite', '@yearly' => 'Uma vez por ano (1 de janeiro)', '@annually' => 'Uma vez por ano (1 de janeiro)'];
+    if (isset($macros[$w])) return $macros[$w];
+    $p = explode(' ', $w);
+    if (count($p) !== 5) return 'Expressão inválida';
+    [$mi, $ho, $dm, $mo, $dw] = $p;
+    $days = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+    $hm = function ($h, $m) { return sprintf('%02d:%02d', (int)$h, (int)$m); };
+    $n = '/^\d+$/';
+    if ($dm === '*' && $mo === '*' && $dw === '*') {
+        if ($mi === '*' && $ho === '*') return 'A cada minuto';
+        if (preg_match('/^\*\/(\d+)$/', $mi, $m) && $ho === '*') return 'A cada ' . $m[1] . ' minutos';
+        if (preg_match($n, $mi) && $ho === '*') return 'De hora a hora, ao minuto ' . (int)$mi;
+        if (preg_match($n, $mi) && preg_match('/^\*\/(\d+)$/', $ho, $m)) return 'A cada ' . $m[1] . ' horas, ao minuto ' . (int)$mi;
+        if (preg_match($n, $mi) && preg_match($n, $ho)) return 'Todos os dias às ' . $hm($ho, $mi);
+    }
+    if (preg_match($n, $mi) && preg_match($n, $ho) && $dm === '*' && $mo === '*') {
+        if (preg_match('/^[0-7]$/', $dw)) return 'À ' . $days[(int)$dw] . ' às ' . $hm($ho, $mi);
+        if ($dw === '1-5') return 'Dias úteis às ' . $hm($ho, $mi);
+    }
+    if (preg_match($n, $mi) && preg_match($n, $ho) && preg_match($n, $dm) && $mo === '*' && $dw === '*') return 'No dia ' . (int)$dm . ' de cada mês às ' . $hm($ho, $mi);
+    return 'Expressão personalizada';
+}
+function ago(int $t, int $now): string {
+    $d = $now - $t;
+    if ($d < 60) return 'há instantes';
+    if ($d < 3600) return 'há ' . intdiv($d, 60) . ' min';
+    if ($d < 86400) return 'há ' . intdiv($d, 3600) . ' h';
+    return 'há ' . intdiv($d, 86400) . ' d';
+}
 function fw_secs_php(string $d): int {
     if (!preg_match('/^(\d+)([smhd]?)$/', $d, $m)) return 0;
     return (int)$m[1] * ['' => 1, 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86400][$m[2]];
@@ -662,6 +694,7 @@ const ICONS = [
     'up'     => '<path d="M12 19V5M6 11l6-6 6 6"/>',
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
+    'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 ];
 /* Logótipo IDDigital Hosting (SVG em linha; o texto usa Arial ou equivalente métrico) */
 function brand_logo(string $cls = 'brand-logo'): string {
@@ -1063,6 +1096,16 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .p-me::before{display:none}
 .btn.danger-o{background:var(--card);color:var(--err);border:1px solid #e3b4af}
 .btn.danger-o:hover{background:var(--err-bg)}
+.cron-cmd{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px}
+.cron-when{white-space:nowrap}
+.cron-fields{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.cron-fields .in{text-align:center;padding:0 6px}
+.cron-human{padding:10px 14px;border-radius:12px;background:var(--acc-bg);color:var(--acc-ink);font-weight:600;font-size:13.5px}
+.cron-human.bad{background:var(--err-bg);color:var(--err)}
+.cron-ta{height:auto;min-height:84px;padding:10px 12px;resize:vertical;line-height:1.5}
+.cron-help{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:-6px}
+.cron-out{margin:0;padding:18px 26px;max-height:60vh;overflow:auto;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--hover)}
+@media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .auth{background:var(--card)}
 .auth-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh}
 .auth-side{background-color:#13283a;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:48px 48px;color:#fff;padding:52px 56px;display:flex;flex-direction:column;justify-content:space-between;gap:40px}
@@ -1193,6 +1236,7 @@ $pages = [
     'recursos' => ['Recursos', 'cpu'],
     'sites'    => ['Sites', 'world'],
     'ficheiros'=> ['Ficheiros', 'folder'],
+    'cron'     => ['Tarefas agendadas', 'clock'],
     'bd'       => ['Bases de dados', 'db'],
     'php'      => ['PHP', 'code'],
     'servicos' => ['Serviços', 'pulse'],
@@ -1362,6 +1406,30 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!preg_match(RX_SVC, $svc) || !in_array($act, ['reload', 'restart', 'start', 'stop'], true)) { $bad('Pedido inválido.'); break; }
             $names = ['reload' => 'Recarregar', 'restart' => 'Reiniciar', 'start' => 'Iniciar', 'stop' => 'Parar'];
             job_submit('service', [$svc, $act], $names[$act] . ' ' . $svc);
+            break;
+
+        case 'cron_save':
+            $cid = post('id'); $when = trim(preg_replace('/\s+/', ' ', post('when')) ?? ''); $cmdc = trim(str_replace(["\r", "\n"], ' ', post_raw('cmd')));
+            $desc = substr(trim(str_replace(["\r", "\n", '|'], ' ', post_raw('desc'))), 0, 80);
+            if (!valid_site($site)) { $bad('Site inválido.'); break; }
+            if ($cid !== '' && !preg_match('/^[a-f0-9]{8}$/', $cid)) { $bad('Tarefa inválida.'); break; }
+            if (!preg_match('/^(@(hourly|daily|weekly|monthly|yearly|annually)|(\S+ ){4}\S+)$/', $when)) { $bad('Periodicidade inválida.'); break; }
+            if ($cmdc === '' || strlen($cmdc) > 2000) { $bad('O comando é obrigatório (até 2000 caracteres).'); break; }
+            $args = $cid === '' ? [$site] : [$site, $cid];
+            array_push($args, '--when', $when, '--cmd', $cmdc, '--label', $desc);
+            job_submit($cid === '' ? 'cron-add' : 'cron-edit', $args, ($cid === '' ? 'Criar tarefa em ' : 'Atualizar tarefa de ') . $site);
+            $back = $site !== '' ? ['site' => qget('site')] : [];
+            break;
+
+        case 'cron_run':
+        case 'cron_on':
+        case 'cron_off':
+        case 'cron_del':
+            $cid = post('id');
+            if (!valid_site($site) || !preg_match('/^[a-f0-9]{8}$/', $cid)) { $bad('Pedido inválido.'); break; }
+            $map = ['cron_run' => ['cron-run', 'Executar tarefa'], 'cron_on' => ['cron-on', 'Ativar tarefa'], 'cron_off' => ['cron-off', 'Pausar tarefa'], 'cron_del' => ['cron-del', 'Apagar tarefa']];
+            job_submit($map[$a][0], [$site, $cid], $map[$a][1] . ' de ' . $site);
+            $back = qget('site') !== '' ? ['site' => qget('site')] : [];
             break;
 
         case 'fw_block':
@@ -1701,8 +1769,9 @@ $titles = [
     'recursos' => 'Utilização do servidor e de cada site, atualizada a cada 5 segundos.',
     'ficheiros'=> 'Ficheiros de cada site, geridos com o utilizador do próprio site.',
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
+    'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'conta']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'conta']];
 $section = 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -1746,6 +1815,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
         <?php elseif ($page === 'bd'): ?>
           <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
+        <?php elseif ($page === 'cron' && $sites): ?>
+          <button class="chip prim" type="button" data-cron-new aria-label="Nova tarefa"><?= ic('plus') ?><span class="lbl">Nova tarefa</span></button>
         <?php elseif ($page === 'ligacoes'): ?>
           <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
         <?php endif; ?>
@@ -1867,6 +1938,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
                   <div class="dd-menu">
                     <?php if ($on): ?><a href="<?= h($url) ?>" target="_blank" rel="noopener"><?= ic('ext') ?>Abrir site</a><?php endif; ?>
                     <a href="?p=ficheiros&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('folder') ?>Ficheiros</a>
+                    <a href="?p=cron&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('clock') ?>Tarefas agendadas</a>
                     <button type="button" data-open="dlg-lim-<?= h($n) ?>"><?= ic('sliders') ?>Limites</button>
                     <button type="button" data-open="dlg-php-<?= h($n) ?>"><?= ic('code') ?>Mudar versão de PHP</button>
                     <form method="post"><?= act_fields('site_perm', ['site' => $n]) ?><button type="submit"><?= ic('lock') ?>Corrigir permissões</button></form>
@@ -2232,6 +2304,123 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </form>
       </dialog>
 
+<?php elseif ($page === 'cron'):
+    $crons = is_array($state['crons'] ?? null) ? $state['crons'] : [];
+    $cr = jload(MP_STATS . '/crons.json') ?? [];
+    $runs = is_array($cr['runs'] ?? null) ? $cr['runs'] : [];
+    $fSite = qget('site');
+    if ($fSite !== '') $crons = array_values(array_filter($crons, function ($c) use ($fSite) { return ($c['site'] ?? '') === $fSite; }));
+    $sitePorts = [];
+    foreach ($sites as $s) $sitePorts[(string)$s['name']] = (int)$s['port'];
+    $tzc = tz_off(live_stats());
+?>
+      <section class="card">
+        <div class="card-h">
+          <div><h2>Tarefas agendadas</h2><p>Cada tarefa corre com o utilizador do seu site. A saída fica guardada e não há sobreposição de execuções.</p></div>
+          <?php if ($sites): ?>
+          <form method="get" style="margin:0"><input type="hidden" name="p" value="cron">
+            <select class="in" name="site" onchange="this.form.submit()" aria-label="Filtrar por site" style="height:40px;min-width:180px">
+              <option value="">Todos os sites</option>
+              <?php foreach ($sites as $s): $sn = (string)$s['name']; ?><option value="<?= h($sn) ?>"<?= $sn === $fSite ? ' selected' : '' ?>><?= h($sn) ?></option><?php endforeach; ?>
+            </select>
+          </form>
+          <?php endif; ?>
+        </div>
+        <?php if (!$sites): ?>
+          <div class="empty"><b>Ainda não há sites</b>As tarefas agendadas pertencem a um site.</div>
+        <?php elseif (!$crons): ?>
+          <div class="empty"><b>Sem tarefas agendadas<?= $fSite !== '' ? ' neste site' : '' ?></b>Cria uma tarefa para correr um script PHP, chamar um URL ou executar um comando.<br><button class="btn" type="button" data-cron-new><?= ic('plus') ?>Nova tarefa</button></div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Tarefa</th><th>Quando</th><th>Última execução</th><th>Estado</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($crons as $c):
+                $cid = (string)($c['id'] ?? ''); $cs = (string)($c['site'] ?? ''); $on = !empty($c['on']);
+                $run = $runs[$cs . ':' . $cid] ?? null; $rc = $run['rc'] ?? null; ?>
+            <tr>
+              <td class="first" data-label="Tarefa">
+                <div class="who"><span class="av <?= tone($cs) ?>"><?= ic('clock') ?></span><div style="min-width:0">
+                  <div class="nm"><?= h(($c['desc'] ?? '') !== '' ? $c['desc'] : $cs) ?></div>
+                  <div class="mu mono cron-cmd" title="<?= h($c['cmd'] ?? '') ?>"><?= h($c['cmd'] ?? '') ?></div>
+                </div></div>
+              </td>
+              <td data-label="Quando" class="cron-when"><div><?= h(cron_human((string)($c['when'] ?? ''))) ?></div><div class="mu"><span class="mono"><?= h($c['when'] ?? '') ?></span> · <?= h($cs) ?></div></td>
+              <td data-label="Última execução" class="cron-when">
+                <?php if ($run === null): ?><span class="mu">Ainda não correu</span>
+                <?php elseif ($rc === 'running'): ?><span class="pill p-me">A correr</span> <span class="mu"><?= h(ago((int)$run['start'], time())) ?></span>
+                <?php else: ?><span class="pill <?= $rc === '0' ? 'p-ok' : 'p-err' ?>"><?= $rc === '0' ? 'Sucesso' : 'Erro ' . h($rc) ?></span> <span class="mu"><?= h(ago((int)$run['end'], time())) ?> · <?= max(0, (int)$run['end'] - (int)$run['start']) ?> s</span><?php endif; ?>
+              </td>
+              <td data-label="Estado"><span class="pill <?= $on ? 'p-ok' : 'p-off' ?>"><?= $on ? 'Ativa' : 'Em pausa' ?></span></td>
+              <td class="act r">
+                <details class="dd">
+                  <summary class="iconbtn" aria-label="Ações da tarefa"><?= ic('dots') ?></summary>
+                  <div class="dd-menu">
+                    <form method="post"><?= act_fields('cron_run', ['site' => $cs, 'id' => $cid]) ?><button type="submit"><?= ic('play') ?>Executar agora</button></form>
+                    <button type="button" data-open="dlg-cronlog-<?= h($cid) ?>"><?= ic('file') ?>Ver saída</button>
+                    <button type="button" data-cron-edit="<?= h((string)json_encode(['site' => $cs, 'id' => $cid, 'when' => $c['when'] ?? '', 'cmd' => $c['cmd'] ?? '', 'desc' => $c['desc'] ?? ''])) ?>"><?= ic('edit') ?>Editar</button>
+                    <form method="post"><?= act_fields($on ? 'cron_off' : 'cron_on', ['site' => $cs, 'id' => $cid]) ?><button type="submit"><?= ic('toggle') ?><?= $on ? 'Pôr em pausa' : 'Ativar' ?></button></form>
+                    <hr>
+                    <form method="post" data-confirm="Apagar esta tarefa agendada?"><?= act_fields('cron_del', ['site' => $cs, 'id' => $cid]) ?><button type="submit" class="dan"><?= ic('trash') ?>Apagar</button></form>
+                  </div>
+                </details>
+                <dialog id="dlg-cronlog-<?= h($cid) ?>" style="width:min(820px,calc(100vw - 24px))">
+                  <div class="dlg-h"><div style="min-width:0"><h3>Saída da última execução</h3><p class="mono cron-cmd"><?= h($c['cmd'] ?? '') ?></p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+                  <pre class="cron-out"><?= $run !== null && ($run['tail'] ?? '') !== '' ? h($run['tail']) : 'Ainda não há saída registada.' ?></pre>
+                  <div class="dlg-f"><span class="mu" style="margin-right:auto">Registo completo: /srv/www/<?= h($cs) ?>/logs/cron-<?= h($cid) ?>.log</span><button class="btn sec" type="button" data-close>Fechar</button></div>
+                </dialog>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+        <div class="card-f mu">Dentro do comando, <span class="mono">php</span> usa a versão de PHP do site. O comando arranca na pasta public_html do site. A saída fica em logs/cron-&lt;id&gt;.log e o resultado é atualizado a cada minuto.</div>
+      </section>
+
+      <dialog class="drawer" id="dlg-cron" aria-labelledby="t-cron">
+        <form method="post" id="cron-form">
+          <?= act_fields('cron_save') ?>
+          <input type="hidden" name="id" id="cron-id">
+          <div class="dlg-h"><div><h3 id="t-cron">Nova tarefa agendada</h3><p>Como no cPanel: periodicidade e comando.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+          <div class="dlg-b">
+            <label class="fld">Site<select class="in" name="site" id="cron-site">
+              <?php foreach ($sites as $s): $sn = (string)$s['name']; ?><option value="<?= h($sn) ?>" data-port="<?= (int)$s['port'] ?>"<?= $sn === $fSite ? ' selected' : '' ?>><?= h($sn) ?></option><?php endforeach; ?>
+            </select></label>
+            <label class="fld">Definições comuns<select class="in" id="cron-preset">
+              <option value="">— escolher —</option>
+              <option value="* * * * *">A cada minuto</option>
+              <option value="*/5 * * * *">A cada 5 minutos</option>
+              <option value="*/15 * * * *">A cada 15 minutos</option>
+              <option value="*/30 * * * *">A cada 30 minutos</option>
+              <option value="0 * * * *">De hora a hora</option>
+              <option value="0 */6 * * *">A cada 6 horas</option>
+              <option value="0 3 * * *">Uma vez por dia (03:00)</option>
+              <option value="0 3 * * 0">Uma vez por semana (domingo, 03:00)</option>
+              <option value="0 3 1 * *">Uma vez por mês (dia 1, 03:00)</option>
+            </select></label>
+            <div class="cron-fields">
+              <label class="fld">Minuto<input class="in mono" id="cf-0" value="*/5" autocomplete="off"></label>
+              <label class="fld">Hora<input class="in mono" id="cf-1" value="*" autocomplete="off"></label>
+              <label class="fld">Dia<input class="in mono" id="cf-2" value="*" autocomplete="off"></label>
+              <label class="fld">Mês<input class="in mono" id="cf-3" value="*" autocomplete="off"></label>
+              <label class="fld">Semana<input class="in mono" id="cf-4" value="*" autocomplete="off"></label>
+            </div>
+            <div class="mu" style="margin-top:-8px;font-size:12px">Minuto 0–59 · hora 0–23 · dia 1–31 · mês 1–12 · dia da semana 0–6 (0 = domingo). Aceita *, listas (1,15), intervalos (8-20) e passos (*/10).</div>
+            <input type="hidden" name="when" id="cron-when">
+            <div class="cron-human" id="cron-human"></div>
+            <label class="fld">Comando<textarea class="in mono cron-ta" name="cmd" id="cron-cmd" rows="3" required maxlength="2000" spellcheck="false" placeholder="php /srv/www/loja/public_html/cron.php"></textarea></label>
+            <div class="cron-help">
+              <span class="mu">Inserir:</span>
+              <button class="chip sm" type="button" data-ins="php">Script PHP</button>
+              <button class="chip sm" type="button" data-ins="url">Chamar URL do site</button>
+              <button class="chip sm" type="button" data-ins="quiet">Sem saída</button>
+            </div>
+            <label class="fld">Descrição (opcional)<input class="in" name="desc" id="cron-desc" maxlength="80" placeholder="ex.: Cron do PrestaShop" autocomplete="off"></label>
+          </div>
+          <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit" id="cron-submit">Criar tarefa</button></div>
+        </form>
+      </dialog>
+
 <?php elseif ($page === 'servicos'): ?>
       <section class="card">
         <?php if (!$svcs): ?>
@@ -2413,6 +2602,74 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
 })();
 </script>
+<?php if ($page === 'cron'): ?>
+<script>
+(function () {
+  var dlg = document.getElementById('dlg-cron'); if (!dlg) return;
+  var F = [0, 1, 2, 3, 4].map(function (i) { return document.getElementById('cf-' + i); });
+  var human = document.getElementById('cron-human'), when = document.getElementById('cron-when'), cmd = document.getElementById('cron-cmd');
+  var site = document.getElementById('cron-site');
+  var days = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+  function two(n) { return (n < 10 ? '0' : '') + n; }
+  function desc(p) {
+    var mi = p[0], ho = p[1], dm = p[2], mo = p[3], dw = p[4], n = /^\d+$/, m;
+    var hm = function () { return two(+ho) + ':' + two(+mi); };
+    if (dm === '*' && mo === '*' && dw === '*') {
+      if (mi === '*' && ho === '*') return 'A cada minuto';
+      if ((m = /^\*\/(\d+)$/.exec(mi)) && ho === '*') return 'A cada ' + m[1] + ' minutos';
+      if (n.test(mi) && ho === '*') return 'De hora a hora, ao minuto ' + (+mi);
+      if (n.test(mi) && (m = /^\*\/(\d+)$/.exec(ho))) return 'A cada ' + m[1] + ' horas, ao minuto ' + (+mi);
+      if (n.test(mi) && n.test(ho)) return 'Todos os dias às ' + hm();
+    }
+    if (n.test(mi) && n.test(ho) && dm === '*' && mo === '*') {
+      if (/^[0-7]$/.test(dw)) return 'À ' + days[+dw] + ' às ' + hm();
+      if (dw === '1-5') return 'Dias úteis às ' + hm();
+    }
+    if (n.test(mi) && n.test(ho) && n.test(dm) && mo === '*' && dw === '*') return 'No dia ' + (+dm) + ' de cada mês às ' + hm();
+    return 'Expressão personalizada';
+  }
+  function sync() {
+    var p = F.map(function (f) { return f.value.trim() || '*'; });
+    var ok = p.every(function (x) { return /^(\*|[0-9A-Za-z]+(-[0-9A-Za-z]+)?)(\/[0-9]+)?(,(\*|[0-9A-Za-z]+(-[0-9A-Za-z]+)?)(\/[0-9]+)?)*$/.test(x); });
+    when.value = p.join(' ');
+    human.textContent = ok ? desc(p) + '  ·  ' + when.value : 'Expressão inválida';
+    human.classList.toggle('bad', !ok);
+  }
+  F.forEach(function (f) { f.addEventListener('input', sync); });
+  document.getElementById('cron-preset').addEventListener('change', function (e) {
+    if (!e.target.value) return; e.target.value.split(' ').forEach(function (v, i) { F[i].value = v; }); sync();
+  });
+  function ins(t) { var s = cmd.selectionStart, v = cmd.value; cmd.value = v.slice(0, s) + t + v.slice(cmd.selectionEnd); cmd.focus(); cmd.selectionStart = cmd.selectionEnd = s + t.length; }
+  document.querySelector('.cron-help').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-ins]'); if (!b) return;
+    var sn = site.value, port = site.options[site.selectedIndex].getAttribute('data-port');
+    var k = b.getAttribute('data-ins');
+    if (k === 'php') ins('php /srv/www/' + sn + '/public_html/');
+    else if (k === 'url') ins('curl -fsS -m 300 "http://127.0.0.1' + (port === '80' ? '' : ':' + port) + '/"');
+    else ins(' >/dev/null 2>&1');
+  });
+  function open(d) {
+    document.getElementById('t-cron').textContent = d ? 'Editar tarefa agendada' : 'Nova tarefa agendada';
+    document.getElementById('cron-submit').textContent = d ? 'Guardar alterações' : 'Criar tarefa';
+    document.getElementById('cron-id').value = d ? d.id : '';
+    if (d) { site.value = d.site; cmd.value = d.cmd; document.getElementById('cron-desc').value = d.desc || ''; var w = d.when.split(/\s+/); if (w.length === 5) w.forEach(function (v, i) { F[i].value = v; }); }
+    else { cmd.value = ''; document.getElementById('cron-desc').value = ''; ['*/5', '*', '*', '*', '*'].forEach(function (v, i) { F[i].value = v; }); }
+    site.disabled = !!d;
+    document.getElementById('cron-preset').value = ''; sync(); dlg.showModal(); cmd.focus();
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-cron-new]'); if (b) { e.preventDefault(); open(null); return; }
+    b = e.target.closest('[data-cron-edit]'); if (b) { e.preventDefault(); open(JSON.parse(b.getAttribute('data-cron-edit'))); }
+  });
+  document.getElementById('cron-form').addEventListener('submit', function (e) {
+    sync(); if (human.classList.contains('bad')) { e.preventDefault(); return; }
+    if (cmd.value.indexOf('\n') !== -1) cmd.value = cmd.value.replace(/[\r\n]+/g, ' ');
+    site.disabled = false;
+  });
+  sync();
+})();
+</script>
+<?php endif; ?>
 <?php if ($page === 'ligacoes'): ?>
 <script>
 (function () {
@@ -2876,7 +3133,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v1.6.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v1.7.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -3272,11 +3529,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v1.6.0
+#  mpanel — IDDigital Hosting CLI v1.7.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.6.0"
+MP_VERSION="1.7.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -3680,6 +3937,7 @@ cmd_site_del(){
   apply_php "$v" || warn "Verifica o PHP-FPM $v."
   if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" || warn "Verifica o PHP-FPM $PANEL_PHP."; fi
   rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
+  rm -rf "/etc/cron.d/minipainel-$n" "${CRON_DIR:?}/$n" "$CRON_DIR/$n.json"; touch /etc/cron.d 2>/dev/null
   sleep 1
   pkill -u "mp_$n" >/dev/null 2>&1
   userdel "mp_$n" >/dev/null 2>&1 || warn "Não foi possível remover o utilizador mp_$n."
@@ -3720,6 +3978,7 @@ cmd_site_php(){
   rm -f "$(php_pool_dir "$ov")/mp-$n.conf"
   apply_php "$ov" || warn "Verifica o PHP-FPM $ov."
   site_set "$n" PHP "$nv"
+  cron_write_site "$n"
   echo "Site '$n' passou de PHP $ov para PHP $nv."
   return 0
 }
@@ -4367,6 +4626,161 @@ cmd_conn_list(){
   return 0
 }
 
+# ---------- tarefas agendadas (cron) por site, como o utilizador do site ----------
+CRON_DIR=/etc/minipainel/cron          # <site>.json (definições) e <site>/<id>.sh (comandos)
+cron_json(){ echo "$CRON_DIR/$1.json"; }
+cron_valid_when(){
+  local w="$1" f re='^(\*|[0-9A-Za-z]+(-[0-9A-Za-z]+)?)(/[0-9]+)?(,(\*|[0-9A-Za-z]+(-[0-9A-Za-z]+)?)(/[0-9]+)?)*$'
+  case "$w" in @hourly|@daily|@weekly|@monthly|@yearly|@annually) return 0 ;; esac
+  local -a parts; read -ra parts <<<"$w"
+  [ ${#parts[@]} -eq 5 ] || return 1
+  for f in "${parts[@]}"; do [[ "$f" =~ $re ]] || return 1; done
+  return 0
+}
+cron_valid_cmd(){ [ -n "$1" ] && [ ${#1} -le 2000 ] && [[ "$1" != *$'\n'* ]] && [[ "$1" != *$'\r'* ]]; }
+cron_load(){ local f; f=$(cron_json "$1"); if [ -s "$f" ]; then cat "$f"; else echo '[]'; fi; }
+cron_save(){ # site json
+  local f; f=$(cron_json "$1")
+  install -d -m 755 "$CRON_DIR"
+  printf '%s\n' "$2" | jq '.' > "$f.tmp" && chmod 600 "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+cron_write_site(){ # gera /etc/cron.d/minipainel-<site>, os scripts e o php da versão do site
+  local n=$1 u="mp_$1" j sd cf v id
+  sd="$CRON_DIR/$n"; cf="/etc/cron.d/minipainel-$n"
+  id "$u" >/dev/null 2>&1 || return 0
+  j=$(cron_load "$n")
+  install -d -o root -g "$u" -m 750 "$sd" "$sd/bin"
+  v=$(site_get "$n" PHP)
+  [ -n "$v" ] && ln -sfn "$(php_cli "$v")" "$sd/bin/php"
+  find "$sd" -maxdepth 1 -name '*.sh' -type f | while read -r f; do
+    id=$(basename "$f" .sh)
+    [ "$(printf '%s' "$j" | jq --arg id "$id" 'map(select(.id == $id)) | length')" = 0 ] && rm -f "$f"
+  done
+  printf '%s' "$j" | jq -c '.[]' | while read -r row; do
+    id=$(jq -r '.id' <<<"$row")
+    { printf '#!/bin/sh\n# IDDigital Hosting — tarefa %s do site %s (gerido pelo painel)\n' "$id" "$n"; jq -r '.cmd' <<<"$row"; } > "$sd/$id.sh"
+    chown root:"$u" "$sd/$id.sh"; chmod 750 "$sd/$id.sh"
+  done
+  if [ "$(printf '%s' "$j" | jq 'map(select(.on)) | length')" = 0 ]; then
+    rm -f "$cf"
+  else
+    {
+      printf '# IDDigital Hosting — tarefas agendadas do site %s (gerado pelo painel; não editar à mão)\n' "$n"
+      printf 'SHELL=/bin/sh\nPATH=/usr/local/bin:/usr/bin:/bin\nMAILTO=""\n'
+      printf '%s' "$j" | jq -r --arg u "$u" --arg n "$n" '.[] | select(.on) | "\(.when) \($u) /usr/local/sbin/mpanel-cron \($n) \(.id)"'
+    } > "$cf.tmp" && chmod 644 "$cf.tmp" && mv -f "$cf.tmp" "$cf"
+  fi
+  touch /etc/cron.d 2>/dev/null
+  return 0
+}
+cron_need(){ valid_site "$1" && site_exists "$1" || die "O site '$1' não existe."; }
+cron_need_id(){ local re='^[a-f0-9]{8}$'; [[ "$2" =~ $re ]] || die "Identificador inválido: $2"
+  [ "$(cron_load "$1" | jq --arg id "$2" 'map(select(.id == $id)) | length')" = 1 ] || die "A tarefa $2 não existe no site $1."; }
+
+cmd_cron_list(){
+  local n f
+  printf '%-10s %-12s %-6s %-20s %s\n' ID SITE ESTADO QUANDO COMANDO
+  for n in $(site_names); do
+    [ -z "${1:-}" ] || [ "$1" = "$n" ] || continue
+    cron_load "$n" | jq -r --arg n "$n" '.[] | [.id, $n, (if .on then "ativa" else "pausa" end), .when, .cmd] | @tsv' |
+      while IFS=$'\t' read -r i s e w c; do printf '%-10s %-12s %-6s %-20s %s\n' "$i" "$s" "$e" "$w" "$c"; done
+  done
+  return 0
+}
+cron_parse(){ # define WHEN CMD LABEL ON a partir das opções
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --when) WHEN="${2:-}"; shift 2 || shift ;;
+      --cmd) CMD="${2:-}"; shift 2 || shift ;;
+      --label) LABEL="${2:-}"; shift 2 || shift ;;
+      --off) ON=false; shift ;;
+      --on) ON=true; shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+}
+cmd_cron_add(){
+  local n="${1:-}" id j WHEN="" CMD="" LABEL="" ON=true
+  [ $# -gt 0 ] && shift
+  cron_need "$n"; cron_parse "$@"
+  cron_valid_when "$WHEN" || die "Periodicidade inválida: '$WHEN' (5 campos: minuto hora dia mês dia-da-semana)."
+  cron_valid_cmd "$CMD" || die "Comando inválido (obrigatório, numa só linha, até 2000 caracteres)."
+  LABEL=$(printf '%s' "$LABEL" | tr -d '\r\n' | cut -c1-80)
+  id=$(openssl rand -hex 4)
+  j=$(cron_load "$n" | jq --arg id "$id" --arg w "$WHEN" --arg c "$CMD" --arg d "$LABEL" --argjson on "$ON" --arg t "$EPOCHSECONDS" \
+      '. + [{id:$id, when:$w, cmd:$c, desc:$d, on:$on, created:($t|tonumber)}]')
+  cron_save "$n" "$j"; cron_write_site "$n"
+  echo "Tarefa $id criada no site $n ($WHEN)."
+  return 0
+}
+cmd_cron_edit(){
+  local n="${1:-}" id="${2:-}" j cur WHEN CMD LABEL ON
+  cron_need "$n"; cron_need_id "$n" "$id"; shift 2
+  cur=$(cron_load "$n" | jq -c --arg id "$id" '.[] | select(.id == $id)')
+  WHEN=$(jq -r '.when' <<<"$cur"); CMD=$(jq -r '.cmd' <<<"$cur"); LABEL=$(jq -r '.desc' <<<"$cur"); ON=$(jq -r '.on' <<<"$cur")
+  cron_parse "$@"
+  cron_valid_when "$WHEN" || die "Periodicidade inválida: '$WHEN'."
+  cron_valid_cmd "$CMD" || die "Comando inválido (obrigatório, numa só linha, até 2000 caracteres)."
+  LABEL=$(printf '%s' "$LABEL" | tr -d '\r\n' | cut -c1-80)
+  j=$(cron_load "$n" | jq --arg id "$id" --arg w "$WHEN" --arg c "$CMD" --arg d "$LABEL" --argjson on "$ON" \
+      'map(if .id == $id then .when = $w | .cmd = $c | .desc = $d | .on = $on else . end)')
+  cron_save "$n" "$j"; cron_write_site "$n"
+  echo "Tarefa $id atualizada."
+  return 0
+}
+cmd_cron_toggle(){
+  local n="${1:-}" id="${2:-}" on=$3 j
+  cron_need "$n"; cron_need_id "$n" "$id"
+  j=$(cron_load "$n" | jq --arg id "$id" --argjson on "$on" 'map(if .id == $id then .on = $on else . end)')
+  cron_save "$n" "$j"; cron_write_site "$n"
+  if [ "$on" = true ]; then echo "Tarefa $id ativada."; else echo "Tarefa $id em pausa."; fi
+  return 0
+}
+cmd_cron_del(){
+  local n="${1:-}" id="${2:-}" j
+  cron_need "$n"; cron_need_id "$n" "$id"
+  j=$(cron_load "$n" | jq --arg id "$id" 'map(select(.id != $id))')
+  cron_save "$n" "$j"; cron_write_site "$n"
+  rm -f "$WWW_ROOT/$n/logs/cron-$id.log" "$WWW_ROOT/$n/logs/cron-$id.status" "$WWW_ROOT/$n/tmp/.cron-$id.lock"
+  echo "Tarefa $id apagada."
+  return 0
+}
+cmd_cron_run(){
+  local n="${1:-}" id="${2:-}" st i s1 out
+  cron_need "$n"; cron_need_id "$n" "$id"
+  cron_write_site "$n"
+  st="$WWW_ROOT/$n/logs/cron-$id.status"
+  [ -L "$st" ] && rm -f "$st"
+  s1=$(cat "$st" 2>/dev/null)
+  setsid runuser -u "mp_$n" -- /usr/local/sbin/mpanel-cron "$n" "$id" >/dev/null 2>&1 < /dev/null &
+  for i in $(seq 1 40); do
+    sleep 0.5
+    out=$(cat "$st" 2>/dev/null)
+    if [ -n "$out" ] && [ "$out" != "$s1" ] && [[ "$out" != *running* ]]; then
+      echo "Tarefa $id executada; terminou com código ${out##* }."
+      if [ ! -L "$WWW_ROOT/$n/logs/cron-$id.log" ]; then echo "Últimas linhas:"; tail -n 12 "$WWW_ROOT/$n/logs/cron-$id.log" 2>/dev/null | grep -v '^=== '; fi
+      return 0
+    fi
+  done
+  echo "Tarefa $id iniciada; ainda está a correr. O resultado aparece no painel dentro de um minuto."
+  return 0
+}
+cmd_cron_sync(){
+  local n f
+  install -d -m 755 "$CRON_DIR"
+  for n in $(site_names); do cron_write_site "$n"; done
+  for f in /etc/cron.d/minipainel-*; do
+    [ -f "$f" ] || continue
+    n=${f#/etc/cron.d/minipainel-}; site_exists "$n" || rm -f "$f"
+  done
+  echo "Tarefas agendadas sincronizadas."
+  return 0
+}
+cron_state_json(){ # todas as tarefas, para o painel
+  local n
+  for n in $(site_names); do cron_load "$n" | jq -c --arg n "$n" '.[] | . + {site:$n}'; done | jq -cs '.'
+}
+
 write_auth(){
   local u=$1 hsh=$2
   jq -n --arg u "$u" --arg h "$hsh" '{user:$u,hash:$h}' > "$AUTH.tmp" || return 1
@@ -4449,12 +4863,12 @@ write_state(){
   jq -n --argjson sites "${sites:-[]}" --argjson php "${phps:-[]}" --argjson dbs "${dbs:-[]}" --argjson svcs "${svcs:-[]}" \
     --arg host "$host" --arg ip "$ip" --arg os "$os" --arg up "${up:-0}" --arg disk "${disk:-0}" --arg ram "${ram:-0}" \
     --arg load "${load:-0}" --arg cpus "${cpus:-1}" --arg pport "$PANEL_PORT" --arg pphp "$PANEL_PHP" \
-    --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" \
+    --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$(cron_state_json)" \
     --arg defphp "$DEFAULT_PHP" --arg gen "$(date '+%Y-%m-%d %H:%M:%S')" --arg ver "$MP_VERSION" \
     --arg ng "$(systemctl is-active nginx 2>/dev/null)" --arg db "$(systemctl is-active mariadb 2>/dev/null)" \
     '{version:$ver, generated:$gen, default_php:$defphp, php:$php, sites:$sites, databases:$dbs,
       services:{nginx:($ng=="active"), mariadb:($db=="active")}, service_list:$svcs,
-      pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm},
+      pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm}, crons:$crons,
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
   chown root:"$PANEL_SYSUSER" "$STATE.tmp"; chmod 640 "$STATE.tmp"
@@ -4486,7 +4900,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -4504,7 +4918,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v1.6.0 (mpanel)
+IDDigital Hosting — CLI v1.7.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -4537,6 +4951,13 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Tarefas agendadas (cron; correm como o utilizador do site)
+  cron-list [site]
+  cron-add <site> --when "*/5 * * * *" --cmd "php /srv/www/<site>/public_html/cron.php" [--label texto] [--off]
+  cron-edit <site> <id> [--when ...] [--cmd ...] [--label ...]
+  cron-on|cron-off|cron-run|cron-del <site> <id>
+  cron-sync                            regenera os ficheiros de /etc/cron.d
 
 Ligações e firewall (bloqueio em todas as portas, incluindo SSH)
   conn-list [ip]                       ligações abertas por IP
@@ -4589,6 +5010,14 @@ dispatch(){
     allow-del)         cmd_allow_del "$@" ;;
     fw-auto)           cmd_fw_auto "$@" ;;
     fw-restore)        cmd_fw_restore ;;
+    cron-list)         cmd_cron_list "$@" ;;
+    cron-add)          cmd_cron_add "$@" ;;
+    cron-edit)         cmd_cron_edit "$@" ;;
+    cron-del)          cmd_cron_del "$@" ;;
+    cron-on)           cmd_cron_toggle "${1:-}" "${2:-}" true ;;
+    cron-off)          cmd_cron_toggle "${1:-}" "${2:-}" false ;;
+    cron-run)          cmd_cron_run "$@" ;;
+    cron-sync)         cmd_cron_sync ;;
     fm-sync)           cmd_fm_sync ;;
     status)            cmd_status ;;
     passwd)            cmd_passwd "$@" ;;
@@ -4613,7 +5042,7 @@ if [ "$cmd" = worker ]; then cmd_worker; exit 0; fi
 dispatch "$@"; rc=$?
 if [ "$rc" -eq 0 ]; then
   case "$cmd" in
-    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|state|refresh)
+    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|state|refresh)
       write_state || { echo "ERRO: não foi possível gerar o estado do painel ($STATE)." >&2; rc=1; } ;;
   esac
 fi
@@ -4655,7 +5084,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.6.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.7.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -4852,6 +5281,26 @@ fw_selfheal(){
   nft list table inet minipainel >/dev/null 2>&1 || ( timeout 90 /usr/local/sbin/mpanel fw-restore >/dev/null 2>&1 & )
 }
 
+# ---------- último resultado das tarefas agendadas ----------
+update_crons(){
+  local n f id a b c t o="" sep="" re_n='^[0-9]+$' re_c='^(running|[0-9]+)$'
+  for n in $(site_names); do
+    for f in "$WWW_ROOT/$n"/logs/cron-*.status; do
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      id=${f##*/cron-}; id=${id%.status}
+      [[ "$id" =~ ^[a-f0-9]{8}$ ]] || continue
+      read -r a b c < "$f"
+      [[ "$a" =~ $re_n ]] && [[ "$b" =~ $re_n ]] && [[ "$c" =~ $re_c ]] || continue
+      t='""'
+      if [ -f "$WWW_ROOT/$n/logs/cron-$id.log" ] && [ ! -L "$WWW_ROOT/$n/logs/cron-$id.log" ]; then
+        t=$(tail -n 20 "$WWW_ROOT/$n/logs/cron-$id.log" 2>/dev/null | cut -c1-500 | jq -Rs .)
+      fi
+      o+="$sep\"$n:$id\":{\"start\":$a,\"end\":$b,\"rc\":\"$c\",\"tail\":$t}"; sep=","
+    done
+  done
+  put "$DIR/crons.json" "{\"ts\":$EPOCHSECONDS,\"runs\":{$o}}"
+}
+
 # ---------- ciclo principal ----------
 for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
 read -r p_tot p_idle <<<"$(read_cpu)"
@@ -4910,6 +5359,7 @@ while :; do
     update_traffic
     read_fw_conf
     fw_selfheal
+    update_crons
     h=$(( EPOCHSECONDS / 3600 ))
     if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
     write_sites_json
@@ -4939,6 +5389,52 @@ EOF
 systemctl daemon-reload
 systemctl enable minipainel-stats.service >/dev/null 2>&1
 systemctl restart minipainel-stats.service
+
+say "A configurar as tarefas agendadas (cron)..."
+if [ "$OS_FAMILY" = debian ]; then CRON_SVC=cron; else CRON_SVC=crond; fi
+systemctl enable --now "$CRON_SVC" >/dev/null 2>&1 || warn "Não foi possível ativar o serviço $CRON_SVC."
+install -d -m 755 /etc/minipainel/cron
+cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
+#!/usr/bin/env bash
+# =============================================================================
+#  mpanel-cron — IDDigital Hosting v1.7.0
+#  Executa uma tarefa agendada de um site. Corre como o utilizador do site
+#  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
+#  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
+# =============================================================================
+set -uo pipefail
+site="${1:-}"; id="${2:-}"
+re_s='^[a-z][a-z0-9-]{0,23}$'; re_i='^[a-f0-9]{8}$'
+[[ "$site" =~ $re_s ]] && [[ "$id" =~ $re_i ]] || { echo "Parâmetros inválidos." >&2; exit 2; }
+[ "$(id -un)" = "mp_$site" ] || { echo "Tem de correr como mp_$site." >&2; exit 2; }
+d=/srv/www/$site
+s=/etc/minipainel/cron/$site/$id.sh
+log=$d/logs/cron-$id.log
+st=$d/logs/cron-$id.status
+[ -r "$s" ] || { echo "Tarefa não encontrada: $id" >&2; exit 2; }
+umask 027
+exec 9>"$d/tmp/.cron-$id.lock"
+if ! flock -n 9; then
+  printf '=== %s — ignorada: a execução anterior ainda não terminou ===\n' "$(date '+%d/%m/%Y %H:%M:%S')" >> "$log"
+  exit 0
+fi
+start=$(date +%s)
+printf '%s 0 running\n' "$start" > "$st"
+printf '=== %s ===\n' "$(date '+%d/%m/%Y %H:%M:%S')" >> "$log"
+export PATH="/etc/minipainel/cron/$site/bin:/usr/local/bin:/usr/bin:/bin" HOME="$d"
+cd "$d/public_html" 2>/dev/null || cd "$d" || exit 1
+/bin/sh "$s" >> "$log" 2>&1 9>&-
+rc=$?
+end=$(date +%s)
+printf '%s %s %s\n' "$start" "$end" "$rc" > "$st"
+printf '=== terminou com código %s em %ss ===\n' "$rc" "$(( end - start ))" >> "$log"
+if [ "$(stat -c %s "$log" 2>/dev/null || echo 0)" -gt 262144 ]; then
+  tail -c 131072 "$log" > "$log.tmp" && mv -f "$log.tmp" "$log"
+fi
+exit "$rc"
+MPCRON
+chown root:root /usr/local/sbin/mpanel-cron
+chmod 755 /usr/local/sbin/mpanel-cron
 
 say "A configurar a firewall de ligações (nftables)..."
 [ -f /etc/minipainel/firewall.conf ] || printf 'AUTO=0\nLIMIT=150\nDURATION=3600\n' > /etc/minipainel/firewall.conf
@@ -5042,6 +5538,7 @@ systemctl reload-or-restart nginx
 
 /usr/local/sbin/mpanel fm-sync || warn "Não foi possível configurar o gestor de ficheiros (mpanel fm-sync)."
 /usr/local/sbin/mpanel fw-restore >/dev/null || warn "Não foi possível ativar a firewall de ligações (mpanel fw-restore)."
+/usr/local/sbin/mpanel cron-sync >/dev/null || warn "Não foi possível sincronizar as tarefas agendadas (mpanel cron-sync)."
 /usr/local/sbin/mpanel state || warn "Não foi possível gerar o estado inicial (mpanel state)."
 
 # ----------------------------------------------------------------------------
