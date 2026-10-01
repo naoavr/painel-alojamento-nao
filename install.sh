@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  MiniPainel v1.3.2 — instalador
-#  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin
+#  MiniPainel v1.4.0 — instalador
+#  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
+#  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.3.2.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.4.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -15,7 +16,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.3.2"
+MP_VERSION="1.4.0"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -299,6 +300,7 @@ EOF
 
 PANEL_SOCK="$(php_run_dir "$PANEL_PHP")/minipainel.sock"
 PMA_SOCK="$(php_run_dir "$PANEL_PHP")/minipainel-pma.sock"
+PANEL_RUN="$(php_run_dir "$PANEL_PHP")"
 L6=""
 [ "$IPV6" = 1 ] && L6="    listen [::]:$PANEL_PORT ssl;"
 cat > /etc/nginx/minipainel/panel.conf <<EOF
@@ -323,6 +325,7 @@ $L6
     # Verificação de sessão do painel (usada para proteger o phpMyAdmin)
     location = /_mp_auth {
         internal;
+        client_max_body_size 0;
         fastcgi_pass_request_body off;
         fastcgi_param SCRIPT_FILENAME /opt/minipainel/public/index.php;
         fastcgi_param SCRIPT_NAME /index.php;
@@ -359,6 +362,22 @@ $L6
         }
     }
     location @mp_login { return 302 /?p=resumo; }
+
+    # Gestor de ficheiros — pool PHP-FPM de cada site (corre como o utilizador do site)
+    location ~ "^/ficheiros/(?<fmsite>[a-z][a-z0-9-]{0,23})/\$" {
+        auth_request /_mp_auth;
+        error_page 401 = @mp_login;
+        client_max_body_size 72M;
+        fastcgi_buffering off;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /opt/minipainel/files/index.php;
+        fastcgi_param SCRIPT_NAME /ficheiros/\$fmsite/;
+        fastcgi_param MP_FM_SITE \$fmsite;
+        fastcgi_param HTTPS on;
+        fastcgi_pass unix:$PANEL_RUN/mp-fm-\$fmsite.sock;
+        fastcgi_read_timeout 900s;
+        fastcgi_send_timeout 900s;
+    }
 
     location / {
         include fastcgi_params;
@@ -475,7 +494,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * MiniPainel v1.3.2 — painel web
+ * MiniPainel v1.4.0 — painel web
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -483,7 +502,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.3.2';
+const MP_VERSION = '1.4.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -492,6 +511,7 @@ const MP_RL      = MP_DATA . '/ratelimit';
 const MP_STATE   = MP_DATA . '/state.json';
 const MP_AUTH    = MP_DATA . '/auth.json';
 const MP_IDLE    = 7200;
+const MP_STATS   = MP_DATA . '/stats';
 const RX_SITE    = '/^[a-z][a-z0-9-]{0,23}$/';
 const RX_DB      = '/^[a-z][a-z0-9_]{0,31}$/';
 const RX_PASS    = '/^[A-Za-z0-9._@%+=:,!#*-]{8,64}$/';
@@ -619,6 +639,16 @@ const ICONS = [
     'alert'  => '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>',
     'table'  => '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 10v10M15 10v10"/>',
     'shield' => '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
+    'folder' => '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    'folderplus' => '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10.5v5M9.5 13h5"/>',
+    'file'   => '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+    'zip'    => '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M10 5h1M10 8h1M10 11h1M10 14h1v3h-1z"/>',
+    'upload' => '<path d="M12 16V4M7 9l5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+    'download' => '<path d="M12 4v12M7 11l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+    'home'   => '<path d="M4 11l8-7 8 7M6 9.5V20h12V9.5"/>',
+    'edit'   => '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    'move'   => '<path d="M5 12h14M15 8l4 4-4 4M5 5v14"/>',
+    'up'     => '<path d="M12 19V5M6 11l6-6 6 6"/>',
 ];
 function ic(string $n, string $cls = ''): string {
     return '<svg class="i' . ($cls !== '' ? ' ' . $cls : '') . '" viewBox="0 0 24 24" aria-hidden="true">' . (ICONS[$n] ?? '') . '</svg>';
@@ -838,7 +868,91 @@ dialog.drawer{margin:0 0 0 auto;height:100vh;max-height:100vh;width:min(480px,10
 .login form{width:100%;max-width:380px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--pop);padding:30px;display:flex;flex-direction:column;gap:16px}
 .login .brand{color:var(--ink);justify-content:center;padding:0 0 6px}
 .login .err{padding:10px 12px;border-radius:10px;background:var(--err-bg);color:var(--err);font-size:13px}
-@media (max-width:1180px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:1fr}}
+a.stat{color:inherit;text-decoration:none}
+a.stat:hover{border-color:var(--ink-3)}
+.stat.hot{border-color:var(--err)}
+.stat.hot .v,.stat.hot .k{color:var(--err)}
+.stats5{grid-template-columns:repeat(5,minmax(0,1fr))}
+.stats5 .v small{display:block;font-size:12.5px;line-height:1.4;margin-top:2px}
+.stats5 .v small,.stats5 .mu{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stats5 .mu{font-size:12.5px}
+@media (max-width:1600px) and (min-width:1181px){.stats5 .tile{display:none}}
+.grid2e{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--ink-2);font-size:12.5px;margin-right:auto}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.legend i.dash{background:none;border-top:2px dashed var(--err);height:0;width:14px;border-radius:0;vertical-align:3px;opacity:.7}
+.chart{display:grid;grid-template-columns:60px minmax(0,1fr);grid-template-rows:200px 26px;padding:18px 20px 10px 0}
+.ch-y{position:relative}
+.ch-y span{position:absolute;right:10px;transform:translateY(-50%);font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.ch-plot{position:relative;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.ch-plot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.ch-plot path.s{fill:none;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.ch-plot line.g{stroke:var(--line-2);stroke-width:1;vector-effect:non-scaling-stroke}
+.ch-plot line.ref{stroke:var(--err);stroke-width:1.5;stroke-dasharray:5 5;vector-effect:non-scaling-stroke;opacity:.6}
+.ch-x{grid-column:2;position:relative}
+.ch-x span{position:absolute;top:7px;transform:translateX(-50%);font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.ch-x span.first{transform:none}
+.ch-x span.last{transform:translateX(-100%)}
+.ch-cur{position:absolute;top:0;bottom:0;width:1px;background:var(--ink-3);display:none;pointer-events:none}
+.ch-tip{position:absolute;top:8px;display:none;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--pop);padding:8px 10px;font-size:12px;pointer-events:none;white-space:nowrap;z-index:5;margin:0 10px}
+.ch-tip b{display:block;margin-bottom:4px;font-weight:600}
+.ch-tip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+.ch-empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--ink-2);font-size:13px;text-align:center;padding:0 20px}
+.fm-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line-2)}
+.fm-site{width:auto;min-width:170px}
+.crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;flex:1;min-width:0;font-size:14px}
+.crumbs button{border:0;background:none;color:var(--acc-ink);font:inherit;cursor:pointer;padding:4px 6px;border-radius:6px;display:inline-flex;align-items:center;gap:6px}
+.crumbs button:hover{background:var(--line-2)}
+.crumbs button:last-child{color:var(--ink);font-weight:600}
+.crumbs .sep{color:var(--ink-3)}
+.fm-tools{display:flex;gap:8px;flex-wrap:wrap}
+.fm-tools label.btn{cursor:pointer}
+.fm-selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;background:var(--acc-bg);color:var(--acc-ink);border-bottom:1px solid var(--line-2);font-size:13.5px;font-weight:600}
+.fm-selbar[hidden]{display:none}
+.fm-selbar .grow{flex:1}
+.fm-drop{position:relative;min-height:240px}
+.fm-drop.over{outline:2px dashed var(--acc);outline-offset:-8px;background:var(--hover)}
+.fm-hint{display:none}
+.fm-drop.over .fm-hint{display:grid;place-items:center;position:absolute;inset:0;font-weight:600;color:var(--acc-ink);pointer-events:none;background:rgba(18,164,166,.06)}
+.fm-first{display:flex;align-items:center;gap:12px;min-width:0}
+.fm-name{display:inline-flex;align-items:center;gap:10px;border:0;background:none;color:var(--ink);font:inherit;cursor:pointer;padding:0;text-align:left;min-width:0;max-width:100%}
+.fm-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-name:hover span{color:var(--acc-ink);text-decoration:underline}
+svg.i.dir{color:#d99a2b}
+svg.i.zip{color:var(--vio-ink)}
+svg.i.code{color:var(--blue-ink)}
+svg.i.file{color:var(--ink-3)}
+.fm-ck{display:inline-flex;align-items:center}
+.fm-ck input{width:16px;height:16px;margin:0;accent-color:var(--acc)}
+.fm-list th:first-child{display:flex;align-items:center;gap:12px}
+.fm-list tr.sel td{background:var(--acc-bg)}
+.fm-menu{position:fixed;z-index:70;min-width:220px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--pop);padding:6px}
+.fm-menu[hidden]{display:none}
+.fm-menu button{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:0;background:none;border-radius:8px;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.fm-menu button:hover{background:var(--line-2)}
+.fm-menu .dan{color:var(--err)}
+.fm-menu hr{border:0;border-top:1px solid var(--line-2);margin:6px 2px}
+.ups{position:fixed;right:16px;bottom:16px;z-index:90;width:min(420px,calc(100vw - 32px));max-height:50vh;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--pop)}
+.ups[hidden]{display:none}
+.ups-h{display:flex;align-items:center;gap:10px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line-2)}
+.ups-h span{flex:1;color:var(--ink-2);font-size:12.5px}
+.ups-l{overflow:auto}
+.up{padding:10px 16px;border-bottom:1px solid var(--line-2);font-size:13px}
+.up:last-child{border-bottom:0}
+.up .nm2{display:flex;justify-content:space-between;gap:10px}
+.up .nm2 span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.up .nm2 span:last-child{color:var(--ink-2);white-space:nowrap}
+.up .bar{height:5px;border-radius:3px;background:var(--line-2);margin-top:6px;overflow:hidden}
+.up .bar i{display:block;height:100%;width:0;background:var(--acc);border-radius:3px;transition:width .2s}
+.up.ok .bar i{background:#2ea36a}
+.up.err .bar i{background:var(--err)}
+.up.err .nm2 span:last-child{color:var(--err);white-space:normal;text-align:right}
+dialog.fm-ed{width:min(1100px,100vw)}
+.fm-ed .dlg-h p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-ed textarea{flex:1;min-height:0;width:100%;border:0;resize:none;padding:16px 22px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--card);color:var(--ink);tab-size:4;outline:0;white-space:pre;overflow:auto}
+.fm-ed .dlg-f{align-items:center}
+.fm-ed .dlg-f .mu{flex:1}
+@media (max-width:1180px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:1fr}.stats5{grid-template-columns:repeat(3,minmax(0,1fr))}.grid2e{grid-template-columns:1fr}}
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
   .side{position:fixed;left:0;top:0;bottom:0;height:auto;width:264px;z-index:60;transform:translateX(-100%);transition:transform .2s ease}
@@ -872,6 +986,14 @@ dialog.drawer{margin:0 0 0 auto;height:100vh;max-height:100vh;width:min(480px,10
   .svc-acts{width:100%;justify-content:flex-start}
   .exts{grid-template-columns:1fr;padding:14px 16px}
   dialog.drawer{width:100vw;border-radius:0}
+  .stats5{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .chart{grid-template-columns:44px minmax(0,1fr);grid-template-rows:160px 24px}
+  .fm-site{width:100%}
+  .crumbs{flex-basis:100%}
+  .fm-tools{width:100%}
+  .fm-tools .btn{flex:1}
+  .fm-list td.first{padding-right:44px}
+  .ups{right:8px;left:8px;bottom:8px;width:auto}
   .toasts{top:auto;bottom:16px;right:16px}
 }
 @media (max-width:420px){.stats{grid-template-columns:1fr 1fr}.stat .v small{display:block}}
@@ -903,7 +1025,9 @@ function render_login(string $err): void { ?>
 $auth  = jload(MP_AUTH);
 $pages = [
     'resumo'   => ['Resumo', 'dash'],
+    'recursos' => ['Recursos', 'cpu'],
     'sites'    => ['Sites', 'world'],
+    'ficheiros'=> ['Ficheiros', 'folder'],
     'bd'       => ['Bases de dados', 'db'],
     'php'      => ['PHP', 'code'],
     'servicos' => ['Serviços', 'pulse'],
@@ -915,6 +1039,15 @@ $page = isset($pages[$pg]) ? $pg : 'resumo';
 if (!empty($_SESSION['user']) && time() - (int)($_SESSION['seen'] ?? 0) > MP_IDLE) {
     $_SESSION = [];
     session_regenerate_id(true);
+}
+
+if (qget('stats') === 'live') {
+    header('Content-Type: application/json');
+    if (empty($_SESSION['user'])) { http_response_code(401); echo '{}'; exit; }
+    session_write_close();
+    $d = @file_get_contents(MP_STATS . '/live.json');
+    echo $d !== false ? $d : '{}';
+    exit;
 }
 
 if (qget('poll') === '1') {
@@ -1155,6 +1288,127 @@ function svc_actions(array $s, array $bySite): string {
     }
     return '<div class="svc-acts">' . $o . '</div>';
 }
+function fmt_bytes(float $b, int $dec = 1): string {
+    $u = ['B', 'KB', 'MB', 'GB', 'TB']; $i = 0;
+    while ($b >= 1024 && $i < 4) { $b /= 1024; $i++; }
+    return number_format($b, $i === 0 ? 0 : $dec, ',', ' ') . ' ' . $u[$i];
+}
+function fmt_bps(float $b): string {
+    $u = ['b/s', 'Kb/s', 'Mb/s', 'Gb/s']; $i = 0;
+    while ($b >= 1000 && $i < 3) { $b /= 1000; $i++; }
+    return number_format($b, $i === 0 ? 0 : 1, ',', ' ') . ' ' . $u[$i];
+}
+function fmt_int(float $n): string { return number_format($n, 0, ',', ' '); }
+function fmt_dec(float $n, int $d = 1): string { return number_format($n, $d, ',', ' '); }
+function live_stats(): array {
+    $l = jload(MP_STATS . '/live.json') ?? [];
+    $l['fresh'] = isset($l['ts']) && time() - (int)$l['ts'] < 30;
+    return $l;
+}
+function tz_off(array $live): int {
+    if (!preg_match('/^([+-])(\d{2})(\d{2})$/', (string)($live['tz'] ?? ''), $m)) return 0;
+    $s = (int)$m[2] * 3600 + (int)$m[3] * 60;
+    return $m[1] === '-' ? -$s : $s;
+}
+/* Histórico: junta o ficheiro mais grosseiro com os mais finos para o período mais recente */
+function hist_load(string $range): array {
+    $cfg = [
+        '24h' => [86400, [['hist-1m.csv', 60]]],
+        '7d'  => [604800, [['hist-10m.csv', 600], ['hist-1m.csv', 60]]],
+        '30d' => [2592000, [['hist-1h.csv', 3600], ['hist-10m.csv', 600], ['hist-1m.csv', 60]]],
+    ];
+    if (!isset($cfg[$range])) $range = '24h';
+    $from = time() - $cfg[$range][0];
+    $rows = []; $after = 0;
+    foreach ($cfg[$range][1] as $fc) {
+        $fh = @fopen(MP_STATS . '/' . $fc[0], 'r');
+        if ($fh === false) continue;
+        $last = $after;
+        while (($line = fgets($fh)) !== false) {
+            $c = explode(',', trim($line));
+            if (count($c) < 8) continue;
+            $t = (int)$c[0];
+            if ($t < $from || $t < $after) continue;
+            $rows[] = array_map('intval', $c);
+            if ($t + $fc[1] > $last) $last = $t + $fc[1];
+        }
+        fclose($fh);
+        $after = $last;
+    }
+    usort($rows, function ($a, $b) { return $a[0] <=> $b[0]; });
+    return ['rows' => $rows, 'from' => $from, 'to' => time(), 'range' => $range, 'step' => $cfg[$range][1][0][1]];
+}
+function downsample(array $rows, int $max): array {
+    $n = count($rows);
+    if ($n <= $max) return $rows;
+    $k = (int)ceil($n / $max); $out = [];
+    for ($i = 0; $i < $n; $i += $k) {
+        $chunk = array_slice($rows, $i, $k); $m = count($chunk); $avg = $chunk[0];
+        for ($c = 1; $c < count($avg); $c++) { $s = 0; foreach ($chunk as $r) $s += $r[$c]; $avg[$c] = $s / $m; }
+        $out[] = $avg;
+    }
+    return $out;
+}
+function nice_max(float $v): float {
+    if ($v <= 0) return 1;
+    $e = pow(10, floor(log10($v))); $f = $v / $e;
+    $n = $f <= 1 ? 1 : ($f <= 2 ? 2 : ($f <= 2.5 ? 2.5 : ($f <= 5 ? 5 : 10)));
+    return $n * $e;
+}
+function fmt_axis(float $v, string $fmt): string {
+    if ($fmt === 'pct') return fmt_int($v) . '%';
+    if ($fmt === 'bps') return fmt_bps($v);
+    return fmt_dec($v, $v < 10 ? 1 : 0);
+}
+/* Gráfico de linhas em SVG (sem bibliotecas). $series: [[nome, cor, coluna, divisor]] */
+function chart_html(array $H, array $series, string $fmt, ?float $ymax = null, ?float $ref = null, int $tz = 0): string {
+    $rows = downsample($H['rows'], 480);
+    $from = (int)$H['from']; $to = (int)$H['to']; $span = max(1, $to - $from);
+    $vals = []; $mx = 0.0;
+    foreach ($series as $si => $s) {
+        $vals[$si] = [];
+        foreach ($rows as $r) { $v = $r[$s[2]] / $s[3]; $vals[$si][] = $v; if ($v > $mx) $mx = $v; }
+    }
+    if ($ymax === null) $ymax = nice_max(max($mx, (float)($ref ?? 0)) * 1.15);
+    $gap = max(180, (int)($H['step'] ?? 60) * 3) * max(1, (int)ceil(count($H['rows']) / 480));
+    $svg = '';
+    for ($k = 1; $k <= 3; $k++) { $y = 50 * $k; $svg .= '<line class="g" x1="0" x2="1000" y1="' . $y . '" y2="' . $y . '"/>'; }
+    if ($ref !== null && $ref < $ymax) { $y = round(200 * (1 - $ref / $ymax), 1); $svg .= '<line class="ref" x1="0" x2="1000" y1="' . $y . '" y2="' . $y . '"/>'; }
+    foreach ($series as $si => $s) {
+        $d = ''; $prevT = null; $segLen = 0;
+        foreach ($rows as $i => $r) {
+            $x = round(($r[0] - $from) / $span * 1000, 1);
+            $y = round(200 * (1 - min($vals[$si][$i], $ymax) / $ymax), 1);
+            if ($prevT === null || $r[0] - $prevT > $gap) {
+                if ($segLen === 1) $d .= 'h1';          // ponto isolado: desenha um traço curto
+                $d .= 'M' . $x . ' ' . $y; $segLen = 1;
+            } else { $d .= 'L' . $x . ' ' . $y; $segLen++; }
+            $prevT = $r[0];
+        }
+        if ($segLen === 1) $d .= 'h1';
+        if ($d !== '') $svg .= '<path class="s" stroke="' . h($s[1]) . '" d="' . $d . '"/>';
+    }
+    $ylab = '';
+    for ($k = 0; $k <= 4; $k++) $ylab .= '<span style="top:' . ($k * 25) . '%">' . h(fmt_axis($ymax * (4 - $k) / 4, $fmt)) . '</span>';
+    $xlab = '';
+    for ($k = 0; $k <= 6; $k++) {
+        $t = (int)($from + $span * $k / 6) + $tz;
+        $lab = $H['range'] === '24h' ? gmdate('H:i', $t) : gmdate('d/m', $t);
+        $xlab .= '<span' . ($k === 0 ? ' class="first"' : ($k === 6 ? ' class="last"' : '')) . ' style="left:' . round($k * 100 / 6, 3) . '%">' . h($lab) . '</span>';
+    }
+    $data = ['from' => $from, 'to' => $to, 'tz' => $tz, 'fmt' => $fmt, 't' => array_map(function ($r) { return (int)$r[0]; }, $rows), 's' => []];
+    foreach ($series as $si => $s) $data['s'][] = ['n' => $s[0], 'c' => $s[1], 'v' => array_map(function ($v) { return round($v, 2); }, $vals[$si])];
+    $empty = count($rows) < 2 ? '<div class="ch-empty">Ainda sem dados suficientes para este período; é gravado um ponto por minuto.</div>' : '';
+    return '<div class="chart" data-chart="' . h((string)json_encode($data)) . '"><div class="ch-y">' . $ylab . '</div>'
+        . '<div class="ch-plot"><svg viewBox="0 0 1000 200" preserveAspectRatio="none" aria-hidden="true">' . $svg . '</svg>'
+        . '<div class="ch-cur"></div><div class="ch-tip"></div>' . $empty . '</div><div class="ch-x">' . $xlab . '</div></div>';
+}
+function legend(array $series): string {
+    $o = '<div class="legend">';
+    foreach ($series as $s) $o .= '<span><i style="background:' . h($s[1]) . '"></i>' . h($s[0]) . '</span>';
+    return $o . '</div>';
+}
+
 function svc_usage(array $s, array $bySite): string {
     $id = (string)($s['id'] ?? '');
     if ($id === 'nginx') return 'Servidor web dos sites e do painel';
@@ -1171,6 +1425,8 @@ $titles = [
     'php'      => 'Versões instaladas e extensões de cada versão.',
     'servicos' => 'Estado dos serviços e ações de manutenção.',
     'conta'    => 'Acesso ao painel.',
+    'recursos' => 'Utilização do servidor e de cada site, atualizada a cada 5 segundos.',
+    'ficheiros'=> 'Ficheiros de cada site, geridos com o utilizador do próprio site.',
 ];
 $openOnLoad = '';
 if (qget('novo') === 'site') $openOnLoad = 'dlg-site-new';
@@ -1222,12 +1478,15 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php endif; ?>
 
 <?php if ($page === 'resumo'):
-    $disk = (int)($sys['disk'] ?? 0); $ram = (int)($sys['ram'] ?? 0); ?>
+    $lv = live_stats();
+    $disk = (int)round($lv['fresh'] ? (float)($lv['disk']['pct'] ?? 0) : (float)($sys['disk'] ?? 0));
+    $ram  = (int)round($lv['fresh'] ? (float)($lv['mem']['pct'] ?? 0) : (float)($sys['ram'] ?? 0));
+    $hot  = $disk >= 90 || $ram >= 90; ?>
       <section class="stats">
         <div class="stat"><span class="tile t-acc"><?= ic('world') ?></span><div><div class="k">Sites ativos</div><div class="v"><?= $active ?> <small>de <?= count($sites) ?></small></div></div></div>
         <div class="stat"><span class="tile t-blue"><?= ic('db') ?></span><div><div class="k">Bases de dados</div><div class="v"><?= count($dbs) ?></div></div></div>
         <div class="stat"><span class="tile t-vio"><?= ic('code') ?></span><div><div class="k">Versões de PHP</div><div class="v"><?= count($phps) ?> <small><?= $defPhp !== '' ? 'predefinida ' . h($defPhp) : '' ?></small></div></div></div>
-        <div class="stat"><span class="tile t-warn"><?= ic('cpu') ?></span><div><div class="k">Disco e memória</div><div class="v"><?= $disk ?>% <small>disco · <?= $ram ?>% RAM</small></div><div class="meter"><i class="<?= $disk >= 90 ? 'hi' : '' ?>" style="width:<?= max(0, min(100, $disk)) ?>%"></i></div></div></div>
+        <a class="stat<?= $hot ? ' hot' : '' ?>" href="?p=recursos"><span class="tile t-warn"><?= ic('cpu') ?></span><div><div class="k">Disco e memória<?= $hot ? ' · atenção' : '' ?></div><div class="v"><?= $disk ?>% <small>disco · <?= $ram ?>% RAM</small></div><div class="meter"><i class="<?= $disk >= 90 ? 'hi' : '' ?>" style="width:<?= max(0, min(100, $disk)) ?>%"></i></div></div></a>
       </section>
 
       <div class="grid2">
@@ -1293,6 +1552,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
                   <summary class="iconbtn" aria-label="Ações de <?= h($n) ?>"><?= ic('dots') ?></summary>
                   <div class="dd-menu">
                     <?php if ($on): ?><a href="<?= h($url) ?>" target="_blank" rel="noopener"><?= ic('ext') ?>Abrir site</a><?php endif; ?>
+                    <a href="?p=ficheiros&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('folder') ?>Ficheiros</a>
                     <button type="button" data-open="dlg-lim-<?= h($n) ?>"><?= ic('sliders') ?>Limites</button>
                     <button type="button" data-open="dlg-php-<?= h($n) ?>"><?= ic('code') ?>Mudar versão de PHP</button>
                     <form method="post"><?= act_fields('site_perm', ['site' => $n]) ?><button type="submit"><?= ic('lock') ?>Corrigir permissões</button></form>
@@ -1308,6 +1568,135 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </table>
         <?php endif; ?>
       </section>
+
+<?php elseif ($page === 'recursos'):
+    $live = live_stats();
+    $tz = tz_off($live);
+    $range = in_array(qget('r'), ['24h', '7d', '30d'], true) ? qget('r') : '24h';
+    $H = hist_load($range);
+    $sj = jload(MP_STATS . '/sites.json') ?? [];
+    $sjs = is_array($sj['sites'] ?? null) ? $sj['sites'] : [];
+    $ls = is_array($live['sites'] ?? null) ? $live['sites'] : [];
+    $ncpu = max(1, (int)($live['cpus'] ?? ($sys['cpus'] ?? 1)));
+    $mem = is_array($live['mem'] ?? null) ? $live['mem'] : [];
+    $dsk = is_array($live['disk'] ?? null) ? $live['disk'] : [];
+    $swp = is_array($live['swap'] ?? null) ? $live['swap'] : [];
+    $load = is_array($live['load'] ?? null) ? $live['load'] : [0, 0, 0];
+    $net = is_array($live['net'] ?? null) ? $live['net'] : [];
+    $sCpu = [['CPU', '#12a4a6', 1, 10], ['Memória', '#7f77dd', 2, 10], ['Swap', '#e0a33a', 3, 10]];
+    $sNet = [['Receção', '#12a4a6', 6, 1], ['Envio', '#7f77dd', 7, 1]];
+    $sLoad = [['Carga (1 min)', '#e0a33a', 5, 100]];
+    $pills = '<div class="pills">';
+    foreach (['24h' => '24 h', '7d' => '7 dias', '30d' => '30 dias'] as $rk => $rl) $pills .= '<a class="' . ($rk === $range ? 'on' : '') . '" href="?p=recursos&amp;r=' . $rk . '">' . $rl . '</a>';
+    $pills .= '</div>';
+?>
+      <?php if (!$live['fresh']): ?>
+        <div class="card"><div class="empty"><b>O recolhedor de estatísticas não está a responder</b>No servidor: <span class="mono">systemctl status minipainel-stats</span></div></div>
+      <?php endif; ?>
+      <section class="stats stats5" data-live>
+        <div class="stat"><span class="tile t-acc"><?= ic('cpu') ?></span><div><div class="k">CPU (<?= $ncpu ?> vCPU)</div><div class="v" data-l="cpu"><?= h(fmt_dec((float)($live['cpu'] ?? 0))) ?>%</div><div class="meter"><i data-lm="cpu" style="width:<?= min(100, (float)($live['cpu'] ?? 0)) ?>%"></i></div></div></div>
+        <div class="stat"><span class="tile t-vio"><?= ic('server') ?></span><div><div class="k">Memória</div><div class="v"><span data-l="mem"><?= h(fmt_dec((float)($mem['pct'] ?? 0))) ?>%</span> <small data-l="mem-sub"><?= h(fmt_bytes((float)($mem['used'] ?? 0) * 1024) . ' / ' . fmt_bytes((float)($mem['total'] ?? 0) * 1024)) ?></small></div><div class="meter"><i data-lm="mem" style="width:<?= min(100, (float)($mem['pct'] ?? 0)) ?>%"></i></div></div></div>
+        <div class="stat"><span class="tile t-warn"><?= ic('db') ?></span><div><div class="k">Disco /</div><div class="v"><span data-l="disk"><?= h(fmt_dec((float)($dsk['pct'] ?? 0))) ?>%</span> <small data-l="disk-sub"><?= h(fmt_bytes((float)($dsk['used'] ?? 0) * 1024) . ' / ' . fmt_bytes((float)($dsk['total'] ?? 0) * 1024)) ?></small></div><div class="meter"><i data-lm="disk" style="width:<?= min(100, (float)($dsk['pct'] ?? 0)) ?>%"></i></div></div></div>
+        <div class="stat"><span class="tile t-blue"><?= ic('pulse') ?></span><div><div class="k">Carga</div><div class="v"><span data-l="load"><?= h(fmt_dec((float)($load[0] ?? 0), 2)) ?></span> <small data-l="load-sub">5 min <?= h(fmt_dec((float)($load[1] ?? 0), 2)) ?> · 15 min <?= h(fmt_dec((float)($load[2] ?? 0), 2)) ?></small></div><div class="mu" data-l="swap">Swap <?= h(fmt_dec((float)($swp['pct'] ?? 0))) ?>%</div></div></div>
+        <div class="stat"><span class="tile t-acc"><?= ic('world') ?></span><div><div class="k">Rede</div><div class="v" data-l="net"><?= h(fmt_bps((float)($net['rx'] ?? 0) + (float)($net['tx'] ?? 0))) ?></div><div class="mu" data-l="net-sub">↓ <?= h(fmt_bps((float)($net['rx'] ?? 0))) ?> · ↑ <?= h(fmt_bps((float)($net['tx'] ?? 0))) ?></div></div></div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><h2>CPU, memória e swap</h2><?= legend($sCpu) ?><?= $pills ?></div>
+        <?= chart_html($H, $sCpu, 'pct', 100, null, $tz) ?>
+      </section>
+
+      <div class="grid2e">
+        <section class="card">
+          <div class="card-h"><h2>Rede</h2><?= legend($sNet) ?></div>
+          <?= chart_html($H, $sNet, 'bps', null, null, $tz) ?>
+        </section>
+        <section class="card">
+          <div class="card-h"><h2>Carga do sistema</h2><div class="legend"><span><i style="background:#e0a33a"></i>Carga (1 min)</span><span><i class="dash"></i><?= $ncpu ?> vCPU</span></div></div>
+          <?= chart_html($H, $sLoad, 'load', null, (float)$ncpu, $tz) ?>
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="card-h"><h2>Consumo por site</h2><p>CPU e RAM em tempo real; tráfego das últimas 24 horas.</p></div>
+        <?php if (!$sites): ?>
+          <div class="empty">Ainda não há sites.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Site</th><th class="r">CPU</th><th class="r">RAM</th><th class="r">Disco</th><th class="r">Pedidos (24 h)</th><th class="r">Tráfego (24 h)</th></tr></thead>
+          <tbody>
+          <?php foreach ($sites as $s): $n = (string)($s['name'] ?? ''); $L = $ls[$n] ?? []; $J = $sjs[$n] ?? []; ?>
+            <tr>
+              <td class="first" data-label="Site"><div class="who"><span class="av <?= tone($n) ?>"><?= h(substr($n, 0, 1)) ?></span><div><div class="nm"><?= h($n) ?></div><div class="mu"><span class="mono">:<?= (int)($s['port'] ?? 0) ?></span> · PHP <?= h($s['php'] ?? '') ?></div></div></div></td>
+              <td class="r" data-label="CPU" data-ls="<?= h($n) ?>:cpu"><?= h(fmt_dec((float)($L['cpu'] ?? 0))) ?>%</td>
+              <td class="r" data-label="RAM" data-ls="<?= h($n) ?>:rss"><?= h(fmt_bytes((float)($L['rss'] ?? 0) * 1024)) ?></td>
+              <td class="r" data-label="Disco"><?= isset($J['disk']) && (int)($sj['disk_ts'] ?? 0) > 0 ? h(fmt_bytes((float)$J['disk'])) : '<span class="mu">a medir…</span>' ?></td>
+              <td class="r" data-label="Pedidos (24 h)"><?= h(fmt_int((float)($J['req24'] ?? 0))) ?></td>
+              <td class="r" data-label="Tráfego (24 h)"><?= h(fmt_bytes((float)($J['bytes24'] ?? 0))) ?></td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+        <div class="card-f mu">CPU em percentagem da capacidade total do servidor. A RAM é aproximada (inclui memória partilhada entre processos). O disco de cada site é medido de hora a hora; as bases de dados não estão incluídas.</div>
+      </section>
+
+<?php elseif ($page === 'ficheiros'):
+    $names = [];
+    foreach ($sites as $s) { $n = (string)($s['name'] ?? ''); if (valid_site($n)) $names[] = $n; }
+    $fmSite = in_array(qget('site'), $names, true) ? qget('site') : ($names[0] ?? '');
+?>
+      <?php if (!$names): ?>
+        <section class="card"><div class="empty"><b>Ainda não há sites</b>Cria um site para poderes gerir os ficheiros dele.<br><button class="btn" type="button" data-open="dlg-site-new"><?= ic('plus') ?>Novo site</button></div></section>
+      <?php else: ?>
+      <section class="card fm" id="fm" data-site="<?= h($fmSite) ?>" data-dir="<?= h(qget('dir')) ?>">
+        <div class="fm-bar">
+          <select class="in fm-site" id="fm-site" aria-label="Site">
+            <?php foreach ($names as $n): ?><option value="<?= h($n) ?>"<?= $n === $fmSite ? ' selected' : '' ?>><?= h($n) ?></option><?php endforeach; ?>
+          </select>
+          <nav class="crumbs" id="fm-crumbs" aria-label="Caminho"></nav>
+          <div class="fm-tools">
+            <button class="btn sm sec" type="button" data-fm="mkdir"><?= ic('folderplus') ?>Nova pasta</button>
+            <button class="btn sm sec" type="button" data-fm="newfile"><?= ic('file') ?>Novo ficheiro</button>
+            <label class="btn sm sec"><?= ic('upload') ?>Enviar pasta<input type="file" id="fm-updir" webkitdirectory multiple hidden></label>
+            <label class="btn sm"><?= ic('upload') ?>Enviar ficheiros<input type="file" id="fm-upfiles" multiple hidden></label>
+          </div>
+        </div>
+        <div class="fm-selbar" id="fm-selbar" hidden>
+          <span id="fm-selcount"></span><span class="grow"></span>
+          <button class="btn sm sec" type="button" data-fm="move"><?= ic('move') ?>Mover</button>
+          <button class="btn sm sec" type="button" data-fm="zip"><?= ic('zip') ?>Compactar</button>
+          <button class="btn sm sec" type="button" data-fm="chmod"><?= ic('lock') ?>Permissões</button>
+          <button class="btn sm dan" type="button" data-fm="delete"><?= ic('trash') ?>Apagar</button>
+          <button class="btn sm sec" type="button" data-fm="clear">Limpar seleção</button>
+        </div>
+        <div class="fm-drop" id="fm-drop">
+          <table class="list cards fm-list">
+            <thead><tr><th><label class="fm-ck"><input type="checkbox" id="fm-all" aria-label="Selecionar tudo"></label> Nome</th><th class="r">Tamanho</th><th>Modificado</th><th>Permissões</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+            <tbody id="fm-rows"><tr><td colspan="5" class="empty">A carregar…</td></tr></tbody>
+          </table>
+          <div class="fm-hint">Larga aqui para enviar para esta pasta</div>
+        </div>
+        <div class="card-f mu" id="fm-foot">Arrasta ficheiros ou pastas para a lista para os enviar. Os envios são feitos por partes e retomam se a ligação falhar.</div>
+      </section>
+      <div class="fm-menu" id="fm-menu" hidden></div>
+      <div class="ups" id="fm-ups" hidden>
+        <div class="ups-h"><b>Envios</b><span id="fm-ups-sum"></span><button class="iconbtn" type="button" id="fm-ups-close" aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="ups-l" id="fm-ups-list"></div>
+      </div>
+      <dialog id="fm-dlg">
+        <form method="dialog">
+          <div class="dlg-h"><h3 id="fm-dlg-t"></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+          <div class="dlg-b"><div id="fm-dlg-msg" class="mu"></div><input class="in" id="fm-dlg-in" autocomplete="off"></div>
+          <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" id="fm-dlg-ok" value="ok">OK</button></div>
+        </form>
+      </dialog>
+      <dialog class="drawer fm-ed" id="fm-ed" data-keep>
+        <div class="dlg-h"><div style="min-width:0"><h3>Editar ficheiro</h3><p class="mono" id="fm-ed-t"></p></div><button class="iconbtn" type="button" id="fm-ed-x" aria-label="Fechar"><?= ic('x') ?></button></div>
+        <textarea id="fm-ed-ta" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Conteúdo do ficheiro"></textarea>
+        <div class="dlg-f"><span class="mu" id="fm-ed-st"></span><button class="btn sec" type="button" id="fm-ed-close">Fechar</button><button class="btn" type="button" id="fm-ed-save">Gravar (Ctrl+S)</button></div>
+      </dialog>
+      <?php endif; ?>
 
 <?php elseif ($page === 'bd'): ?>
       <section class="card">
@@ -1581,9 +1970,10 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     if (!e.target.closest('details.dd')) closeMenus();
   });
   $('details.dd').forEach(function (d) { d.addEventListener('toggle', function () { if (d.open) closeMenus(d); }); });
-  $('dialog').forEach(function (d) { d.addEventListener('click', function (e) { if (e.target === d) d.close(); }); });
+  $('dialog').forEach(function (d) { d.addEventListener('click', function (e) { if (e.target === d && !d.hasAttribute('data-keep')) d.close(); }); });
   document.addEventListener('submit', function (e) {
     var f = e.target, m = f.getAttribute('data-confirm');
+    if ((f.getAttribute('method') || '').toLowerCase() === 'dialog') return;
     if (m && !window.confirm(m)) { e.preventDefault(); return; }
     setTimeout(function () { $('button', f).forEach(function (b) { b.disabled = true; }); }, 0);
   });
@@ -1602,11 +1992,810 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
 })();
 </script>
+<?php if ($page === 'recursos'): ?>
+<script>
+(function () {
+  function dec(v, d) { return Number(v || 0).toFixed(d === undefined ? 1 : d).replace('.', ','); }
+  function bytes(b) { var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0; b = Number(b || 0); while (b >= 1024 && i < 4) { b /= 1024; i++; } return (i ? b.toFixed(1).replace('.', ',') : Math.round(b)) + ' ' + u[i]; }
+  function bps(b) { var u = ['b/s', 'Kb/s', 'Mb/s', 'Gb/s'], i = 0; b = Number(b || 0); while (b >= 1000 && i < 3) { b /= 1000; i++; } return (i ? b.toFixed(1).replace('.', ',') : Math.round(b)) + ' ' + u[i]; }
+  function fmt(v, f) { return f === 'pct' ? dec(v) + '%' : f === 'bps' ? bps(v) : dec(v, 2); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function set(k, t) { document.querySelectorAll('[data-l="' + k + '"]').forEach(function (e) { e.textContent = t; }); }
+  function bar(k, v) { document.querySelectorAll('[data-lm="' + k + '"]').forEach(function (e) { e.style.width = Math.max(0, Math.min(100, v)) + '%'; e.classList.toggle('hi', v >= 90); }); }
+  function upd() {
+    fetch('?stats=live', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { if (r.status === 401) { location.reload(); return null; } return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ts) return;
+        set('cpu', dec(d.cpu) + '%'); bar('cpu', d.cpu);
+        set('mem', dec(d.mem.pct) + '%'); set('mem-sub', bytes(d.mem.used * 1024) + ' / ' + bytes(d.mem.total * 1024)); bar('mem', d.mem.pct);
+        set('disk', dec(d.disk.pct) + '%'); set('disk-sub', bytes(d.disk.used * 1024) + ' / ' + bytes(d.disk.total * 1024)); bar('disk', d.disk.pct);
+        set('load', dec(d.load[0], 2)); set('load-sub', '5 min ' + dec(d.load[1], 2) + ' · 15 min ' + dec(d.load[2], 2));
+        set('swap', 'Swap ' + dec(d.swap.pct) + '%');
+        set('net', bps(d.net.rx + d.net.tx)); set('net-sub', '↓ ' + bps(d.net.rx) + ' · ↑ ' + bps(d.net.tx));
+        document.querySelectorAll('[data-ls]').forEach(function (e) {
+          var p = e.getAttribute('data-ls').split(':'), s = (d.sites || {})[p[0]] || { cpu: 0, rss: 0 };
+          e.textContent = p[1] === 'cpu' ? dec(s.cpu) + '%' : bytes(s.rss * 1024);
+        });
+      })
+      .catch(function () {})
+      .then(function () { setTimeout(upd, 5000); });
+  }
+  setTimeout(upd, 5000);
+
+  document.querySelectorAll('.chart').forEach(function (c) {
+    var d; try { d = JSON.parse(c.getAttribute('data-chart')); } catch (e) { return; }
+    if (!d.t || d.t.length < 2) return;
+    var plot = c.querySelector('.ch-plot'), cur = c.querySelector('.ch-cur'), tip = c.querySelector('.ch-tip');
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    plot.addEventListener('mousemove', function (e) {
+      var r = plot.getBoundingClientRect(), t = d.from + (d.to - d.from) * ((e.clientX - r.left) / r.width);
+      var lo = 0, hi = d.t.length - 1;
+      while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (d.t[mid] < t) lo = mid; else hi = mid; }
+      var i = Math.abs(d.t[lo] - t) <= Math.abs(d.t[hi] - t) ? lo : hi;
+      var x = (d.t[i] - d.from) / (d.to - d.from) * 100;
+      cur.style.left = x + '%'; cur.style.display = 'block';
+      var dt = new Date((d.t[i] + d.tz) * 1000);
+      var lab = two(dt.getUTCDate()) + '/' + two(dt.getUTCMonth() + 1) + ' ' + two(dt.getUTCHours()) + ':' + two(dt.getUTCMinutes());
+      tip.innerHTML = '<b>' + lab + '</b>' + d.s.map(function (s) { return '<div><i style="background:' + esc(s.c) + '"></i>' + esc(s.n) + ': ' + fmt(s.v[i], d.fmt) + '</div>'; }).join('');
+      tip.style.display = 'block';
+      if (x > 60) { tip.style.left = ''; tip.style.right = (100 - x) + '%'; } else { tip.style.right = ''; tip.style.left = x + '%'; }
+    });
+    plot.addEventListener('mouseleave', function () { cur.style.display = 'none'; tip.style.display = 'none'; });
+  });
+})();
+</script>
+<?php endif; ?>
+<?php if ($page === 'ficheiros' && !empty($fmSite)): ?>
+<script>
+(function () {
+  var root = document.getElementById('fm'); if (!root) return;
+  var IC = <?= json_encode(['dir' => ic('folder', 'dir'), 'zip' => ic('zip', 'zip'), 'code' => ic('code', 'code'), 'file' => ic('file', 'file'), 'up' => ic('up', 'file'), 'dots' => ic('dots'), 'home' => ic('home'), 'open' => ic('folder'), 'dl' => ic('download'), 'edit' => ic('edit'), 'ren' => ic('edit'), 'move' => ic('move'), 'zipb' => ic('zip'), 'perm' => ic('lock'), 'del' => ic('trash'), 'x' => ic('x')], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+  var $ = function (id) { return document.getElementById(id); };
+  var st = { site: root.getAttribute('data-site'), path: '', items: [], sel: {} };
+  var EDIT = /(\.(php|phtml|inc|html?|css|scss|js|mjs|json|txt|md|xml|svg|ini|conf|env|log|csv|sql|ya?ml|twig|tpl|sh|py|htaccess|htpasswd|user\.ini)|^\.[a-z]+)$/i;
+  var ARCH = /\.(zip|tar|tgz|tar\.gz|tar\.bz2)$/i;
+  var CH = 8 * 1024 * 1024;
+
+  function base(site) { return '/ficheiros/' + encodeURIComponent(site || st.site) + '/'; }
+  function join(a, b) { return a ? (b ? a + '/' + b : a) : b; }
+  function enc(s) { return encodeURIComponent(s); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function bytes(b) { if (b === null || b === undefined) return '—'; var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0; b = Number(b); while (b >= 1024 && i < 4) { b /= 1024; i++; } return (i ? b.toFixed(1).replace('.', ',') : b) + ' ' + u[i]; }
+  function two(n) { return (n < 10 ? '0' : '') + n; }
+  function when(t) { var d = new Date(t * 1000); return two(d.getDate()) + '/' + two(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + two(d.getHours()) + ':' + two(d.getMinutes()); }
+  function toast(ok, msg) {
+    var box = document.querySelector('.toasts'); if (!box) return;
+    var t = document.createElement('div'); t.className = 'toast ' + (ok ? 'ok' : 'err');
+    t.innerHTML = '<span class="ti">' + (ok ? '✓' : '!') + '</span><div class="msg"></div><button type="button" data-dismiss aria-label="Fechar">' + IC.x + '</button>';
+    t.querySelector('.msg').textContent = msg; box.appendChild(t);
+    if (ok) setTimeout(function () { t.remove(); }, 5000);
+  }
+  function api(a, data, q, site) {
+    var init = { credentials: 'same-origin', headers: { 'X-MP-Request': '1' }, cache: 'no-store' };
+    if (data instanceof FormData) { init.method = 'POST'; init.body = data; }
+    else if (data) { init.method = 'POST'; init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(data); }
+    return fetch(base(site) + '?a=' + a + (q ? '&' + q : ''), init).then(function (r) {
+      if (r.redirected && r.url.indexOf('/ficheiros/') === -1) { location.reload(); throw new Error('A sessão expirou.'); }
+      return r.json().catch(function () { throw new Error('Resposta inválida do servidor (' + r.status + ').'); })
+        .then(function (j) { j._s = r.status; return j; });
+    });
+  }
+  function must(j) { if (!j.ok) { var e = new Error(j.error || 'Falhou.'); e.j = j; throw e; } return j; }
+  function fail(e) { toast(false, e.message || String(e)); }
+
+  /* ---------- diálogo ---------- */
+  function ask(title, msg, value, okLabel, danger) {
+    var d = $('fm-dlg'), inp = $('fm-dlg-in'), ok = $('fm-dlg-ok');
+    $('fm-dlg-t').textContent = title; $('fm-dlg-msg').textContent = msg || '';
+    $('fm-dlg-msg').hidden = !msg;
+    inp.hidden = value === null; inp.value = value === null ? '' : value;
+    ok.textContent = okLabel || 'OK'; ok.className = 'btn' + (danger ? ' dan' : '');
+    d.returnValue = ''; d.showModal();
+    if (value !== null) { inp.focus(); var dot = inp.value.lastIndexOf('.'); inp.setSelectionRange(0, dot > 0 ? dot : inp.value.length); } else ok.focus();
+    return new Promise(function (res) {
+      d.addEventListener('close', function h() { d.removeEventListener('close', h); res(d.returnValue === 'ok' ? (value === null ? true : inp.value.trim()) : null); });
+    });
+  }
+
+  /* ---------- listagem ---------- */
+  function setUrl() { var u = '?p=ficheiros&site=' + enc(st.site) + (st.path ? '&dir=' + enc(st.path) : ''); history.replaceState(null, '', u); }
+  function load(path) {
+    if (path !== undefined) { st.path = path; st.sel = {}; }
+    return api('list', null, 'p=' + enc(st.path)).then(must).then(function (j) {
+      st.items = j.items; render(j.free);
+    }).catch(function (e) {
+      if (st.path) { toast(false, e.message); st.path = ''; return load(); }
+      $('fm-rows').innerHTML = '<tr><td colspan="5" class="empty"></td></tr>';
+      $('fm-rows').querySelector('td').textContent = e.message;
+    }).then(setUrl);
+  }
+  function kind(it) { return it.d ? 'dir' : ARCH.test(it.n) ? 'zip' : EDIT.test(it.n) ? 'code' : 'file'; }
+  function render(free) {
+    var tb = $('fm-rows'), h = '';
+    if (st.path) h += '<tr data-up="1"><td class="first" colspan="5"><button type="button" class="fm-name" data-act="up">' + IC.up + '<span>.. (pasta acima)</span></button></td></tr>';
+    st.items.forEach(function (it, i) {
+      h += '<tr data-i="' + i + '"' + (st.sel[it.n] ? ' class="sel"' : '') + '>' +
+        '<td class="first" data-label="Nome"><div class="fm-first"><label class="fm-ck"><input type="checkbox"' + (st.sel[it.n] ? ' checked' : '') + ' aria-label="Selecionar ' + esc(it.n) + '"></label>' +
+        '<button type="button" class="fm-name" data-act="open">' + IC[kind(it)] + '<span>' + esc(it.n) + (it.l ? ' ↪' : '') + '</span></button></div></td>' +
+        '<td class="r mu" data-label="Tamanho">' + (it.d ? '—' : bytes(it.s)) + '</td>' +
+        '<td class="mu" data-label="Modificado">' + when(it.m) + '</td>' +
+        '<td class="mono mu" data-label="Permissões">' + esc(it.p.replace(/^0(?=\d{3}$)/, '')) + '</td>' +
+        '<td class="act r"><button type="button" class="iconbtn" data-act="menu" aria-label="Ações de ' + esc(it.n) + '">' + IC.dots + '</button></td></tr>';
+    });
+    if (!st.items.length) h += '<tr><td colspan="5" class="empty">Pasta vazia. Arrasta ficheiros para aqui ou usa “Enviar ficheiros”.</td></tr>';
+    tb.innerHTML = h;
+    crumbs(); selbar();
+    var nd = st.items.filter(function (i) { return i.d; }).length;
+    $('fm-foot').textContent = nd + ' pasta(s), ' + (st.items.length - nd) + ' ficheiro(s)' + (free ? ' · ' + bytes(free) + ' livres no disco' : '') + ' · arrasta ficheiros ou pastas para a lista para os enviar';
+  }
+  function crumbs() {
+    var c = $('fm-crumbs'), parts = st.path ? st.path.split('/') : [], h = '<button type="button" data-path="">' + IC.home + esc(st.site) + '</button>';
+    parts.forEach(function (p, i) { h += '<span class="sep">/</span><button type="button" data-path="' + esc(parts.slice(0, i + 1).join('/')) + '">' + esc(p) + '</button>'; });
+    c.innerHTML = h;
+  }
+  function selected() { return Object.keys(st.sel); }
+  function selbar() {
+    var n = selected().length;
+    $('fm-selbar').hidden = n === 0;
+    $('fm-selcount').textContent = n === 1 ? '1 item selecionado' : n + ' itens selecionados';
+    $('fm-all').checked = n > 0 && n === st.items.length;
+  }
+
+  /* ---------- ações ---------- */
+  function done(msg) { return function (j) { must(j); if (msg) toast(true, typeof msg === 'function' ? msg(j) : msg); return load(); }; }
+  function download(it) {
+    var a = document.createElement('a'); a.href = base() + '?a=dl&p=' + enc(join(st.path, it.n)); a.download = it.n;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  function open(it) {
+    if (it.d) return load(join(st.path, it.n));
+    if (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n) && it.n.indexOf('.') === -1) return edit(join(st.path, it.n));
+    download(it);
+  }
+  function act(name, items) {
+    var p = st.path;
+    if (name === 'mkdir' || name === 'newfile') {
+      return ask(name === 'mkdir' ? 'Nova pasta' : 'Novo ficheiro', 'Em /' + p, '', 'Criar').then(function (v) {
+        if (!v) return;
+        return api(name, { p: p, name: v }).then(must).then(function () {
+          return load().then(function () { if (name === 'newfile') edit(join(p, v)); });
+        });
+      }).catch(fail);
+    }
+    if (!items.length) return;
+    var one = items.length === 1 ? items[0] : null;
+    var label = one ? '“' + one + '”' : items.length + ' itens';
+    if (name === 'rename') {
+      return ask('Mudar o nome', null, one, 'Mudar nome').then(function (v) { if (!v || v === one) return; return api('rename', { p: p, from: one, to: v }).then(done('Nome alterado.')); }).catch(fail);
+    }
+    if (name === 'move') {
+      return ask('Mover ' + label, 'Pasta de destino, a partir da raiz do site (ex.: public_html/img). Vazio = raiz do site.', p, 'Mover').then(function (v) {
+        if (v === null) return; return api('move', { p: p, items: items, to: v }).then(done('Movido para /' + v + '.'));
+      }).catch(fail);
+    }
+    if (name === 'zip') {
+      return ask('Compactar ' + label, 'Nome do ficheiro ZIP, criado nesta pasta.', (one || 'arquivo') + '.zip', 'Compactar').then(function (v) {
+        if (!v) return; toast(true, 'A compactar…'); return api('zip', { p: p, items: items, name: v }).then(done(function (j) { return 'Criado ' + j.name + ' (' + j.count + ' ficheiros).'; }));
+      }).catch(fail);
+    }
+    if (name === 'chmod') {
+      var cur = one ? (st.items.filter(function (i) { return i.n === one; })[0] || {}).p : '';
+      return ask('Permissões de ' + label, 'Em octal, por exemplo 640 para ficheiros e 2750 para pastas.', (cur || '640').replace(/^0(?=\d{3}$)/, ''), 'Aplicar').then(function (v) {
+        if (!v) return; return api('chmod', { p: p, items: items, mode: v }).then(done('Permissões alteradas.'));
+      }).catch(fail);
+    }
+    if (name === 'delete') {
+      return ask('Apagar ' + label + '?', 'As pastas são apagadas com todo o conteúdo. Esta ação não pode ser anulada.', null, 'Apagar', true).then(function (ok) {
+        if (!ok) return; return api('delete', { p: p, items: items }).then(done(items.length === 1 ? 'Apagado.' : items.length + ' itens apagados.'));
+      }).catch(fail);
+    }
+    if (name === 'extract' || name === 'extractto') {
+      var into = name === 'extractto' ? ask('Extrair para uma pasta', 'Nome da pasta a criar nesta localização.', one.replace(ARCH, ''), 'Extrair') : Promise.resolve('');
+      return into.then(function (v) {
+        if (v === null) return; toast(true, 'A extrair ' + one + '…');
+        return api('extract', { p: join(p, one), into: v }).then(done(function (j) { return j.count + ' ficheiro(s) extraído(s)' + (j.skipped ? '; ' + j.skipped + ' ignorado(s) por segurança' : '') + '.'; }));
+      }).catch(fail);
+    }
+  }
+
+  /* ---------- menu de cada item ---------- */
+  var menu = $('fm-menu');
+  function hideMenu() { menu.hidden = true; }
+  function showMenu(it, btn) {
+    var o = [];
+    if (it.d) o.push(['open', IC.open, 'Abrir']); else o.push(['dl', IC.dl, 'Descarregar']);
+    if (!it.d && (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n))) o.push(['edit', IC.edit, 'Editar']);
+    if (ARCH.test(it.n)) { o.push(['extract', IC.zipb, 'Extrair aqui']); o.push(['extractto', IC.zipb, 'Extrair para pasta…']); }
+    o.push(['rename', IC.ren, 'Mudar o nome'], ['move', IC.move, 'Mover…'], ['zip', IC.zipb, 'Compactar em ZIP'], ['chmod', IC.perm, 'Permissões'], ['-'], ['delete', IC.del, 'Apagar']);
+    menu.innerHTML = o.map(function (x) { return x[0] === '-' ? '<hr>' : '<button type="button" data-m="' + x[0] + '"' + (x[0] === 'delete' ? ' class="dan"' : '') + '>' + x[1] + x[2] + '</button>'; }).join('');
+    menu.hidden = false;
+    var r = btn.getBoundingClientRect(), mh = menu.offsetHeight, mw = menu.offsetWidth;
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.right - mw)) + 'px';
+    menu.style.top = (r.bottom + mh + 8 > window.innerHeight ? Math.max(8, r.top - mh - 6) : r.bottom + 6) + 'px';
+    menu.onclick = function (e) {
+      var b = e.target.closest('[data-m]'); if (!b) return; hideMenu();
+      var m = b.getAttribute('data-m');
+      if (m === 'open') load(join(st.path, it.n));
+      else if (m === 'dl') download(it);
+      else if (m === 'edit') edit(join(st.path, it.n));
+      else act(m, [it.n]);
+    };
+  }
+  document.addEventListener('click', function (e) { if (!menu.hidden && !e.target.closest('#fm-menu') && !e.target.closest('[data-act="menu"]')) hideMenu(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hideMenu(); });
+  window.addEventListener('scroll', hideMenu, true);
+
+  $('fm-rows').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr'); if (!tr) return;
+    if (tr.getAttribute('data-up')) { var parts = st.path.split('/'); parts.pop(); load(parts.join('/')); return; }
+    var it = st.items[+tr.getAttribute('data-i')]; if (!it) return;
+    var b = e.target.closest('[data-act]');
+    if (b && b.getAttribute('data-act') === 'open') open(it);
+    else if (b && b.getAttribute('data-act') === 'menu') { e.stopPropagation(); if (!menu.hidden) hideMenu(); else showMenu(it, b); }
+  });
+  $('fm-rows').addEventListener('change', function (e) {
+    var tr = e.target.closest('tr'); var it = tr && st.items[+tr.getAttribute('data-i')]; if (!it) return;
+    if (e.target.checked) st.sel[it.n] = 1; else delete st.sel[it.n];
+    tr.classList.toggle('sel', e.target.checked); selbar();
+  });
+  $('fm-all').addEventListener('change', function (e) { st.sel = {}; if (e.target.checked) st.items.forEach(function (i) { st.sel[i.n] = 1; }); render(); });
+  $('fm-crumbs').addEventListener('click', function (e) { var b = e.target.closest('[data-path]'); if (b) load(b.getAttribute('data-path')); });
+  $('fm-site').addEventListener('change', function (e) { st.site = e.target.value; load(''); });
+  root.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-fm]'); if (!b) return;
+    var n = b.getAttribute('data-fm');
+    if (n === 'clear') { st.sel = {}; render(); return; }
+    act(n, n === 'mkdir' || n === 'newfile' ? [] : selected());
+  });
+
+  /* ---------- editor ---------- */
+  var ed = { path: null, dirty: false }, ta = $('fm-ed-ta'), edDlg = $('fm-ed');
+  function edStatus(t) { $('fm-ed-st').textContent = t; }
+  function edit(rel) {
+    api('get', null, 'p=' + enc(rel)).then(must).then(function (j) {
+      ed.path = rel; ed.dirty = false; ta.value = j.content; $('fm-ed-t').textContent = '/' + rel; edStatus('');
+      edDlg.showModal(); ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0;
+    }).catch(fail);
+  }
+  function save() {
+    if (!ed.path) return;
+    edStatus('A gravar…');
+    api('save', { p: ed.path, content: ta.value }).then(must).then(function () {
+      ed.dirty = false; var d = new Date(); edStatus('Gravado às ' + two(d.getHours()) + ':' + two(d.getMinutes()) + ':' + two(d.getSeconds()));
+      load();
+    }).catch(function (e) { edStatus(''); fail(e); });
+  }
+  function edClose() { if (ed.dirty && !window.confirm('Há alterações por gravar. Fechar sem gravar?')) return; ed.dirty = false; edDlg.close(); }
+  ta.addEventListener('input', function () { if (!ed.dirty) { ed.dirty = true; edStatus('Alterações por gravar'); } });
+  ta.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
+    else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); ta.setRangeText('\t', ta.selectionStart, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input')); }
+  });
+  $('fm-ed-save').addEventListener('click', save);
+  $('fm-ed-close').addEventListener('click', edClose);
+  $('fm-ed-x').addEventListener('click', edClose);
+  edDlg.addEventListener('cancel', function (e) { e.preventDefault(); edClose(); });
+  window.addEventListener('beforeunload', function (e) { if (ed.dirty || busy) { e.preventDefault(); e.returnValue = ''; } });
+
+  /* ---------- envios por partes, com retoma ---------- */
+  var Q = [], busy = false;
+  function hash(s) { var h1 = 0x811c9dc5, h2 = 0x01000193; for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619) >>> 0; h2 = Math.imul(h2 ^ c, 2246822519) >>> 0; } return ('0000000' + h1.toString(16)).slice(-8) + ('0000000' + h2.toString(16)).slice(-8); }
+  function upsSummary() {
+    var n = Q.length, ok = Q.filter(function (j) { return j.state === 'ok'; }).length, er = Q.filter(function (j) { return j.state === 'err'; }).length;
+    $('fm-ups-sum').textContent = ok + ' de ' + n + ' concluído(s)' + (er ? ', ' + er + ' com erro' : '');
+  }
+  function upRow(job) {
+    var d = document.createElement('div'); d.className = 'up';
+    d.innerHTML = '<div class="nm2"><span></span><span>em espera</span></div><div class="bar"><i></i></div>';
+    d.querySelector('span').textContent = job.rel; $('fm-ups-list').appendChild(d); return d;
+  }
+  function upSet(job, pct, txt, cls) {
+    job.ui.querySelector('i').style.width = pct + '%';
+    job.ui.querySelector('.nm2 span:last-child').textContent = txt;
+    if (cls) job.ui.className = 'up ' + cls;
+  }
+  function enqueue(list) {
+    if (!list.length) return;
+    var p = st.path, site = st.site, names = {};
+    st.items.forEach(function (i) { names[i.n] = 1; });
+    var clash = list.filter(function (f) { return names[f.rel.split('/')[0]]; }).length;
+    var go = clash ? ask('Substituir ficheiros?', clash + ' ficheiro(s) ou pasta(s) com o mesmo nome já existem nesta pasta. Os ficheiros existentes serão substituídos.', null, 'Substituir', true) : Promise.resolve(true);
+    go.then(function (ok) {
+      if (!ok) return;
+      list.forEach(function (f) {
+        var job = { f: f.file, rel: f.rel, dir: p, site: site, ow: !!clash, tries: 0, state: 'wait' };
+        job.id = 'u' + hash(site + '|' + p + '|' + f.rel + '|' + f.file.size + '|' + f.file.lastModified);
+        job.ui = upRow(job); Q.push(job);
+      });
+      $('fm-ups').hidden = false; upsSummary(); pump();
+    });
+  }
+  function pump() {
+    if (busy) return;
+    var job = Q.filter(function (j) { return j.state === 'wait'; })[0];
+    if (!job) { upsSummary(); if (job === undefined) load(); return; }
+    busy = true; job.state = 'run';
+    run(job).then(function () { busy = false; upsSummary(); pump(); });
+  }
+  function run(job) {
+    var b = base(job.site);
+    function send(off) {
+      var fd = new FormData();
+      fd.append('id', job.id); fd.append('p', job.dir); fd.append('name', job.rel);
+      fd.append('offset', off); fd.append('total', job.f.size);
+      if (job.ow) fd.append('overwrite', '1');
+      fd.append('chunk', job.f.slice(off, Math.min(off + CH, job.f.size)), 'chunk');
+      return fetch(b + '?a=upload', { method: 'POST', credentials: 'same-origin', headers: { 'X-MP-Request': '1' }, body: fd })
+        .then(function (r) { if (r.redirected) { location.reload(); throw new Error('A sessão expirou.'); } return r.json().then(function (j) { return { s: r.status, j: j }; }); });
+    }
+    function loop(off) {
+      upSet(job, job.f.size ? Math.floor(off * 100 / job.f.size) : 0, bytes(off) + ' de ' + bytes(job.f.size));
+      return send(off).then(function (res) {
+        var j = res.j;
+        if (j.ok && j.done) { job.state = 'ok'; upSet(job, 100, 'concluído', 'ok'); return; }
+        if (j.ok) { job.tries = 0; return loop(j.size); }
+        if (j.exists) { var e = new Error(j.error); e.fatal = true; throw e; }
+        if (res.s === 409 && typeof j.size === 'number') return loop(j.size);
+        throw new Error(j.error || 'Falha no envio.');
+      });
+    }
+    return fetch(b + '?a=upstat&id=' + job.id, { credentials: 'same-origin', headers: { 'X-MP-Request': '1' }, cache: 'no-store' })
+      .then(function (r) { return r.json(); }).then(function (j) { return loop(j.size || 0); })
+      .catch(function (e) {
+        job.tries++;
+        if (!e.fatal && job.tries <= 6) {
+          upSet(job, 0, 'a retomar (' + job.tries + ')…');
+          return new Promise(function (r) { setTimeout(r, 1500 * job.tries); }).then(function () { return run(job); });
+        }
+        job.state = 'err'; upSet(job, 100, e.message || 'erro', 'err');
+      });
+  }
+  $('fm-ups-close').addEventListener('click', function () {
+    if (busy && !window.confirm('Há envios em curso. Esconder o painel de envios? Os envios continuam.')) return;
+    if (!busy) { Q = Q.filter(function (j) { return j.state === 'wait' || j.state === 'run'; }); $('fm-ups-list').innerHTML = ''; }
+    $('fm-ups').hidden = true;
+  });
+  function fromInput(input) {
+    var list = Array.prototype.map.call(input.files, function (f) { return { file: f, rel: f.webkitRelativePath || f.name }; });
+    input.value = ''; enqueue(list);
+  }
+  $('fm-upfiles').addEventListener('change', function (e) { fromInput(e.target); });
+  $('fm-updir').addEventListener('change', function (e) { fromInput(e.target); });
+
+  var drop = $('fm-drop'), depth = 0;
+  function walk(en, pre) {
+    if (en.isFile) return new Promise(function (res) { en.file(function (f) { res([{ file: f, rel: pre + f.name }]); }, function () { res([]); }); });
+    if (!en.isDirectory) return Promise.resolve([]);
+    var rd = en.createReader(), all = [];
+    return new Promise(function (res) {
+      (function next() {
+        rd.readEntries(function (list) {
+          if (!list.length) {
+            Promise.all(all.map(function (c) { return walk(c, pre + en.name + '/'); })).then(function (a) { res([].concat.apply([], a)); });
+          } else { all = all.concat(Array.prototype.slice.call(list)); next(); }
+        }, function () { res([]); });
+      })();
+    });
+  }
+  drop.addEventListener('dragenter', function (e) { if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'Files') >= 0) { depth++; drop.classList.add('over'); } });
+  drop.addEventListener('dragover', function (e) { e.preventDefault(); });
+  drop.addEventListener('dragleave', function () { if (--depth <= 0) { depth = 0; drop.classList.remove('over'); } });
+  drop.addEventListener('drop', function (e) {
+    e.preventDefault(); depth = 0; drop.classList.remove('over');
+    var dt = e.dataTransfer, items = dt.items;
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      var entries = [];
+      for (var i = 0; i < items.length; i++) { var en = items[i].webkitGetAsEntry(); if (en) entries.push(en); }
+      Promise.all(entries.map(function (en) { return walk(en, ''); })).then(function (a) { enqueue([].concat.apply([], a)); });
+    } else {
+      enqueue(Array.prototype.map.call(dt.files, function (f) { return { file: f, rel: f.name }; }));
+    }
+  });
+
+  load(root.getAttribute('data-dir') || '');
+})();
+</script>
+<?php endif; ?>
 </body>
 </html>
 MPPANEL
 chown -R root:root /opt/minipainel/public
 chmod 644 /opt/minipainel/public/index.php
+
+say "A instalar o gestor de ficheiros..."
+install -d -o root -g root -m 755 /opt/minipainel/files
+cat > /opt/minipainel/files/index.php <<'MPFILES'
+<?php
+/**
+ * MiniPainel v1.4.0 — gestor de ficheiros (API)
+ * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
+ * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
+ * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
+ * X-MP-Request, que um formulário de outro site não consegue enviar.
+ */
+declare(strict_types=1);
+
+const FM_MAX_EDIT = 2097152;   // 2 MB
+const FM_ESSENTIAL = ['public_html', 'logs', 'tmp'];
+
+header('X-Content-Type-Options: nosniff');
+header('Cache-Control: no-store');
+header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox");
+
+function fm_json(array $d, int $code = 200): void {
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+function fm_fail(int $code, string $m, array $extra = []): void { fm_json(['ok' => false, 'error' => $m] + $extra, $code); }
+
+$site = (string)($_SERVER['MP_FM_SITE'] ?? '');
+if (!preg_match('/^[a-z][a-z0-9-]{0,23}$/', $site)) fm_fail(400, 'Site inválido.');
+$ROOT = realpath('/srv/www/' . $site);
+if ($ROOT === false || !is_dir($ROOT)) fm_fail(404, 'A pasta do site não foi encontrada.');
+umask(0027);
+
+/* ---------- caminhos ---------- */
+function fm_rel(string $p): string {
+    $p = str_replace('\\', '/', $p);
+    if (strpos($p, "\0") !== false) fm_fail(400, 'Caminho inválido.');
+    $out = [];
+    foreach (explode('/', $p) as $seg) {
+        if ($seg === '' || $seg === '.') continue;
+        if ($seg === '..') fm_fail(400, 'Caminho inválido.');
+        if (strlen($seg) > 255) fm_fail(400, 'Nome demasiado longo.');
+        $out[] = $seg;
+    }
+    return implode('/', $out);
+}
+function fm_join(string $a, string $b): string { return $a === '' ? $b : ($b === '' ? $a : $a . '/' . $b); }
+function fm_inside(string $real): bool { global $ROOT; return $real === $ROOT || strpos($real, $ROOT . '/') === 0; }
+/* Caminho existente, seguindo ligações simbólicas (para ler e listar) */
+function fm_abs(string $rel): string {
+    global $ROOT;
+    $real = realpath($rel === '' ? $ROOT : $ROOT . '/' . $rel);
+    if ($real === false) fm_fail(404, 'Não encontrado: /' . $rel);
+    if (!fm_inside($real)) fm_fail(403, 'Fora da pasta do site.');
+    return $real;
+}
+/* Entrada a alterar (não segue a ligação final: apagar uma ligação apaga só a ligação) */
+function fm_entry(string $rel, bool $mustExist = true): string {
+    global $ROOT;
+    if ($rel === '') fm_fail(400, 'Operação não permitida na raiz do site.');
+    $parent = realpath(dirname($ROOT . '/' . $rel));
+    if ($parent === false || !fm_inside($parent)) fm_fail(403, 'Fora da pasta do site.');
+    $abs = $parent . '/' . basename($rel);
+    if ($mustExist && !file_exists($abs) && !is_link($abs)) fm_fail(404, 'Não encontrado: /' . $rel);
+    return $abs;
+}
+function fm_name(string $n): string {
+    $n = trim($n);
+    if ($n === '' || $n === '.' || $n === '..' || strpos($n, '/') !== false || strpos($n, '\\') !== false || strpos($n, "\0") !== false || strlen($n) > 255) {
+        fm_fail(400, 'Nome inválido.');
+    }
+    return $n;
+}
+function fm_fix(string $abs): void {
+    if (is_link($abs)) return;
+    @chmod($abs, is_dir($abs) ? 02750 : 0640);
+}
+function fm_mkdirs(string $abs): void {
+    if (is_dir($abs)) return;
+    fm_mkdirs(dirname($abs));
+    if (!@mkdir($abs) && !is_dir($abs)) fm_fail(500, 'Não foi possível criar a pasta ' . basename($abs) . '.');
+    fm_fix($abs);
+}
+function fm_rrm(string $p): bool {
+    if (is_link($p) || !is_dir($p)) return @unlink($p);
+    $ok = true;
+    foreach ((array)@scandir($p) as $e) {
+        if ($e === '.' || $e === '..' || $e === false) continue;
+        $ok = fm_rrm($p . '/' . $e) && $ok;
+    }
+    return @rmdir($p) && $ok;
+}
+function fm_essential(string $rel): bool { return strpos($rel, '/') === false && in_array($rel, FM_ESSENTIAL, true); }
+
+/* ---------- entrada ---------- */
+$a = (string)($_GET['a'] ?? '');
+$method = (string)($_SERVER['REQUEST_METHOD'] ?? 'GET');
+$in = [];
+if ($method === 'POST') {
+    if ((string)($_SERVER['HTTP_X_MP_REQUEST'] ?? '') !== '1') fm_fail(403, 'Pedido recusado.');
+    $in = $_POST;
+    if (stripos((string)($_SERVER['CONTENT_TYPE'] ?? ''), 'application/json') === 0) {
+        $j = json_decode((string)file_get_contents('php://input'), true);
+        $in = is_array($j) ? $j : [];
+    }
+}
+function in_s(array $in, string $k): string { $v = $in[$k] ?? ''; return is_string($v) || is_int($v) ? (string)$v : ''; }
+function in_list(array $in, string $k): array { $v = $in[$k] ?? []; return is_array($v) ? array_values(array_filter($v, 'is_string')) : []; }
+function q(string $k): string { $v = $_GET[$k] ?? ''; return is_string($v) ? $v : ''; }
+
+$readOnly = ['list', 'get', 'dl', 'upstat'];
+if ($method !== 'POST' && !in_array($a, $readOnly, true)) fm_fail(405, 'Método não permitido.');
+
+switch ($a) {
+
+case 'list':
+    $rel = fm_rel(q('p'));
+    $dir = fm_abs($rel);
+    if (!is_dir($dir)) fm_fail(400, 'Não é uma pasta.');
+    $dh = @opendir($dir);
+    if ($dh === false) fm_fail(403, 'Sem permissão para ler esta pasta.');
+    $items = [];
+    while (($e = readdir($dh)) !== false) {
+        if ($e === '.' || $e === '..') continue;
+        $f = $dir . '/' . $e;
+        $st = @lstat($f);
+        if ($st === false) continue;
+        $link = is_link($f);
+        $isDir = is_dir($f);
+        $items[] = [
+            'n' => $e, 'd' => $isDir, 'l' => $link,
+            's' => $isDir ? null : ($link ? @filesize($f) : $st['size']),
+            'm' => $st['mtime'], 'p' => sprintf('%04o', $st['mode'] & 07777),
+        ];
+    }
+    closedir($dh);
+    usort($items, function ($x, $y) { return $x['d'] === $y['d'] ? strnatcasecmp($x['n'], $y['n']) : ($x['d'] ? -1 : 1); });
+    $free = @disk_free_space($dir);
+    fm_json(['ok' => true, 'path' => $rel, 'items' => $items, 'free' => $free === false ? null : $free]);
+
+case 'get':
+    $f = fm_abs(fm_rel(q('p')));
+    if (!is_file($f)) fm_fail(400, 'Não é um ficheiro.');
+    if ((int)filesize($f) > FM_MAX_EDIT) fm_fail(413, 'O ficheiro tem mais de 2 MB; descarrega-o para editar.');
+    $c = @file_get_contents($f);
+    if ($c === false) fm_fail(403, 'Sem permissão para ler o ficheiro.');
+    if (strpos($c, "\0") !== false || !preg_match('//u', $c)) fm_fail(415, 'É um ficheiro binário ou não está em UTF-8; não pode ser editado aqui.');
+    fm_json(['ok' => true, 'content' => $c, 'm' => filemtime($f)]);
+
+case 'dl':
+    $f = fm_abs(fm_rel(q('p')));
+    if (!is_file($f) || !is_readable($f)) fm_fail(404, 'Ficheiro não encontrado.');
+    @set_time_limit(0);
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/octet-stream');
+    header('Content-Length: ' . (string)filesize($f));
+    header("Content-Disposition: attachment; filename*=UTF-8''" . rawurlencode(basename($f)));
+    readfile($f);
+    exit;
+
+case 'upstat':
+    $id = q('id');
+    if (!preg_match('/^[A-Za-z0-9_-]{8,64}$/', $id)) fm_fail(400, 'Identificador inválido.');
+    $part = $ROOT . '/tmp/.mp-up-' . $id . '.part';
+    fm_json(['ok' => true, 'size' => is_file($part) ? filesize($part) : 0]);
+
+case 'mkdir':
+case 'newfile':
+    $dir = fm_abs(fm_rel(in_s($in, 'p')));
+    if (!is_dir($dir)) fm_fail(400, 'A pasta de destino não existe.');
+    $t = $dir . '/' . fm_name(in_s($in, 'name'));
+    if (file_exists($t) || is_link($t)) fm_fail(409, 'Já existe um ficheiro ou pasta com esse nome.');
+    $ok = $a === 'mkdir' ? @mkdir($t) : (@file_put_contents($t, '') !== false);
+    if (!$ok) fm_fail(500, 'Não foi possível criar.');
+    fm_fix($t);
+    fm_json(['ok' => true]);
+
+case 'rename':
+    $p = fm_rel(in_s($in, 'p'));
+    $from = fm_name(in_s($in, 'from'));
+    $to = fm_name(in_s($in, 'to'));
+    if (fm_essential(fm_join($p, $from))) fm_fail(403, 'Esta pasta é essencial para o site e não pode mudar de nome.');
+    $src = fm_entry(fm_join($p, $from));
+    $dst = fm_entry(fm_join($p, $to), false);
+    if (file_exists($dst) || is_link($dst)) fm_fail(409, 'Já existe um ficheiro ou pasta com esse nome.');
+    if (!@rename($src, $dst)) fm_fail(500, 'Não foi possível mudar o nome.');
+    fm_json(['ok' => true]);
+
+case 'move':
+    $p = fm_rel(in_s($in, 'p'));
+    $destRel = fm_rel(in_s($in, 'to'));
+    $dest = fm_abs($destRel);
+    if (!is_dir($dest)) fm_fail(400, 'O destino não é uma pasta.');
+    $errors = [];
+    foreach (in_list($in, 'items') as $it) {
+        $rel = fm_join($p, fm_name($it));
+        if (fm_essential($rel)) { $errors[] = $it . ': pasta essencial'; continue; }
+        $src = fm_entry($rel);
+        $real = realpath($src);
+        if ($real !== false && is_dir($src) && !is_link($src) && ($dest === $real || strpos($dest . '/', $real . '/') === 0)) { $errors[] = $it . ': não pode ir para dentro de si própria'; continue; }
+        $t = $dest . '/' . basename($src);
+        if (file_exists($t) || is_link($t)) { $errors[] = $it . ': já existe no destino'; continue; }
+        if (!@rename($src, $t)) $errors[] = $it . ': falhou';
+    }
+    if ($errors) fm_fail(409, "Alguns itens não foram movidos:\n" . implode("\n", $errors));
+    fm_json(['ok' => true]);
+
+case 'delete':
+    $p = fm_rel(in_s($in, 'p'));
+    $errors = [];
+    foreach (in_list($in, 'items') as $it) {
+        $rel = fm_join($p, fm_name($it));
+        if (fm_essential($rel)) { $errors[] = $it . ': pasta essencial do site'; continue; }
+        if (!fm_rrm(fm_entry($rel))) $errors[] = $it;
+    }
+    if ($errors) fm_fail(409, "Não foi possível apagar:\n" . implode("\n", $errors));
+    fm_json(['ok' => true]);
+
+case 'save':
+    $rel = fm_rel(in_s($in, 'p'));
+    $f = fm_entry($rel, false);
+    $content = in_s($in, 'content');
+    if (strlen($content) > FM_MAX_EDIT) fm_fail(413, 'O conteúdo tem mais de 2 MB.');
+    if (is_dir($f)) fm_fail(400, 'É uma pasta.');
+    $new = !file_exists($f);
+    if (@file_put_contents($f, $content, LOCK_EX) === false) fm_fail(500, 'Não foi possível gravar o ficheiro.');
+    if ($new) fm_fix($f);
+    clearstatcache(true, $f);
+    fm_json(['ok' => true, 'm' => filemtime($f)]);
+
+case 'chmod':
+    $p = fm_rel(in_s($in, 'p'));
+    $mode = in_s($in, 'mode');
+    if (!preg_match('/^[0-7]{3,4}$/', $mode)) fm_fail(400, 'Permissões inválidas (ex.: 640 ou 2750).');
+    $errors = [];
+    foreach (in_list($in, 'items') as $it) {
+        $f = fm_entry(fm_join($p, fm_name($it)));
+        if (is_link($f)) continue;
+        if (!@chmod($f, octdec($mode))) $errors[] = $it;
+    }
+    if ($errors) fm_fail(409, "Não foi possível alterar:\n" . implode("\n", $errors));
+    fm_json(['ok' => true]);
+
+case 'extract':
+    @set_time_limit(0);
+    $rel = fm_rel(in_s($in, 'p'));
+    $arch = fm_abs($rel);
+    if (!is_file($arch)) fm_fail(400, 'Não é um ficheiro.');
+    $dest = dirname($arch);
+    $sub = trim(in_s($in, 'into'));
+    if ($sub !== '') { $dest .= '/' . fm_name($sub); fm_mkdirs($dest); }
+    $lower = strtolower($arch);
+    $count = 0; $skipped = 0;
+    $safeTarget = function (string $name) use ($dest, &$skipped): ?string {
+        $name = str_replace('\\', '/', $name);
+        $parts = [];
+        foreach (explode('/', $name) as $seg) {
+            if ($seg === '' || $seg === '.') continue;
+            if ($seg === '..' || strpos($seg, "\0") !== false) { $skipped++; return null; }
+            $parts[] = $seg;
+        }
+        return $parts ? $dest . '/' . implode('/', $parts) : null;
+    };
+    if (substr($lower, -4) === '.zip') {
+        if (!class_exists('ZipArchive')) fm_fail(500, 'A extensão zip do PHP não está disponível.');
+        $z = new ZipArchive();
+        if ($z->open($arch) !== true) fm_fail(400, 'Não foi possível abrir o ZIP.');
+        for ($i = 0; $i < $z->numFiles; $i++) {
+            $name = (string)$z->getNameIndex($i);
+            $t = $safeTarget($name);
+            if ($t === null) continue;
+            if (substr($name, -1) === '/') { fm_mkdirs($t); continue; }
+            fm_mkdirs(dirname($t));
+            if (is_link($t)) @unlink($t);
+            $src = $z->getStream($name);
+            $dst = @fopen($t, 'wb');
+            if ($src === false || $dst === false) { $skipped++; continue; }
+            stream_copy_to_stream($src, $dst);
+            fclose($src); fclose($dst);
+            fm_fix($t);
+            $count++;
+        }
+        $z->close();
+    } elseif (preg_match('/\.(tar\.gz|tgz|tar\.bz2|tar)$/', $lower)) {
+        if (!class_exists('PharData')) fm_fail(500, 'A extensão phar do PHP não está disponível.');
+        try {
+            $ph = new PharData($arch);
+            $prefix = 'phar://' . $arch . '/';
+            foreach (new RecursiveIteratorIterator($ph, RecursiveIteratorIterator::SELF_FIRST) as $entry) {
+                $path = (string)$entry->getPathname();
+                if (strpos($path, $prefix) !== 0) { $skipped++; continue; }
+                $t = $safeTarget(substr($path, strlen($prefix)));
+                if ($t === null) continue;
+                if ($entry->isDir()) { fm_mkdirs($t); continue; }
+                fm_mkdirs(dirname($t));
+                if (is_link($t)) @unlink($t);
+                if (!@copy($path, $t)) { $skipped++; continue; }
+                fm_fix($t);
+                $count++;
+            }
+        } catch (Throwable $e) {
+            fm_fail(400, 'Não foi possível ler o arquivo: ' . $e->getMessage());
+        }
+    } else {
+        fm_fail(400, 'Formato não suportado. Usa .zip, .tar, .tar.gz, .tgz ou .tar.bz2.');
+    }
+    fm_json(['ok' => true, 'count' => $count, 'skipped' => $skipped]);
+
+case 'zip':
+    @set_time_limit(0);
+    if (!class_exists('ZipArchive')) fm_fail(500, 'A extensão zip do PHP não está disponível.');
+    $p = fm_rel(in_s($in, 'p'));
+    $dir = fm_abs($p);
+    $name = fm_name(in_s($in, 'name'));
+    if (strtolower(substr($name, -4)) !== '.zip') $name .= '.zip';
+    $target = $dir . '/' . $name;
+    if (file_exists($target)) fm_fail(409, 'Já existe um ficheiro com esse nome.');
+    $z = new ZipArchive();
+    if ($z->open($target, ZipArchive::CREATE) !== true) fm_fail(500, 'Não foi possível criar o ZIP.');
+    $added = 0;
+    $addPath = function (string $abs, string $local) use (&$addPath, $z, $target, &$added) {
+        if ($abs === $target) return;
+        if (is_link($abs)) return;
+        if (is_dir($abs)) {
+            $z->addEmptyDir($local);
+            foreach ((array)@scandir($abs) as $e) {
+                if ($e === '.' || $e === '..' || $e === false) continue;
+                $addPath($abs . '/' . $e, $local . '/' . $e);
+            }
+        } elseif (is_readable($abs)) {
+            $z->addFile($abs, $local);
+            $added++;
+        }
+    };
+    foreach (in_list($in, 'items') as $it) {
+        $it = fm_name($it);
+        $addPath(fm_entry(fm_join($p, $it)), $it);
+    }
+    if (!$z->close()) fm_fail(500, 'Falha ao gravar o ZIP.');
+    fm_fix($target);
+    fm_json(['ok' => true, 'name' => $name, 'count' => $added]);
+
+case 'upload':
+    @set_time_limit(0);
+    $id = in_s($in, 'id');
+    if (!preg_match('/^[A-Za-z0-9_-]{8,64}$/', $id)) fm_fail(400, 'Identificador inválido.');
+    $offset = (int)in_s($in, 'offset');
+    $total = (int)in_s($in, 'total');
+    if ($offset < 0 || $total < 0) fm_fail(400, 'Valores inválidos.');
+    $dir = fm_abs(fm_rel(in_s($in, 'p')));
+    if (!is_dir($dir)) fm_fail(400, 'A pasta de destino não existe.');
+    $relName = fm_rel(in_s($in, 'name'));
+    if ($relName === '') fm_fail(400, 'Nome inválido.');
+    foreach (explode('/', $relName) as $seg) fm_name($seg);
+    $part = $ROOT . '/tmp/.mp-up-' . $id . '.part';
+    if (!is_dir($ROOT . '/tmp')) fm_fail(500, 'A pasta tmp do site não existe.');
+    // limpa envios abandonados há mais de um dia
+    if (mt_rand(1, 20) === 1) foreach ((array)glob($ROOT . '/tmp/.mp-up-*.part') as $old) { if (is_string($old) && filemtime($old) < time() - 86400) @unlink($old); }
+    clearstatcache(true, $part);
+    $have = is_file($part) ? (int)filesize($part) : 0;
+    if ($offset !== $have) fm_fail(409, 'Fora de sequência.', ['size' => $have]);
+    $chunk = $_FILES['chunk'] ?? null;
+    if ($total > 0) {
+        if (!is_array($chunk) || (int)($chunk['error'] ?? 1) !== UPLOAD_ERR_OK) fm_fail(400, 'A parte do ficheiro não chegou ao servidor.');
+        $src = @fopen((string)$chunk['tmp_name'], 'rb');
+        $dst = @fopen($part, 'ab');
+        if ($src === false || $dst === false) fm_fail(500, 'Não foi possível gravar a parte do ficheiro.');
+        stream_copy_to_stream($src, $dst);
+        fclose($src); fclose($dst);
+        clearstatcache(true, $part);
+        $have = (int)filesize($part);
+    } elseif (!is_file($part)) {
+        @touch($part);
+    }
+    if ($have > $total) { @unlink($part); fm_fail(409, 'O tamanho recebido não confere; recomeça o envio.', ['size' => 0]); }
+    if ($have < $total) fm_json(['ok' => true, 'size' => $have, 'done' => false]);
+    $target = $dir . '/' . $relName;
+    fm_mkdirs(dirname($target));
+    if (file_exists($target) || is_link($target)) {
+        if (in_s($in, 'overwrite') !== '1' || is_dir($target)) { @unlink($part); fm_fail(409, 'Já existe: ' . $relName, ['exists' => true]); }
+        @unlink($target);
+    }
+    if (!@rename($part, $target)) fm_fail(500, 'Não foi possível concluir o envio.');
+    fm_fix($target);
+    fm_json(['ok' => true, 'size' => $have, 'done' => true]);
+
+default:
+    fm_fail(400, 'Ação desconhecida.');
+}
+MPFILES
+chown root:root /opt/minipainel/files/index.php
+chmod 644 /opt/minipainel/files/index.php
 
 # ----------------------------------------------------------------------------
 # 7. CLI (mpanel) — também usado pelo worker da fila
@@ -1615,11 +2804,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — MiniPainel CLI v1.3.2
+#  mpanel — MiniPainel CLI v1.4.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.3.2"
+MP_VERSION="1.4.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -1826,11 +3015,90 @@ EOF
   chmod 644 "$dest"
 }
 
+# O nginx pertence ao grupo de cada site (mp_<site>): lê os ficheiros do site,
+# enquanto os sites continuam isolados entre si.
+web_join(){
+  local g="mp_$1"
+  getent group "$g" >/dev/null 2>&1 || return 0
+  id -nG "$WEB_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$g" && return 0
+  gpasswd -a "$WEB_USER" "$g" >/dev/null 2>&1 || usermod -aG "$g" "$WEB_USER" >/dev/null 2>&1
+  return 0
+}
+
+# ---------- gestor de ficheiros: pool por site, como mp_<site>, na versão de PHP do painel ----------
+fm_pool_file(){ echo "$(php_pool_dir "$PANEL_PHP")/mp-fm-$1.conf"; }
+write_fm_pool(){
+  local n=$1 f
+  f=$(fm_pool_file "$n")
+  cat > "$f" <<EOF
+; MiniPainel — gestor de ficheiros do site $n (corre como mp_$n; gerido pelo mpanel)
+[mp-fm-$n]
+user = mp_$n
+group = mp_$n
+listen = $(php_run_dir "$PANEL_PHP")/mp-fm-$n.sock
+listen.owner = $WEB_USER
+listen.group = $WEB_GROUP
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 4
+pm.process_idle_timeout = 30s
+request_terminate_timeout = 0
+php_admin_value[open_basedir] = $WWW_ROOT/$n/:/opt/minipainel/files/
+php_admin_value[upload_tmp_dir] = $WWW_ROOT/$n/tmp
+php_admin_value[sys_temp_dir] = $WWW_ROOT/$n/tmp
+php_admin_value[upload_max_filesize] = 64M
+php_admin_value[post_max_size] = 72M
+php_admin_value[memory_limit] = 256M
+php_value[max_execution_time] = 900
+php_admin_value[max_input_time] = 900
+php_admin_value[error_log] = $WWW_ROOT/$n/logs/ficheiros-error.log
+php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec
+EOF
+  chmod 644 "$f"
+}
+
+cmd_fm_sync(){
+  local n v f
+  for v in $(php_installed); do
+    [ "$v" = "$PANEL_PHP" ] && continue
+    for f in "$(php_pool_dir "$v")"/mp-fm-*.conf; do
+      [ -f "$f" ] || continue
+      rm -f "$f"; apply_php "$v" >/dev/null 2>&1
+    done
+  done
+  for n in $(site_names); do
+    id "mp_$n" >/dev/null 2>&1 || continue
+    web_join "$n"
+    write_fm_pool "$n"
+  done
+  for f in "$(php_pool_dir "$PANEL_PHP")"/mp-fm-*.conf; do
+    [ -f "$f" ] || continue
+    n=$(basename "$f" .conf); n=${n#mp-fm-}
+    site_exists "$n" || rm -f "$f"
+  done
+  apply_php "$PANEL_PHP" || die "Configuração do PHP-FPM $PANEL_PHP inválida depois de configurar o gestor de ficheiros."
+  apply_nginx || warn "Verifica o nginx (nginx -t)."
+  echo "Gestor de ficheiros configurado para $(site_names | wc -l) site(s)."
+  return 0
+}
+
+cmd_stats(){
+  local f=/var/lib/minipainel/stats/live.json
+  [ -s "$f" ] || die "Ainda não há dados. Verifica: systemctl status minipainel-stats"
+  jq -r '"CPU \(.cpu)%   Memória \(.mem.pct)%   Swap \(.swap.pct)%   Disco \(.disk.pct)%",
+         "Carga \(.load | map(tostring) | join(" "))   Rede ↓ \(.net.rx / 1000000 * 100 | floor / 100) Mb/s   ↑ \(.net.tx / 1000000 * 100 | floor / 100) Mb/s",
+         (.sites | to_entries[] | "  \(.key): CPU \(.value.cpu)%   RAM \(.value.rss / 1024 | floor) MB")' "$f"
+  return 0
+}
+
 site_rollback(){
   local n=$1 v=$2 p=$3 se=$4
-  rm -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled" "$(php_pool_dir "$v")/mp-$n.conf" "$SITES_DIR/$n.conf"
+  rm -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled" "$(php_pool_dir "$v")/mp-$n.conf" "$SITES_DIR/$n.conf" "$(fm_pool_file "$n")"
   apply_nginx >/dev/null 2>&1
   apply_php "$v" >/dev/null 2>&1
+  if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" >/dev/null 2>&1; fi
   sleep 1
   pkill -u "mp_$n" >/dev/null 2>&1
   userdel "mp_$n" >/dev/null 2>&1
@@ -1883,7 +3151,8 @@ cmd_site_add(){
 
   local u="mp_$n" d="$WWW_ROOT/$n" se=0 fw=0
   useradd -r -U -M -d "$d" -s "$NOLOGIN" -c "MiniPainel site $n" "$u" || die "Não foi possível criar o utilizador $u."
-  install -d -o "$u" -g "$WEB_GROUP" -m 2750 "$d" "$d/public_html"
+  web_join "$n"
+  install -d -o "$u" -g "$u" -m 2750 "$d" "$d/public_html"
   install -d -o "$u" -g "$u" -m 700 "$d/logs" "$d/tmp"
   cat > "$d/public_html/index.html" <<EOF
 <!doctype html>
@@ -1891,7 +3160,7 @@ cmd_site_add(){
 <style>html,body{height:100%;margin:0}body{display:flex;align-items:center;justify-content:center;font:16px/1.5 system-ui,sans-serif;background:#eaeef2;color:#16222e}div{text-align:center;padding:24px}h1{margin:0 0 8px}p{margin:0;color:#4a5a6a}</style></head>
 <body><div><h1>$n</h1><p>Site ativo com PHP $v. Substitui este ficheiro em $d/public_html.</p></div></body></html>
 EOF
-  chown "$u:$WEB_GROUP" "$d/public_html/index.html"
+  chown "$u:$u" "$d/public_html/index.html"
   chmod 640 "$d/public_html/index.html"
 
   cat > "$SITES_DIR/$n.conf" <<EOF
@@ -1907,12 +3176,13 @@ EOF
   for key in "${!lims[@]}"; do site_set "$n" "$key" "${lims[$key]}"; done
 
   write_pool "$n" "$v"
+  write_fm_pool "$n"
   write_nginx "$n" "$port" "$v" "$NGX_SITES/$n.conf"
   se_restore "$d"
   if se_port_add "$port"; then se=1; fi
   site_set "$n" SE_PORT "$se"
 
-  if ! apply_php "$v"; then
+  if ! apply_php "$v" || { [ "$PANEL_PHP" != "$v" ] && ! apply_php "$PANEL_PHP"; }; then
     site_rollback "$n" "$v" "$port" "$se"
     die "Configuração PHP-FPM inválida; nada foi alterado."
   fi
@@ -1938,8 +3208,10 @@ cmd_site_del(){
 
   rm -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled"
   apply_nginx || warn "Verifica o nginx (nginx -t)."
-  rm -f "$(php_pool_dir "$v")/mp-$n.conf"
+  rm -f "$(php_pool_dir "$v")/mp-$n.conf" "$(fm_pool_file "$n")"
   apply_php "$v" || warn "Verifica o PHP-FPM $v."
+  if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" || warn "Verifica o PHP-FPM $PANEL_PHP."; fi
+  rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
   sleep 1
   pkill -u "mp_$n" >/dev/null 2>&1
   userdel "mp_$n" >/dev/null 2>&1 || warn "Não foi possível remover o utilizador mp_$n."
@@ -2016,11 +3288,14 @@ cmd_site_fixperms(){
   valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
   local d="$WWW_ROOT/$n/public_html" u="mp_$n"
   [ -d "$d" ] || die "Pasta em falta: $d"
-  chown -R "$u:$WEB_GROUP" "$d"
+  web_join "$n"
+  chown "$u:$u" "$WWW_ROOT/$n"; chmod 2750 "$WWW_ROOT/$n"
+  chown -R "$u:$u" "$d"
   find "$d" -type d -exec chmod 2750 {} +
   find "$d" -type f -exec chmod 640 {} +
   se_restore "$d"
-  echo "Permissões corrigidas em $d (dono $u, grupo $WEB_GROUP)."
+  apply_nginx >/dev/null 2>&1
+  echo "Permissões corrigidas em $d (dono e grupo $u; o nginx lê através do grupo do site)."
   return 0
 }
 
@@ -2553,7 +3828,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-MiniPainel CLI v1.3.2
+MiniPainel CLI v1.4.0
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -2585,6 +3860,10 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
+  stats                 utilização atual do servidor e de cada site
+
+Gestor de ficheiros
+  fm-sync               recria os processos do gestor de ficheiros de todos os sites
 
 Sistema
   php-list
@@ -2616,6 +3895,8 @@ dispatch(){
     pma-update)        cmd_pma_update "$@" ;;
     php-list)          cmd_php_list ;;
     service)           cmd_service "$@" ;;
+    stats)             cmd_stats ;;
+    fm-sync)           cmd_fm_sync ;;
     status)            cmd_status ;;
     passwd)            cmd_passwd "$@" ;;
     panel-passwd-hash) cmd_panel_hash "$@" ;;
@@ -2675,6 +3956,241 @@ EOF
 systemctl daemon-reload
 systemctl enable minipainel-worker.path >/dev/null 2>&1
 systemctl restart minipainel-worker.path
+
+say "A instalar o recolhedor de estatísticas..."
+install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minipainel/stats/traffic
+cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
+#!/usr/bin/env bash
+# =============================================================================
+#  mpanel-stats — recolhedor de estatísticas do MiniPainel v1.4.0
+#  Lê o /proc a cada 5 s e grava:
+#    live.json        valores atuais (servidor e por site)
+#    hist-1m.csv      médias por minuto   (24 h)
+#    hist-10m.csv     médias por 10 min   (7 dias)
+#    hist-1h.csv      médias por hora     (30 dias)
+#    sites.json       disco (de hora a hora) e tráfego das últimas 24 h por site
+#    traffic/<site>.csv  pedidos e bytes por hora (30 dias), lidos dos logs do nginx
+#  Colunas do histórico: ts,cpu,mem,swap,disk (em décimas de %),load (x100),rx,tx (bit/s)
+# =============================================================================
+set -uo pipefail
+# shellcheck source=/dev/null
+. /etc/minipainel/minipainel.conf 2>/dev/null
+
+DIR=/var/lib/minipainel/stats
+TDIR=$DIR/traffic
+SITES_DIR=/etc/minipainel/sites
+WWW_ROOT=/srv/www
+GRP=${PANEL_SYSUSER:-minipainel}
+INTERVAL=5
+TCK=$(getconf CLK_TCK 2>/dev/null || echo 100)
+NCPU=$(nproc 2>/dev/null || echo 1)
+
+install -d -o root -g "$GRP" -m 750 "$DIR" "$TDIR"
+
+perm(){ chown root:"$GRP" "$1" 2>/dev/null; chmod 640 "$1" 2>/dev/null; return 0; }
+put(){ local tmp="$1.tmp"; printf '%s\n' "$2" > "$tmp" && perm "$tmp" && mv -f "$tmp" "$1"; }
+d10(){ printf '%d.%d' $(( $1 / 10 )) $(( $1 % 10 )); }
+trim(){ local f=$1 max=$2 n; n=$(wc -l < "$f" 2>/dev/null || echo 0); if [ "$n" -gt $(( max + 30 )) ]; then tail -n "$max" "$f" > "$f.tmp" && perm "$f.tmp" && mv -f "$f.tmp" "$f"; fi; }
+site_names(){ local f; for f in "$SITES_DIR"/*.conf; do [ -f "$f" ] && basename "$f" .conf; done; return 0; }
+
+read_cpu(){
+  local l; read -r l < /proc/stat
+  # shellcheck disable=SC2086
+  set -- $l; shift
+  local idle=$(( $4 + ${5:-0} )) tot=0 x
+  for x in "$@"; do tot=$(( tot + x )); done
+  tot=$(( tot - ${9:-0} - ${10:-0} ))
+  echo "$tot $idle"
+}
+read_mem(){ awk '/^MemTotal:/{t=$2}/^MemAvailable:/{a=$2}/^SwapTotal:/{st=$2}/^SwapFree:/{sf=$2}END{printf "%d %d %d %d\n", t, t-a, st, st-sf}' /proc/meminfo; }
+read_disk(){ df -Pk / 2>/dev/null | awk 'NR==2{print $2, $3, $4}'; }
+read_net(){ awk 'NR>2{sub(/:/," "); if ($1 != "lo") { rx += $2; tx += $10 }} END{printf "%.0f %.0f\n", rx, tx}' /proc/net/dev; }
+
+# ---------- CPU e memória por site (processos dos utilizadores mp_<site>) ----------
+declare -A PREV_TICKS=() SITE_CPU=() SITE_RSS=()
+sample_sites(){
+  local dtus=$1 first=$2 pid user rss site t
+  local -A cur=() owner=()
+  local -a files=()
+  SITE_CPU=(); SITE_RSS=()
+  while read -r pid user rss; do
+    [[ "$user" == mp_* ]] || continue
+    site=${user#mp_}
+    SITE_RSS[$site]=$(( ${SITE_RSS[$site]:-0} + rss ))
+    owner[$pid]=$site
+    files+=("/proc/$pid/stat")
+  done < <(ps -eo pid=,user:40=,rss= 2>/dev/null)
+  if [ ${#files[@]} -gt 0 ]; then
+    while read -r pid t; do
+      [ -n "${owner[$pid]:-}" ] || continue
+      cur[$pid]=$t
+      site=${owner[$pid]}
+      if [ "$first" = 0 ]; then
+        if [ -n "${PREV_TICKS[$pid]:-}" ]; then t=$(( t - ${PREV_TICKS[$pid]} )); fi
+        [ "$t" -lt 0 ] && t=0
+        SITE_CPU[$site]=$(( ${SITE_CPU[$site]:-0} + t ))
+      fi
+    done < <(awk '{ n = split(FILENAME, a, "/"); p = a[3]; sub(/^.*\) /, ""); print p, $12 + $13 }' "${files[@]}" 2>/dev/null)
+  fi
+  PREV_TICKS=()
+  for pid in "${!cur[@]}"; do PREV_TICKS[$pid]=${cur[$pid]}; done
+  # ticks -> décimas de % da capacidade total do servidor
+  local v
+  for site in "${!SITE_CPU[@]}"; do
+    v=${SITE_CPU[$site]}
+    v=$(( v * 1000 * 1000000 / (TCK * dtus * NCPU) ))
+    [ "$v" -gt 1000 ] && v=1000
+    SITE_CPU[$site]=$v
+  done
+}
+
+# ---------- tráfego por site (leitura incremental dos logs do nginx) ----------
+update_traffic(){
+  local n log pos ino size oino off req bytes hour now
+  now=$EPOCHSECONDS; hour=$(( now / 3600 * 3600 ))
+  for n in $(site_names); do
+    log=/var/log/nginx/mp-$n.access.log
+    pos=$TDIR/$n.pos
+    [ -f "$log" ] || continue
+    ino=$(stat -c %i "$log" 2>/dev/null) || continue
+    size=$(stat -c %s "$log" 2>/dev/null) || continue
+    if [ ! -f "$pos" ]; then echo "$ino $size" > "$pos"; continue; fi
+    read -r oino off < "$pos"
+    if [ "$oino" != "$ino" ] || [ "$size" -lt "${off:-0}" ]; then off=0; fi
+    if [ "$size" -gt "$off" ]; then
+      read -r req bytes < <(tail -c +$(( off + 1 )) "$log" 2>/dev/null | head -c $(( size - off )) |
+        awk '{ n++; if (match($0, /" [0-9][0-9][0-9] [0-9]+ /)) { split(substr($0, RSTART + 2, RLENGTH - 3), f, " "); b += f[2] } } END { printf "%d %.0f\n", n, b }')
+      if [ "${req:-0}" -gt 0 ]; then
+        [ -f "$TDIR/$n.csv" ] || { : > "$TDIR/$n.csv"; perm "$TDIR/$n.csv"; }
+        awk -F, -v h="$hour" -v r="$req" -v b="$bytes" 'BEGIN{OFS=","}
+          { rows[NR] = $0; last = $1 }
+          END {
+            if (NR > 0 && last == h) { split(rows[NR], x, ","); rows[NR] = h "," (x[2] + r) "," sprintf("%.0f", x[3] + b); m = NR }
+            else { m = NR + 1; rows[m] = h "," r "," b }
+            s = (m > 720) ? m - 719 : 1
+            for (i = s; i <= m; i++) print rows[i]
+          }' "$TDIR/$n.csv" > "$TDIR/$n.csv.tmp" && perm "$TDIR/$n.csv.tmp" && mv -f "$TDIR/$n.csv.tmp" "$TDIR/$n.csv"
+      fi
+    fi
+    echo "$ino $size" > "$pos"
+  done
+}
+
+# ---------- disco por site (de hora a hora) ----------
+declare -A SITE_DISK=()
+update_disk(){
+  local n b
+  SITE_DISK=()
+  for n in $(site_names); do
+    b=$(nice -n 19 timeout 300 du -sb "$WWW_ROOT/$n" 2>/dev/null | awk '{print $1}')
+    SITE_DISK[$n]=${b:-0}
+  done
+}
+
+write_sites_json(){
+  local n r b since o="" sep=""
+  since=$(( EPOCHSECONDS - 86400 ))
+  for n in $(site_names); do
+    r=0; b=0
+    if [ -f "$TDIR/$n.csv" ]; then
+      read -r r b < <(awk -F, -v s="$since" '$1 >= s - 3599 { r += $2; b += $3 } END { printf "%d %.0f\n", r, b }' "$TDIR/$n.csv")
+    fi
+    o+="$sep\"$n\":{\"disk\":${SITE_DISK[$n]:-0},\"req24\":${r:-0},\"bytes24\":${b:-0}}"
+    sep=","
+  done
+  put "$DIR/sites.json" "{\"ts\":$EPOCHSECONDS,\"disk_ts\":$DISK_TS,\"sites\":{$o}}"
+}
+
+aggregate(){ # origem destino início fim máximo
+  tail -n 200 "$1" 2>/dev/null | awk -F, -v s="$3" -v e="$4" '
+    $1 >= s && $1 < e { n++; for (i = 2; i <= 8; i++) a[i] += $i }
+    END { if (n) { printf "%d", s; for (i = 2; i <= 8; i++) printf ",%.0f", a[i] / n; print "" } }' >> "$2"
+  perm "$2"; trim "$2" "$5"
+}
+
+# ---------- ciclo principal ----------
+for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
+read -r p_tot p_idle <<<"$(read_cpu)"
+read -r p_rx p_tx <<<"$(read_net)"
+p_t=${EPOCHREALTIME/./}
+first=1
+cur_min=$(( EPOCHSECONDS / 60 ))
+acc_n=0; a_cpu=0; a_mem=0; a_swap=0; a_disk=0; a_load=0; a_rx=0; a_tx=0
+DISK_TS=0; last_hour=-1
+sample_sites 1 1
+first=0
+
+while :; do
+  sleep "$INTERVAL"
+  now_t=${EPOCHREALTIME/./}
+  dtus=$(( now_t - p_t )); [ "$dtus" -le 0 ] && dtus=1
+  read -r tot idle <<<"$(read_cpu)"
+  dtot=$(( tot - p_tot )); didle=$(( idle - p_idle ))
+  cpu=0; [ "$dtot" -gt 0 ] && cpu=$(( (dtot - didle) * 1000 / dtot ))
+  [ "$cpu" -lt 0 ] && cpu=0
+  read -r mt mu st su <<<"$(read_mem)"
+  mem=0; [ "${mt:-0}" -gt 0 ] && mem=$(( mu * 1000 / mt ))
+  swap=0; [ "${st:-0}" -gt 0 ] && swap=$(( su * 1000 / st ))
+  read -r dk_t dk_u dk_a <<<"$(read_disk)"
+  disk=0; [ $(( ${dk_u:-0} + ${dk_a:-0} )) -gt 0 ] && disk=$(( dk_u * 1000 / (dk_u + dk_a) ))
+  read -r l1 l5 l15 _ < /proc/loadavg
+  load=$(( 10#${l1/./} ))
+  read -r rx tx <<<"$(read_net)"
+  rxb=$(( (rx - p_rx) * 8 * 1000000 / dtus )); [ "$rxb" -lt 0 ] && rxb=0
+  txb=$(( (tx - p_tx) * 8 * 1000000 / dtus )); [ "$txb" -lt 0 ] && txb=0
+  sample_sites "$dtus" "$first"
+
+  sj=""; sep=""
+  for s in $(site_names); do
+    sj+="$sep\"$s\":{\"cpu\":$(d10 "${SITE_CPU[$s]:-0}"),\"rss\":${SITE_RSS[$s]:-0}}"; sep=","
+  done
+  printf -v tz '%(%z)T' -1
+  put "$DIR/live.json" "{\"ts\":$EPOCHSECONDS,\"tz\":\"$tz\",\"cpus\":$NCPU,\"cpu\":$(d10 "$cpu"),\"mem\":{\"pct\":$(d10 "$mem"),\"used\":$mu,\"total\":$mt},\"swap\":{\"pct\":$(d10 "$swap"),\"used\":$su,\"total\":$st},\"disk\":{\"pct\":$(d10 "$disk"),\"used\":${dk_u:-0},\"total\":${dk_t:-0}},\"load\":[$l1,$l5,$l15],\"net\":{\"rx\":$rxb,\"tx\":$txb},\"sites\":{$sj}}"
+
+  acc_n=$(( acc_n + 1 )); a_cpu=$(( a_cpu + cpu )); a_mem=$(( a_mem + mem )); a_swap=$(( a_swap + swap ))
+  a_disk=$(( a_disk + disk )); a_load=$(( a_load + load )); a_rx=$(( a_rx + rxb )); a_tx=$(( a_tx + txb ))
+
+  m=$(( EPOCHSECONDS / 60 ))
+  if [ "$m" -ne "$cur_min" ]; then
+    ts=$(( cur_min * 60 ))
+    echo "$ts,$(( a_cpu / acc_n )),$(( a_mem / acc_n )),$(( a_swap / acc_n )),$(( a_disk / acc_n )),$(( a_load / acc_n )),$(( a_rx / acc_n )),$(( a_tx / acc_n ))" >> "$DIR/hist-1m.csv"
+    trim "$DIR/hist-1m.csv" 1440
+    if [ $(( m / 10 )) -ne $(( cur_min / 10 )) ]; then
+      s10=$(( cur_min / 10 * 600 )); aggregate "$DIR/hist-1m.csv" "$DIR/hist-10m.csv" "$s10" $(( s10 + 600 )) 1008
+    fi
+    if [ $(( m / 60 )) -ne $(( cur_min / 60 )) ]; then
+      s60=$(( cur_min / 60 * 3600 )); aggregate "$DIR/hist-1m.csv" "$DIR/hist-1h.csv" "$s60" $(( s60 + 3600 )) 720
+    fi
+    update_traffic
+    h=$(( EPOCHSECONDS / 3600 ))
+    if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
+    write_sites_json
+    acc_n=0; a_cpu=0; a_mem=0; a_swap=0; a_disk=0; a_load=0; a_rx=0; a_tx=0
+    cur_min=$m
+  fi
+  p_tot=$tot; p_idle=$idle; p_rx=$rx; p_tx=$tx; p_t=$now_t; first=0
+done
+MPSTATS
+chmod 750 /usr/local/sbin/mpanel-stats
+cat > /etc/systemd/system/minipainel-stats.service <<'EOF'
+[Unit]
+Description=MiniPainel - recolha de estatísticas de recursos
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/mpanel-stats
+Restart=always
+RestartSec=5
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable minipainel-stats.service >/dev/null 2>&1
+systemctl restart minipainel-stats.service
 
 cat > /etc/logrotate.d/minipainel <<'EOF'
 /srv/www/*/logs/*.log /var/lib/minipainel/logs/*.log /var/lib/minipainel-pma/logs/*.log {
@@ -2755,6 +4271,7 @@ nginx -t >/dev/null 2>&1 || { nginx -t; die "Configuração do nginx inválida."
 systemctl enable nginx >/dev/null 2>&1 || true
 systemctl reload-or-restart nginx
 
+/usr/local/sbin/mpanel fm-sync || warn "Não foi possível configurar o gestor de ficheiros (mpanel fm-sync)."
 /usr/local/sbin/mpanel state || warn "Não foi possível gerar o estado inicial (mpanel state)."
 
 # ----------------------------------------------------------------------------
@@ -2802,5 +4319,7 @@ if [ -n "$DBADMIN_PASS" ]; then
 fi
 echo " PHP:         $ALL_PHP(predefinido $DEFAULT_PHP)"
 echo " Sites:       /srv/www/<site>/public_html  ->  http://$SRV_IP:<porta>"
+echo " Ficheiros:   no painel, página Ficheiros (envios grandes por partes)"
+echo " Recursos:    no painel, página Recursos (systemctl status minipainel-stats)"
 echo " CLI:         mpanel help"
 echo "=============================================================="
