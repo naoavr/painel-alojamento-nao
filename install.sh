@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  MiniPainel v1.3.0 — instalador
+#  MiniPainel v1.3.1 — instalador
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.3.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.3.1.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -15,7 +15,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.3.0"
+MP_VERSION="1.3.1"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -475,7 +475,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * MiniPainel v1.3.0 — painel web
+ * MiniPainel v1.3.1 — painel web
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -483,7 +483,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.3.0';
+const MP_VERSION = '1.3.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1615,11 +1615,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — MiniPainel CLI v1.3.0
+#  mpanel — MiniPainel CLI v1.3.1
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.3.0"
+MP_VERSION="1.3.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -1882,7 +1882,7 @@ cmd_site_add(){
   fi
 
   local u="mp_$n" d="$WWW_ROOT/$n" se=0 fw=0
-  useradd -r -U -M -d "$d" -s "$NOLOGIN" -c "MiniPainel: $n" "$u" || die "Não foi possível criar o utilizador $u."
+  useradd -r -U -M -d "$d" -s "$NOLOGIN" -c "MiniPainel site $n" "$u" || die "Não foi possível criar o utilizador $u."
   install -d -o "$u" -g "$WEB_GROUP" -m 2750 "$d" "$d/public_html"
   install -d -o "$u" -g "$u" -m 700 "$d/logs" "$d/tmp"
   cat > "$d/public_html/index.html" <<EOF
@@ -2539,7 +2539,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-MiniPainel CLI v1.3.0
+MiniPainel CLI v1.3.1
 Uso: mpanel <comando> [argumentos]
 
 Sites
