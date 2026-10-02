@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.0.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.1.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.0.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.1.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.0.0"
+MP_VERSION="2.1.0"
 PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -376,6 +376,21 @@ cat > /etc/nginx/minipainel/panel.inc <<EOF
         fastcgi_send_timeout 900s;
     }
 
+    location = /ficheiros/_email/ {
+        auth_request /_mp_auth;
+        error_page 401 = @mp_login;
+        client_max_body_size 72M;
+        fastcgi_buffering off;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /opt/minipainel/files/index.php;
+        fastcgi_param SCRIPT_NAME /ficheiros/_email/;
+        fastcgi_param MP_FM_SITE _email;
+        fastcgi_param HTTPS on;
+        fastcgi_pass unix:$PANEL_RUN/mp-fm-_email.sock;
+        fastcgi_read_timeout 900s;
+        fastcgi_send_timeout 900s;
+    }
+
     location / {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root/index.php;
@@ -506,7 +521,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.0.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.1.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -514,7 +529,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.0.0';
+const MP_VERSION = '2.1.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1188,6 +1203,14 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fm-pre{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;white-space:nowrap;flex:0 0 auto}
+.fm-pre + .crumbs{margin-left:-6px}
+.fm-pre a{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);text-decoration:none;font-weight:600}
+.fm-pre a:hover{color:var(--acc)}
+.fm-pre span{color:var(--ink-3)}
+.fm-root a.who{text-decoration:none;color:inherit}
+.fm-root a.who:hover .nm{color:var(--acc)}
+.wm-card .item{gap:16px}
 .tabs .chip{text-decoration:none}
 .bar{height:8px;border-radius:99px;background:var(--hover);overflow:hidden;margin-bottom:4px}
 .bar span{display:block;height:100%;background:var(--acc);border-radius:99px}
@@ -1655,6 +1678,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if ($op === 'limit') { $lm = post('limit'); if (!ctype_digit($lm) || strlen($lm) > 6) { $bad('Limite inválido.'); break; } job_submit('mail-site', [$site, '--limit', $lm], 'Limite de envio de ' . $site . ': ' . $lm . '/hora'); }
             else job_submit('mail-site', [$site, '--' . $op], ['suspend' => 'Suspender', 'resume' => 'Retomar', 'purge' => 'Apagar retidos do'][$op] . ' envio de email de ' . $site);
             $back = ['t' => 'envio'];
+            break;
+
+        case 'mail_list':
+            $ll = post('l'); $lo = post('op'); $lv = strtolower(trim(post('v')));
+            if (!in_array($ll, ['allow', 'deny'], true) || !in_array($lo, ['add', 'del'], true)) { $bad('Pedido inválido.'); break; }
+            if (!filter_var($lv, FILTER_VALIDATE_EMAIL) && !filter_var($lv, FILTER_VALIDATE_IP) && !preg_match('/^@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $lv)) { $bad('Usa um email, @domínio ou IP.'); break; }
+            job_submit('mail-list', [$ll, $lo, $lv], ($lo === 'add' ? ($ll === 'allow' ? 'Permitir ' : 'Bloquear ') : 'Remover da lista ') . $lv);
+            $back = ['t' => 'spam'];
             break;
 
         case 'mail_queue':
@@ -2181,7 +2212,7 @@ $titles = [
     'servicos' => 'Estado dos serviços e ações de manutenção.',
     'conta'    => 'Acesso ao painel.',
     'recursos' => 'Utilização do servidor e de cada site, atualizada a cada 5 segundos.',
-    'ficheiros'=> 'Ficheiros de cada site, geridos com o utilizador do próprio site.',
+    'ficheiros'=> 'Ficheiros de todos os sites e das caixas de correio, cada um gerido com o seu próprio utilizador.',
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
     'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
@@ -2455,20 +2486,42 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($page === 'ficheiros'):
     $names = [];
     foreach ($sites as $s) { $n = (string)($s['name'] ?? ''); if (valid_site($n)) $names[] = $n; }
-    $fmSite = in_array(qget('site'), $names, true) ? qget('site') : ($names[0] ?? '');
+    $mailOnFm = !empty($state['mail']['enabled']);
+    $fmSite = in_array(qget('site'), $names, true) ? qget('site') : (($mailOnFm && qget('site') === '_email') ? '_email' : '');
+    $fmArea = qget('area') === 'sites' ? 'sites' : '';
+    $nDom = is_array($state['mail']['domains'] ?? null) ? count($state['mail']['domains']) : 0;
 ?>
-      <?php if (!$names): ?>
-        <section class="card"><div class="empty"><b>Ainda não há sites</b>Cria um site para poderes gerir os ficheiros dele.<br><button class="btn" type="button" data-open="dlg-site-new"><?= ic('plus') ?>Novo site</button></div></section>
+      <?php if ($fmSite === ''): ?>
+      <section class="card">
+        <div class="card-h"><nav class="crumbs fm-pre" aria-label="Caminho"><a href="?p=ficheiros"><?= ic('home') ?>Ficheiros</a><?php if ($fmArea === 'sites'): ?><span>›</span><a href="?p=ficheiros&amp;area=sites">Sites</a><?php endif; ?></nav></div>
+        <table class="list cards fm-root">
+          <thead><tr><th>Nome</th><th>Conteúdo</th><th>Localização</th></tr></thead>
+          <tbody>
+          <?php if ($fmArea === ''): ?>
+            <tr><td class="first" data-label="Nome"><a class="who" href="?p=ficheiros&amp;area=sites"><span class="av t-blue"><?= ic('folder') ?></span><span class="nm">Sites</span></a></td><td data-label="Conteúdo"><?= count($names) ?> site<?= count($names) === 1 ? '' : 's' ?></td><td class="mono mu" data-label="Localização">/srv/www</td></tr>
+            <?php if ($mailOnFm): ?>
+            <tr><td class="first" data-label="Nome"><a class="who" href="?p=ficheiros&amp;site=_email"><span class="av t-vio"><?= ic('mail') ?></span><span class="nm">Email</span></a></td><td data-label="Conteúdo"><?= $nDom ?> domínio<?= $nDom === 1 ? '' : 's' ?></td><td class="mono mu" data-label="Localização">/var/mail/vhosts</td></tr>
+            <?php else: ?>
+            <tr><td class="first" data-label="Nome"><span class="who"><span class="av t-vio"><?= ic('mail') ?></span><span class="nm mu">Email</span></span></td><td class="mu" data-label="Conteúdo">O email não está ativo · <a href="?p=email">Ativar</a></td><td class="mono mu" data-label="Localização">/var/mail/vhosts</td></tr>
+            <?php endif; ?>
+          <?php else: ?>
+            <?php if (!$names): ?><tr><td colspan="3"><div class="empty"><b>Ainda não há sites</b><button class="btn" type="button" data-open="dlg-site-new"><?= ic('plus') ?>Novo site</button></div></td></tr><?php endif; ?>
+            <?php foreach ($sites as $s): $n = (string)($s['name'] ?? ''); if (!valid_site($n)) continue; $mu = site_main_url($s); ?>
+            <tr><td class="first" data-label="Nome"><a class="who" href="?p=ficheiros&amp;site=<?= h(rawurlencode($n)) ?>"><span class="av <?= tone($n) ?>"><?= ic('folder') ?></span><span class="nm"><?= h($n) ?></span></a></td><td data-label="Conteúdo" class="mu"><?= $mu !== '' ? h(preg_replace('#^https?://|/$#', '', $mu)) . ' · ' : '' ?>porta <?= (int)$s['port'] ?></td><td class="mono mu" data-label="Localização">/srv/www/<?= h($n) ?></td></tr>
+            <?php endforeach; ?>
+          <?php endif; ?>
+          </tbody>
+        </table>
+        <div class="card-f mu">Cada pasta é aberta com o utilizador do respetivo site (ou do email), por isso os ficheiros criados ficam sempre com o dono certo. Os ficheiros do sistema não são acessíveis pelo painel.</div>
+      </section>
       <?php else: ?>
-      <section class="card fm" id="fm" data-site="<?= h($fmSite) ?>" data-dir="<?= h(qget('dir')) ?>">
+      <section class="card fm" id="fm" data-site="<?= h($fmSite) ?>" data-label="<?= h($fmSite === '_email' ? 'Email' : $fmSite) ?>" data-noedit="<?= $fmSite === '_email' ? '1' : '0' ?>" data-dir="<?= h(qget('dir')) ?>">
         <div class="fm-bar">
-          <select class="in fm-site" id="fm-site" aria-label="Site">
-            <?php foreach ($names as $n): ?><option value="<?= h($n) ?>"<?= $n === $fmSite ? ' selected' : '' ?>><?= h($n) ?></option><?php endforeach; ?>
-          </select>
+          <nav class="crumbs fm-pre" aria-label="Raiz"><a href="?p=ficheiros"><?= ic('home') ?>Ficheiros</a><span>›</span><?php if ($fmSite !== '_email'): ?><a href="?p=ficheiros&amp;area=sites">Sites</a><span>›</span><?php endif; ?></nav>
           <nav class="crumbs" id="fm-crumbs" aria-label="Caminho"></nav>
           <div class="fm-tools">
             <button class="btn sm sec" type="button" data-fm="mkdir"><?= ic('folderplus') ?>Nova pasta</button>
-            <button class="btn sm sec" type="button" data-fm="newfile"><?= ic('file') ?>Novo ficheiro</button>
+            <?php if ($fmSite !== '_email'): ?><button class="btn sm sec" type="button" data-fm="newfile"><?= ic('file') ?>Novo ficheiro</button><?php endif; ?>
             <label class="btn sm sec"><?= ic('upload') ?>Enviar pasta<input type="file" id="fm-updir" webkitdirectory multiple hidden></label>
             <label class="btn sm"><?= ic('upload') ?>Enviar ficheiros<input type="file" id="fm-upfiles" multiple hidden></label>
           </div>
@@ -2488,7 +2541,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           </table>
           <div class="fm-hint">Larga aqui para enviar para esta pasta</div>
         </div>
-        <div class="card-f mu" id="fm-foot">Arrasta ficheiros ou pastas para a lista para os enviar. Os envios são feitos por partes e retomam se a ligação falhar.</div>
+        <div class="card-f mu" id="fm-foot"><?= $fmSite === '_email' ? 'Área Email: uma pasta por domínio e por caixa (formato Maildir). Podes ver, descarregar e apagar; as mensagens não se editam aqui para não danificar os índices do Dovecot.' : 'Arrasta ficheiros ou pastas para a lista para os enviar. Os envios são feitos por partes e retomam se a ligação falhar.' ?></div>
       </section>
       <div class="fm-menu" id="fm-menu" hidden></div>
       <div class="ups" id="fm-ups" hidden>
@@ -3116,7 +3169,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($page === 'email'):
     $ml = is_array($state['mail'] ?? null) ? $state['mail'] : ['enabled' => false];
     $mOn = !empty($ml['enabled']);
-    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'antispam'], true) ? qget('t') : 'caixas';
+    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'spam', 'antispam'], true) ? qget('t') : 'caixas';
+    $mHist = is_array($ml['history'] ?? null) ? $ml['history'] : [];
+    $mLists = is_array($ml['lists'] ?? null) ? $ml['lists'] : [];
     $mHost = (string)($ml['host'] ?? '');
     $mDomains = is_array($ml['domains'] ?? null) ? $ml['domains'] : [];
     $mBoxes = is_array($ml['boxes'] ?? null) ? $ml['boxes'] : [];
@@ -3140,13 +3195,19 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
 <?php else: ?>
       <nav class="tabs" aria-label="Secções do email">
-        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'antispam' => 'Antispam'] as $tk => $tl): ?>
+        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'spam' => 'Spam e listas', 'antispam' => 'Antispam'] as $tk => $tl): ?>
           <a class="chip<?= $tab === $tk ? ' prim' : '' ?>" href="?p=email&amp;t=<?= $tk ?>"><?= h($tl) ?></a>
         <?php endforeach; ?>
         <span class="mu" style="margin-left:auto">Servidor: <b class="mono"><?= h($mHost) ?></b> <?= !empty($ml['services_ok']) ? '<span class="pill p-ok">Serviços OK</span>' : '<span class="pill p-err">Serviço parado</span>' ?></span>
       </nav>
 
   <?php if ($tab === 'caixas'): ?>
+      <section class="card wm-card"><div class="row-list"><div class="item">
+        <span class="tile t-acc"><?= ic('mail') ?></span>
+        <div class="grow"><div class="nm">Webmail</div><div class="mu">Os utilizadores entram com o endereço e a password da caixa. Em Definições → Respostas automáticas configuram férias/ausência; em Filtros, regras próprias.</div></div>
+        <a class="btn" href="<?= h($ml['webmail'] ?? '#') ?>" target="_blank" rel="noopener"><?= ic('ext') ?><?= h(preg_replace('#^https://#', '', (string)($ml['webmail'] ?? ''))) ?></a>
+      </div></div></section>
+
       <section class="card">
         <div class="card-h"><div><h2>Domínios de email</h2><p>Cada domínio tem a sua chave DKIM. Cria os registos DNS e usa "Verificar".</p></div><button class="chip sm soft" type="button" data-open="dlg-md-new">Adicionar domínio</button></div>
         <?php if (!$mDomains): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio para criar caixas de correio.</div>
@@ -3301,6 +3362,59 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           </tbody>
         </table>
         <div class="card-f mu">Os sites não podem usar a porta 25 nem o sendmail diretamente (bloqueado na firewall e no Postfix). O remetente só é aceite se for de um domínio do próprio site; caso contrário é usado <span class="mono">&lt;site&gt;@<?= h($mHost) ?></span>. Ao fim de 5 mensagens com spam numa hora, o envio do site é suspenso.</div>
+      </section>
+
+  <?php elseif ($tab === 'spam'): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Mensagens rejeitadas ou marcadas como spam</h2><p>Últimas mensagens que o antispam recusou (rejeitada) ou entregou na pasta Lixo (spam). Se for um falso positivo, permite o remetente ou o domínio.</p></div></div>
+        <?php if (!$mHist): ?><div class="empty">Sem mensagens rejeitadas ou marcadas como spam recentemente.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Data</th><th>Remetente</th><th>Destinatário</th><th>Assunto</th><th class="r">Pontos</th><th>Resultado</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($mHist as $i => $hm): $fr = strtolower(trim((string)preg_replace('/^.*<|>.*$/', '', (string)($hm['from'] ?? '')))); ?>
+            <tr>
+              <td class="first" data-label="Data"><span class="mono"><?= h(gmdate('d/m H:i', (int)($hm['t'] ?? 0) + tz_off(live_stats()))) ?></span></td>
+              <td class="mono" data-label="Remetente"><?= h($fr) ?><div class="mu"><?= h($hm['ip'] ?? '') ?></div></td>
+              <td class="mono" data-label="Destinatário"><?= h($hm['to'] ?? '') ?></td>
+              <td data-label="Assunto" style="max-width:280px"><?= h(mb_strimwidth((string)($hm['subject'] ?? ''), 0, 80, '…')) ?><div class="mu mono" style="font-size:11px"><?= h(implode(' ', (array)($hm['symbols'] ?? []))) ?></div></td>
+              <td class="r" data-label="Pontos"><?= h(number_format((float)($hm['score'] ?? 0), 1, ',', '')) ?></td>
+              <td data-label="Resultado"><?= ($hm['action'] ?? '') === 'reject' ? '<span class="pill p-err">Rejeitada</span>' : '<span class="pill p-warn">Lixo</span>' ?></td>
+              <td class="act r">
+                <?php if (filter_var($fr, FILTER_VALIDATE_EMAIL)): ?>
+                <details class="dd"><summary class="iconbtn" aria-label="Ações"><?= ic('dots') ?></summary>
+                  <div class="dd-menu">
+                    <form method="post"><?= act_fields('mail_list', ['l' => 'allow', 'op' => 'add', 'v' => $fr]) ?><button type="submit"><?= ic('check') ?>Permitir este remetente</button></form>
+                    <form method="post"><?= act_fields('mail_list', ['l' => 'allow', 'op' => 'add', 'v' => '@' . substr($fr, strpos($fr, '@') + 1)]) ?><button type="submit"><?= ic('check') ?>Permitir o domínio @<?= h(substr($fr, strpos($fr, '@') + 1)) ?></button></form>
+                    <hr>
+                    <form method="post"><?= act_fields('mail_list', ['l' => 'deny', 'op' => 'add', 'v' => $fr]) ?><button type="submit" class="dan"><?= ic('ban') ?>Bloquear este remetente</button></form>
+                  </div></details>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+        <div class="card-f mu">As mensagens rejeitadas não chegam a ser aceites (o remetente recebe o aviso de erro); as marcadas como spam vão para a pasta Lixo de cada caixa. Quando um utilizador move uma mensagem para o Lixo, ou a tira de lá, o antispam aprende com isso.</div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Listas de remetentes</h2><p>Permitidos passam sempre o antispam; bloqueados são sempre rejeitados. Aceita endereços, @domínios e IPs.</p></div></div>
+        <form method="post" class="card-b" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <?= act_fields('mail_list', ['op' => 'add']) ?>
+          <label class="fld" style="flex:1;min-width:240px">Endereço, @domínio ou IP<input class="in mono" name="v" required placeholder="faturas@fornecedor.pt, @fornecedor.pt ou 203.0.113.5"></label>
+          <label class="fld">Lista<select class="in" name="l"><option value="allow">Permitir</option><option value="deny">Bloquear</option></select></label>
+          <button class="btn" type="submit" style="height:44px">Adicionar</button>
+        </form>
+        <?php if ($mLists): ?>
+        <div class="row-list">
+          <?php foreach ($mLists as $li): ?>
+            <div class="item"><span class="pill <?= $li['list'] === 'allow' ? 'p-ok' : 'p-err' ?>"><?= $li['list'] === 'allow' ? 'Permitido' : 'Bloqueado' ?></span><div class="grow mono"><?= h($li['value']) ?></div>
+              <form method="post"><?= act_fields('mail_list', ['l' => (string)$li['list'], 'op' => 'del', 'v' => (string)$li['value']]) ?><button class="btn sm sec" type="submit">Remover</button></form></div>
+          <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
       </section>
 
   <?php elseif ($tab === 'fila'): ?>
@@ -3853,6 +3967,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   var IC = <?= json_encode(['dir' => ic('folder', 'dir'), 'zip' => ic('zip', 'zip'), 'code' => ic('code', 'code'), 'file' => ic('file', 'file'), 'up' => ic('up', 'file'), 'dots' => ic('dots'), 'home' => ic('home'), 'open' => ic('folder'), 'dl' => ic('download'), 'edit' => ic('edit'), 'ren' => ic('edit'), 'move' => ic('move'), 'zipb' => ic('zip'), 'perm' => ic('lock'), 'del' => ic('trash'), 'x' => ic('x')], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
   var $ = function (id) { return document.getElementById(id); };
   var st = { site: root.getAttribute('data-site'), path: '', items: [], sel: {} };
+  var NOEDIT = root.getAttribute('data-noedit') === '1', LABEL = root.getAttribute('data-label') || st.site;
   var EDIT = /(\.(php|phtml|inc|html?|css|scss|js|mjs|json|txt|md|xml|svg|ini|conf|env|log|csv|sql|ya?ml|twig|tpl|sh|py|htaccess|htpasswd|user\.ini)|^\.[a-z]+)$/i;
   var ARCH = /\.(zip|tar|tgz|tar\.gz|tar\.bz2)$/i;
   var CH = 8 * 1024 * 1024;
@@ -3930,7 +4045,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $('fm-foot').textContent = nd + ' pasta(s), ' + (st.items.length - nd) + ' ficheiro(s)' + (free ? ' · ' + bytes(free) + ' livres no disco' : '') + ' · arrasta ficheiros ou pastas para a lista para os enviar';
   }
   function crumbs() {
-    var c = $('fm-crumbs'), parts = st.path ? st.path.split('/') : [], h = '<button type="button" data-path="">' + IC.home + esc(st.site) + '</button>';
+    var c = $('fm-crumbs'), parts = st.path ? st.path.split('/') : [], h = '<button type="button" data-path="">' + esc(LABEL) + '</button>';
     parts.forEach(function (p, i) { h += '<span class="sep">/</span><button type="button" data-path="' + esc(parts.slice(0, i + 1).join('/')) + '">' + esc(p) + '</button>'; });
     c.innerHTML = h;
   }
@@ -3950,7 +4065,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
   function open(it) {
     if (it.d) return load(join(st.path, it.n));
-    if (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n) && it.n.indexOf('.') === -1) return edit(join(st.path, it.n));
+    if (!NOEDIT && (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n) && it.n.indexOf('.') === -1)) return edit(join(st.path, it.n));
     download(it);
   }
   function act(name, items) {
@@ -4005,7 +4120,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   function showMenu(it, btn) {
     var o = [];
     if (it.d) o.push(['open', IC.open, 'Abrir']); else o.push(['dl', IC.dl, 'Descarregar']);
-    if (!it.d && (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n))) o.push(['edit', IC.edit, 'Editar']);
+    if (!NOEDIT && !it.d && (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n))) o.push(['edit', IC.edit, 'Editar']);
     if (ARCH.test(it.n)) { o.push(['extract', IC.zipb, 'Extrair aqui']); o.push(['extractto', IC.zipb, 'Extrair para pasta…']); }
     o.push(['rename', IC.ren, 'Mudar o nome'], ['move', IC.move, 'Mover…'], ['zip', IC.zipb, 'Compactar em ZIP'], ['chmod', IC.perm, 'Permissões'], ['-'], ['delete', IC.del, 'Apagar']);
     menu.innerHTML = o.map(function (x) { return x[0] === '-' ? '<hr>' : '<button type="button" data-m="' + x[0] + '"' + (x[0] === 'delete' ? ' class="dan"' : '') + '>' + x[1] + x[2] + '</button>'; }).join('');
@@ -4041,7 +4156,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   });
   $('fm-all').addEventListener('change', function (e) { st.sel = {}; if (e.target.checked) st.items.forEach(function (i) { st.sel[i.n] = 1; }); render(); });
   $('fm-crumbs').addEventListener('click', function (e) { var b = e.target.closest('[data-path]'); if (b) load(b.getAttribute('data-path')); });
-  $('fm-site').addEventListener('change', function (e) { st.site = e.target.value; load(''); });
+  if ($('fm-site')) $('fm-site').addEventListener('change', function (e) { st.site = e.target.value; load(''); });
   root.addEventListener('click', function (e) {
     var b = e.target.closest('[data-fm]'); if (!b) return;
     var n = b.getAttribute('data-fm');
@@ -6509,7 +6624,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.0.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.1.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -6533,9 +6648,18 @@ function fm_json(array $d, int $code = 200): void {
 function fm_fail(int $code, string $m, array $extra = []): void { fm_json(['ok' => false, 'error' => $m] + $extra, $code); }
 
 $site = (string)($_SERVER['MP_FM_SITE'] ?? '');
-if (!preg_match('/^[a-z][a-z0-9-]{0,23}$/', $site)) fm_fail(400, 'Site inválido.');
-$ROOT = realpath('/srv/www/' . $site);
-if ($ROOT === false || !is_dir($ROOT)) fm_fail(404, 'A pasta do site não foi encontrada.');
+if ($site === '_email') {
+    // área Email: todas as caixas de correio (corre como vmail); as mensagens não se editam aqui
+    $ROOT = realpath('/var/mail/vhosts');
+    $TMP = '/var/lib/minipainel-mailfm';
+    $NOEDIT = true;
+} else {
+    if (!preg_match('/^[a-z][a-z0-9-]{0,23}$/', $site)) fm_fail(400, 'Site inválido.');
+    $ROOT = realpath('/srv/www/' . $site);
+    $TMP = $ROOT === false ? '' : $ROOT . '/tmp';
+    $NOEDIT = false;
+}
+if ($ROOT === false || !is_dir($ROOT)) fm_fail(404, 'A pasta não foi encontrada.');
 umask(0027);
 
 /* ---------- caminhos ---------- */
@@ -6646,6 +6770,7 @@ case 'list':
     fm_json(['ok' => true, 'path' => $rel, 'items' => $items, 'free' => $free === false ? null : $free]);
 
 case 'get':
+    if ($NOEDIT) fm_fail(403, 'Na área Email as mensagens não se editam aqui (podes descarregá-las).');
     $f = fm_abs(fm_rel(q('p')));
     if (!is_file($f)) fm_fail(400, 'Não é um ficheiro.');
     if ((int)filesize($f) > FM_MAX_EDIT) fm_fail(413, 'O ficheiro tem mais de 2 MB; descarrega-o para editar.');
@@ -6668,7 +6793,7 @@ case 'dl':
 case 'upstat':
     $id = q('id');
     if (!preg_match('/^[A-Za-z0-9_-]{8,64}$/', $id)) fm_fail(400, 'Identificador inválido.');
-    $part = $ROOT . '/tmp/.mp-up-' . $id . '.part';
+    $part = $TMP . '/.mp-up-' . $id . '.part';
     fm_json(['ok' => true, 'size' => is_file($part) ? filesize($part) : 0]);
 
 case 'mkdir':
@@ -6724,6 +6849,7 @@ case 'delete':
     fm_json(['ok' => true]);
 
 case 'save':
+    if ($NOEDIT) fm_fail(403, 'Na área Email as mensagens não se editam aqui.');
     $rel = fm_rel(in_s($in, 'p'));
     $f = fm_entry($rel, false);
     $content = in_s($in, 'content');
@@ -6859,10 +6985,10 @@ case 'upload':
     $relName = fm_rel(in_s($in, 'name'));
     if ($relName === '') fm_fail(400, 'Nome inválido.');
     foreach (explode('/', $relName) as $seg) fm_name($seg);
-    $part = $ROOT . '/tmp/.mp-up-' . $id . '.part';
-    if (!is_dir($ROOT . '/tmp')) fm_fail(500, 'A pasta tmp do site não existe.');
+    $part = $TMP . '/.mp-up-' . $id . '.part';
+    if (!is_dir($TMP)) fm_fail(500, 'A pasta temporária não existe.');
     // limpa envios abandonados há mais de um dia
-    if (mt_rand(1, 20) === 1) foreach ((array)glob($ROOT . '/tmp/.mp-up-*.part') as $old) { if (is_string($old) && filemtime($old) < time() - 86400) @unlink($old); }
+    if (mt_rand(1, 20) === 1) foreach ((array)glob($TMP . '/.mp-up-*.part') as $old) { if (is_string($old) && filemtime($old) < time() - 86400) @unlink($old); }
     clearstatcache(true, $part);
     $have = is_file($part) ? (int)filesize($part) : 0;
     if ($offset !== $have) fm_fail(409, 'Fora de sequência.', ['size' => $have]);
@@ -6905,11 +7031,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.0.0
+#  mpanel — IDDigital Hosting CLI v2.1.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.0.0"
+MP_VERSION="2.1.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -7183,8 +7309,10 @@ cmd_fm_sync(){
   for f in "$(php_pool_dir "$PANEL_PHP")"/mp-fm-*.conf; do
     [ -f "$f" ] || continue
     n=$(basename "$f" .conf); n=${n#mp-fm-}
+    [ "$n" = _email ] && continue
     site_exists "$n" || rm -f "$f"
   done
+  mail_on && write_fm_pool_email
   apply_php "$PANEL_PHP" || die "Configuração do PHP-FPM $PANEL_PHP inválida depois de configurar o gestor de ficheiros."
   apply_nginx || warn "Verifica o nginx (nginx -t)."
   echo "Gestor de ficheiros configurado para $(site_names | wc -l) site(s)."
@@ -9338,14 +9466,16 @@ cmd_mail_enable(){
     cert_files mp-mail >/dev/null || self_issue mp-mail "$h"
   fi
   rm -f "$errf"
-  mail_postfix_config; mail_dovecot_config; mail_rspamd_config; mail_apply
+  mail_postfix_config; mail_dovecot_config; mail_rspamd_config; mail_learning_config; mail_lists_config; mail_apply
   local s; for s in $(mail_svc_redis) unbound rspamd dovecot postfix; do systemctl enable "$s" >/dev/null 2>&1; systemctl restart "$s" >/dev/null 2>&1 || warn "O serviço $s não arrancou."; done
   for s in 25 465 587 993 995 143 110; do fw_open "$s" >/dev/null 2>&1; done
   mail_fw_apply
+  echo "A instalar o webmail (Roundcube)..."; mail_webmail_setup
+  write_fm_pool_email
   # o mail() do PHP dos sites passa a ir para a fila controlada do painel
   for s in $(site_names); do mail_site_spool "$s"; write_pool "$s" "$(site_get "$s" PHP)"; done
   for s in $(php_installed); do apply_php "$s" >/dev/null 2>&1; done
-  echo "Email ativo em $h. Próximo passo: adiciona um domínio de email e cria os registos DNS indicados."
+  echo "Email ativo em $h. Webmail: https://$h:$WM_PORT. Próximo passo: adiciona um domínio de email e cria os registos DNS indicados."
   return 0
 }
 mail_host_web(){ # porta 80 para a validação do certificado do servidor de correio
@@ -9621,13 +9751,14 @@ mail_state_json(){
   jq -n --argjson j "$j" --argjson dns "$dns" --argjson q "${q:-[]}" --argjson sites "$sites" --argjson used "$used" --argjson dk "${dk:-null}" \
     --arg h "$(mail_get HOST)" --arg dnsbl "$(mail_get DNSBL)" --arg sl "$(mail_get SITE_LIMIT 100)" --arg bl "$(mail_get BOX_LIMIT 200)" \
     --arg af "$(mail_get AUTH_FAILS 10)" --arg av "$(mail_get CLAMAV 0)" --arg exp "$(cert_expiry mp-mail)" \
+    --arg wmp "$WM_PORT" --argjson lists "$(mail_lists_json)" --argjson hist "$(mail_history_json)" \
     --arg st "$(for x in postfix dovecot rspamd; do systemctl is-active "$x" 2>/dev/null; done | grep -c '^active$')" \
     '{enabled:true, host:$h, dnsbl:$dnsbl, site_limit:($sl|tonumber), box_limit:($bl|tonumber), auth_fails:($af|tonumber), clamav:($av=="1"),
       cert_exp:(if $exp == "" then null else ($exp|tonumber) end), services_ok:($st == "3"),
       domains:[$j.domains | keys[] | . as $d | {name:$d, boxes:([$j.boxes | keys[] | select(endswith("@" + $d))] | length), dns:($dns[$d] // null), dkim:(($dk // {})[$d] // "")}],
       boxes:[$j.boxes | to_entries[] | {email:.key, quota:.value.quota, used:($used[.key] // 0)}],
       aliases:[$j.aliases | to_entries[] | {alias:.key, dests:.value}],
-      sites:$sites, queue:$q}'
+      sites:$sites, queue:$q, webmail:("https://" + $h + ":" + $wmp), lists:$lists, history:$hist}'
 }
 cmd_mail_dns_info(){ # registos a criar para um domínio
   local d="${1:-}" h ip; mail_need
@@ -9638,6 +9769,246 @@ cmd_mail_dns_info(){ # registos a criar para um domínio
   printf '_dmarc.%s\tTXT\tv=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:postmaster@%s\n' "$d" "$d"
   printf '%s\tA\t%s\n' "$h" "${ip:-<IP público>}"
   printf '%s\tPTR\t%s (pedir ao fornecedor do servidor)\n' "${ip:-<IP público>}" "$h"
+}
+
+# --- gestor de ficheiros da área Email (corre como vmail; só /var/mail/vhosts) ---
+MAILFM_TMP=/var/lib/minipainel-mailfm
+write_fm_pool_email(){
+  local f; f=$(fm_pool_file _email)
+  install -d -o vmail -g vmail -m 700 "$MAILFM_TMP"
+  cat > "$f" <<EOF
+; IDDigital Hosting — gestor de ficheiros da área Email (corre como vmail; gerido pelo mpanel)
+[mp-fm-_email]
+user = vmail
+group = vmail
+listen = $(php_run_dir "$PANEL_PHP")/mp-fm-_email.sock
+listen.owner = $WEB_USER
+listen.group = $WEB_GROUP
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 4
+pm.process_idle_timeout = 30s
+request_terminate_timeout = 0
+php_admin_value[open_basedir] = $VMAIL/:$MAILFM_TMP/:/opt/minipainel/files/
+php_admin_value[upload_tmp_dir] = $MAILFM_TMP
+php_admin_value[sys_temp_dir] = $MAILFM_TMP
+php_admin_value[upload_max_filesize] = 64M
+php_admin_value[post_max_size] = 72M
+php_admin_value[memory_limit] = 256M
+php_value[max_execution_time] = 900
+php_admin_value[max_input_time] = 900
+php_admin_value[error_log] = $MAILFM_TMP/ficheiros-error.log
+php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec
+EOF
+  chmod 644 "$f"
+}
+
+# --- webmail (Roundcube do repositório da distribuição: atualizações de segurança automáticas) ---
+WM_DATA=/var/lib/minipainel-webmail
+WM_PORT=2096
+wm_paths(){ # define WM_ROOT (raiz pública), WM_CONF (config.inc.php) e WM_SQL
+  if [ -d /var/lib/roundcube/public_html ]; then WM_ROOT=/var/lib/roundcube/public_html; WM_CONF=/etc/roundcube/config.inc.php; WM_SQL=/usr/share/roundcube/SQL
+  else WM_ROOT=/usr/share/roundcubemail; WM_CONF=/etc/roundcubemail/config.inc.php; WM_SQL=/usr/share/roundcubemail/SQL; fi
+  [ -d "$WM_SQL" ] || WM_SQL=/var/lib/roundcube/SQL
+}
+mail_webmail_setup(){
+  local key ip6="" c
+  if [ "$OS_FAMILY" = debian ]; then
+    echo "roundcube-core roundcube/dbconfig-install boolean false" | debconf-set-selections
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends roundcube-core roundcube-sqlite3 roundcube-plugins sqlite3 >/dev/null 2>&1 || { warn "Falhou a instalação do Roundcube."; return 1; }
+  else
+    dnf install -y -q roundcubemail sqlite >/dev/null 2>&1 || { warn "Falhou a instalação do Roundcube."; return 1; }
+  fi
+  wm_paths
+  id mp-webmail >/dev/null 2>&1 || useradd -r -U -d "$WM_DATA" -s "$(command -v nologin || echo /sbin/nologin)" -c "IDDigital Hosting webmail" mp-webmail
+  install -d -o mp-webmail -g mp-webmail -m 750 "$WM_DATA" "$WM_DATA/temp" "$WM_DATA/logs"
+  [ -s /etc/minipainel/webmail.key ] || ( umask 077; openssl rand -base64 18 | tr -d '\n=' | cut -c1-24 > /etc/minipainel/webmail.key )
+  key=$(cat /etc/minipainel/webmail.key)
+  cat > "$WM_CONF" <<EOF
+<?php
+// IDDigital Hosting — configuração do webmail (gerada pelo painel; não editar à mão)
+\$config = [];
+\$config['db_dsnw'] = 'sqlite:///$WM_DATA/roundcube.db?mode=0640';
+\$config['imap_host'] = 'ssl://127.0.0.1:993';
+\$config['smtp_host'] = 'tls://127.0.0.1:587';
+\$config['smtp_user'] = '%u';
+\$config['smtp_pass'] = '%p';
+\$config['imap_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+\$config['smtp_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+\$config['managesieve_host'] = 'tls://127.0.0.1';
+\$config['managesieve_port'] = 4190;
+\$config['managesieve_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+\$config['managesieve_vacation'] = 1;
+\$config['markasjunk_learning_driver'] = null;
+\$config['product_name'] = 'IDDigital Webmail';
+\$config['support_url'] = '';
+\$config['des_key'] = '$key';
+\$config['plugins'] = ['archive', 'zipdownload', 'managesieve', 'markasjunk'];
+\$config['language'] = 'pt_PT';
+\$config['skin'] = 'elastic';
+\$config['temp_dir'] = '$WM_DATA/temp/';
+\$config['log_dir'] = '$WM_DATA/logs/';
+\$config['log_driver'] = 'file';
+\$config['log_logins'] = true;
+\$config['login_rate_limit'] = 3;
+\$config['enable_installer'] = false;
+\$config['ip_check'] = true;
+\$config['use_https'] = true;
+\$config['session_lifetime'] = 30;
+\$config['max_message_size'] = '25M';
+\$config['username_domain_forced'] = false;
+\$config['login_lc'] = 2;
+\$config['junk_mbox'] = 'Junk';
+\$config['create_default_folders'] = true;
+EOF
+  chown root:mp-webmail "$WM_CONF"; chmod 640 "$WM_CONF"
+  if [ ! -s "$WM_DATA/roundcube.db" ]; then
+    sqlite3 "$WM_DATA/roundcube.db" < "$WM_SQL/sqlite.initial.sql" >/dev/null 2>&1 || warn "Não foi possível criar a base de dados do webmail."
+  else
+    runuser -u mp-webmail -- php "$(dirname "$WM_SQL")/bin/updatedb.sh" --package=roundcube --dir="$WM_SQL" >/dev/null 2>&1
+  fi
+  chown mp-webmail:mp-webmail "$WM_DATA/roundcube.db"; chmod 640 "$WM_DATA/roundcube.db"
+  # PHP-FPM próprio (utilizador sem acesso aos sites)
+  cat > "$(php_pool_dir "$PANEL_PHP")/mp-webmail.conf" <<EOF
+; IDDigital Hosting — webmail (corre como mp-webmail; gerido pelo mpanel)
+[mp-webmail]
+user = mp-webmail
+group = mp-webmail
+listen = $(php_run_dir "$PANEL_PHP")/mp-webmail.sock
+listen.owner = $WEB_USER
+listen.group = $WEB_GROUP
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 10
+pm.process_idle_timeout = 30s
+php_admin_value[upload_max_filesize] = 25M
+php_admin_value[post_max_size] = 30M
+php_admin_value[memory_limit] = 256M
+php_admin_value[session.gc_maxlifetime] = 21600
+php_admin_value[upload_tmp_dir] = $WM_DATA/temp
+php_admin_value[sys_temp_dir] = $WM_DATA/temp
+php_admin_value[error_log] = $WM_DATA/logs/php-error.log
+php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+php_admin_flag[expose_php] = off
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec
+EOF
+  apply_php "$PANEL_PHP" >/dev/null 2>&1 || warn "Verifica o PHP-FPM $PANEL_PHP."
+  c=$(mail_cert)
+  [ "${IPV6:-0}" = 1 ] && ip6="    listen [::]:$WM_PORT ssl http2;"
+  cat > "$NGX_CONFD/webmail.conf" <<EOF
+# IDDigital Hosting — webmail (Roundcube) em https://$(mail_get HOST):$WM_PORT
+server {
+    listen $WM_PORT ssl http2;
+$ip6
+    server_name _;
+    ssl_certificate     ${c%% *};
+    ssl_certificate_key ${c##* };
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:MPSSL:1m;
+    error_page 497 =301 https://\$host:\$server_port\$request_uri;
+    root $WM_ROOT;
+    index index.php;
+    client_max_body_size 30M;
+    access_log /var/log/nginx/webmail.access.log;
+    error_log  /var/log/nginx/webmail.error.log;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+    location ~ ^/(config|temp|logs|SQL|bin|installer|vendor|program/(include|lib|localization|steps))(/|\$) { deny all; }
+    location ~ /\\. { deny all; }
+    location ~ \\.php(/|\$) {
+        fastcgi_split_path_info ^(.+?\\.php)(/.*)\$;
+        if (!-f \$document_root\$fastcgi_script_name) { return 404; }
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param PATH_INFO \$fastcgi_path_info;
+        fastcgi_param HTTPS on;
+        fastcgi_pass unix:$(php_run_dir "$PANEL_PHP")/mp-webmail.sock;
+        fastcgi_read_timeout 300s;
+    }
+}
+EOF
+  chmod 644 "$NGX_CONFD/webmail.conf"
+  fw_open "$WM_PORT" >/dev/null 2>&1
+  apply_nginx >/dev/null 2>&1 || warn "Verifica o nginx (nginx -t)."
+  return 0
+}
+
+# --- o Bayes aprende quando o utilizador move mensagens para o Lixo ou para fora dele ---
+mail_learning_config(){
+  install -d -m 755 /etc/dovecot/sieve
+  printf '#!/bin/sh\nexec /usr/bin/rspamc -h 127.0.0.1:11334 learn_spam\n' > /etc/dovecot/sieve/mp-learn-spam.sh
+  printf '#!/bin/sh\nexec /usr/bin/rspamc -h 127.0.0.1:11334 learn_ham\n' > /etc/dovecot/sieve/mp-learn-ham.sh
+  chmod 755 /etc/dovecot/sieve/mp-learn-spam.sh /etc/dovecot/sieve/mp-learn-ham.sh
+  printf 'require ["vnd.dovecot.pipe", "copy", "imapsieve"];\npipe :copy "mp-learn-spam.sh";\n' > /etc/dovecot/sieve/mp-learn-spam.sieve
+  printf 'require ["vnd.dovecot.pipe", "copy", "imapsieve", "environment", "variables"];\nif environment :matches "imap.mailbox" "*" { set "mailbox" "${1}"; }\nif string "${mailbox}" "Trash" { stop; }\npipe :copy "mp-learn-ham.sh";\n' > /etc/dovecot/sieve/mp-learn-ham.sieve
+  cat > /etc/dovecot/conf.d/99-minipainel-learn.conf <<'EOF'
+# IDDigital Hosting — aprendizagem do antispam (mover para/de Lixo treina o Bayes do Rspamd)
+protocol imap {
+  mail_plugins = $mail_plugins imap_sieve
+}
+plugin {
+  sieve_plugins = sieve_imapsieve sieve_extprograms
+  sieve_global_extensions = +vnd.dovecot.pipe +vnd.dovecot.environment
+  sieve_pipe_bin_dir = /etc/dovecot/sieve
+  imapsieve_mailbox1_name = Junk
+  imapsieve_mailbox1_causes = COPY APPEND
+  imapsieve_mailbox1_before = file:/etc/dovecot/sieve/mp-learn-spam.sieve
+  imapsieve_mailbox2_name = *
+  imapsieve_mailbox2_from = Junk
+  imapsieve_mailbox2_causes = COPY
+  imapsieve_mailbox2_before = file:/etc/dovecot/sieve/mp-learn-ham.sieve
+}
+EOF
+  sievec /etc/dovecot/sieve/mp-learn-spam.sieve >/dev/null 2>&1; sievec /etc/dovecot/sieve/mp-learn-ham.sieve >/dev/null 2>&1
+  printf 'autolearn = true;\nmin_learns = 50;\n' > "$RSPAMD_LOCAL/classifier-bayes.conf"
+}
+
+# --- listas de remetentes (permitir / bloquear) ---
+MAIL_LISTS=/etc/rspamd/local.d
+mail_lists_config(){
+  local t
+  for t in allow-from allow-domain allow-ip deny-from deny-domain deny-ip; do [ -f "$MAIL_LISTS/mp-$t.map" ] || : > "$MAIL_LISTS/mp-$t.map"; done
+  cat > "$RSPAMD_LOCAL/multimap.conf" <<EOF
+MP_ALLOW_FROM { type = "from"; filter = "email:addr"; map = "$MAIL_LISTS/mp-allow-from.map"; score = -20.0; description = "Remetente permitido no painel"; }
+MP_ALLOW_DOMAIN { type = "from"; filter = "email:domain"; map = "$MAIL_LISTS/mp-allow-domain.map"; score = -20.0; description = "Domínio permitido no painel"; }
+MP_ALLOW_IP { type = "ip"; map = "$MAIL_LISTS/mp-allow-ip.map"; score = -20.0; description = "IP permitido no painel"; }
+MP_DENY_FROM { type = "from"; filter = "email:addr"; map = "$MAIL_LISTS/mp-deny-from.map"; score = 20.0; description = "Remetente bloqueado no painel"; }
+MP_DENY_DOMAIN { type = "from"; filter = "email:domain"; map = "$MAIL_LISTS/mp-deny-domain.map"; score = 20.0; description = "Domínio bloqueado no painel"; }
+MP_DENY_IP { type = "ip"; map = "$MAIL_LISTS/mp-deny-ip.map"; score = 20.0; description = "IP bloqueado no painel"; }
+EOF
+}
+cmd_mail_list(){ # allow|deny add|del <email | @dominio | IP>
+  local l="${1:-}" op="${2:-}" v t f
+  mail_need
+  v=$(printf '%s' "${3:-}" | tr 'A-Z' 'a-z')
+  case "$l" in allow|deny) ;; *) die "Usa: mpanel mail-list allow|deny add|del <email|@domínio|IP>" ;; esac
+  if valid_email "$v"; then t=from
+  elif [[ "$v" == @* ]] && valid_domain "${v#@}"; then t=domain; v=${v#@}
+  elif fw_ip_valid "$v"; then t=ip
+  else die "Valor inválido: usa um email, @domínio ou um IP."; fi
+  f="$MAIL_LISTS/mp-$l-$t.map"; touch "$f"
+  case "$op" in
+    add) grep -qxF "$v" "$f" || echo "$v" >> "$f"; echo "$([ "$l" = allow ] && echo Permitido || echo Bloqueado): $([ "$t" = domain ] && echo "@")$v" ;;
+    del) grep -vxF "$v" "$f" > "$f.tmp"; mv -f "$f.tmp" "$f"; echo "Removido da lista: $([ "$t" = domain ] && echo "@")$v" ;;
+    *) die "Usa add ou del." ;;
+  esac
+  chmod 644 "$f"
+  return 0
+}
+mail_lists_json(){
+  local l t
+  for l in allow deny; do for t in from domain ip; do
+    [ -s "$MAIL_LISTS/mp-$l-$t.map" ] && sed "s/^/$l $t /" "$MAIL_LISTS/mp-$l-$t.map"
+  done; done | jq -R 'split(" ") | {list:.[0], type:.[1], value:(if .[1] == "domain" then "@" + .[2] else .[2] end)}' | jq -cs '.'
+}
+mail_history_json(){ # últimas mensagens rejeitadas ou marcadas como spam (histórico do Rspamd)
+  curl -s -m 5 http://127.0.0.1:11334/history 2>/dev/null | jq -c '[(.rows // [])[] | select(.action == "reject" or .action == "add header" or .action == "rewrite subject") |
+    {t:.unix_time, action:.action, score:((.score // 0) * 10 | floor / 10), from:(.sender_mime // .sender_smtp // ""), to:((.rcpt_mime // .rcpt_smtp // []) | if type == "array" then join(", ") else . end),
+     subject:(.subject // ""), ip:(.ip // ""), symbols:([(.symbols // {}) | to_entries[] | select((.value.score // 0) >= 1) | .key] | .[0:8])}] | .[0:150]' 2>/dev/null || echo '[]'
 }
 
 write_auth(){ # mantém a verificação em dois passos ao mudar a password
@@ -9774,7 +10145,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -9792,7 +10163,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.0.0 (mpanel)
+IDDigital Hosting — CLI v2.1.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -9837,6 +10208,7 @@ Email (Postfix + Dovecot + Rspamd)
   mail-queue list|flush|delete <id>|all
   mail-settings [--dnsbl "zona1 zona2"|none] [--site-limit N] [--box-limit N] [--auth-fails N]
   mail-av on|off                       antivírus ClamAV (~1,2 GB de RAM)
+  mail-list allow|deny add|del <email|@domínio|IP>   listas de remetentes permitidos e bloqueados
 
 Segurança do painel
   panel-allow "IP rede/24 ..."|none    IPs autorizados a abrir o painel (none = todos)
@@ -9954,6 +10326,7 @@ dispatch(){
     mail-dns-info)     cmd_mail_dns_info "$@" ;;
     mail-site)         cmd_mail_site "$@" ;;
     mail-queue)        cmd_mail_queue "$@" ;;
+    mail-list)         cmd_mail_list "$@" ;;
     backup-start)      cmd_backup_start "$@" ;;
     bk-list)           cmd_bk_list "$@" ;;
     bk-restore)        cmd_bk_restore "$@" ;;
@@ -9992,7 +10365,7 @@ if [ "$cmd" = worker ]; then cmd_worker; exit 0; fi
 dispatch "$@"; rc=$?
 if [ "$rc" -eq 0 ]; then
   case "$cmd" in
-    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|panel-allow|ports-access|panel-user|panel-2fa|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-site|mail-queue|state|refresh)
+    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|panel-allow|ports-access|panel-user|panel-2fa|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-site|mail-queue|mail-list|state|refresh)
       write_state || { echo "ERRO: não foi possível gerar o estado do painel ($STATE)." >&2; rc=1; } ;;
   esac
 fi
@@ -10034,7 +10407,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.0.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.1.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -10267,6 +10640,12 @@ mail_authfail(){
     | grep -E 'SASL [A-Z0-9-]+ authentication failed|auth failed' \
     | sed -nE 's/.*rip=([0-9a-fA-F:.]+).*/\1/p; s/.*SASL [A-Z0-9-]+ authentication failed.*/&/; s/^[^[]*\[([0-9a-fA-F:.]+)\]: SASL.*/\1/p' \
     | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
+  local wl=/var/lib/minipainel-webmail/logs/userlogins.log wp=$DIR/webmail-log.pos sz p
+  if [ -f "$wl" ]; then
+    sz=$(stat -c %s "$wl"); p=$(cat "$wp" 2>/dev/null || echo 0); [ "$sz" -lt "$p" ] && p=0
+    tail -c +$(( p + 1 )) "$wl" | grep -a 'Failed login' | sed -nE 's/.* from ([0-9a-fA-F:.]+).*/\1/p' | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
+    echo "$sz" > "$wp"
+  fi
   awk -v s=$(( now - 600 )) '$1 >= s' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
   awk '{ c[$2]++ } END { for (i in c) print c[i], i }' "$f" | while read -r n ip; do
     [ "$n" -ge "$lim" ] || continue
@@ -10373,7 +10752,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.0.0
+#  mp-sendmail — IDDigital Hosting v2.1.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -10411,7 +10790,7 @@ fi
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.0.0
+#  mpanel-cron — IDDigital Hosting v2.1.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
