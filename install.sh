@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v1.9.1 — instalador (MiniPainel)
+#  IDDigital Hosting v1.10.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.9.1.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.10.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.9.1"
+MP_VERSION="1.10.0"
 PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -308,8 +308,11 @@ PANEL_RUN="$(php_run_dir "$PANEL_PHP")"
 L6=""
 [ "$IPV6" = 1 ] && L6="    listen [::]:$PANEL_PORT ssl;"
 install -d -m 755 /etc/nginx/minipainel/conf.d /etc/nginx/minipainel/inc /var/www/minipainel-acme
+[ -f /etc/nginx/minipainel/panel-allow.inc ] || echo "# IDDigital Hosting — IPs autorizados a abrir o painel (todos)" > /etc/nginx/minipainel/panel-allow.inc
+[ -f /etc/nginx/minipainel/ports-allow.inc ] || echo "# IDDigital Hosting — acesso pelas portas dos sites (todos)" > /etc/nginx/minipainel/ports-allow.inc
 cat > /etc/nginx/minipainel/panel.inc <<EOF
 # IDDigital Hosting — conteúdo do painel (porta própria e domínio do painel)
+    include /etc/nginx/minipainel/panel-allow.inc;
     root /opt/minipainel/public;
     access_log /var/log/nginx/minipainel.access.log;
     error_log  /var/log/nginx/minipainel.error.log;
@@ -503,7 +506,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v1.9.1 — painel web (MiniPainel)
+ * IDDigital Hosting v1.10.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -511,7 +514,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.9.1';
+const MP_VERSION = '1.10.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -558,7 +561,7 @@ header('X-Frame-Options: DENY');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 header('Cache-Control: no-store');
-header("Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+header("Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
 
 session_name('MPSESS');
 session_start();
@@ -592,6 +595,69 @@ function flash(bool $ok, string $m, bool $sticky = false): void { $_SESSION['fla
 function go(string $p, array $q = []): void {
     header('Location: ?' . http_build_query(['p' => $p] + $q));
     exit;
+}
+/* ---------- auditoria e verificação em dois passos ---------- */
+function audit(string $action, bool $ok = true, ?string $user = null): void {
+    $line = json_encode(['ts' => time(), 'ip' => (string)($_SERVER['REMOTE_ADDR'] ?? ''), 'user' => substr((string)($user ?? ($_SESSION['user'] ?? '')), 0, 40), 'action' => substr($action, 0, 300), 'ok' => $ok], JSON_UNESCAPED_UNICODE);
+    @file_put_contents(MP_DATA . '/logs/audit.log', $line . "\n", FILE_APPEND | LOCK_EX);
+}
+function b32_encode(string $b): string {
+    $a = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; $bits = ''; $o = '';
+    foreach (str_split($b) as $c) $bits .= str_pad(decbin(ord($c)), 8, '0', STR_PAD_LEFT);
+    foreach (str_split($bits, 5) as $ch) $o .= $a[bindec(str_pad($ch, 5, '0'))];
+    return $o;
+}
+function b32_decode(string $s): string {
+    $a = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; $bits = ''; $o = '';
+    foreach (str_split(strtoupper(preg_replace('/[^A-Za-z2-7]/', '', $s) ?? '')) as $c) $bits .= str_pad(decbin((int)strpos($a, $c)), 5, '0', STR_PAD_LEFT);
+    foreach (str_split($bits, 8) as $by) if (strlen($by) === 8) $o .= chr(bindec($by));
+    return $o;
+}
+function totp_code(string $secret, int $step): string {
+    $h = hash_hmac('sha1', pack('N2', 0, $step), b32_decode($secret), true);
+    $p = ord($h[19]) & 0x0f;
+    $v = ((ord($h[$p]) & 0x7f) << 24) | (ord($h[$p + 1]) << 16) | (ord($h[$p + 2]) << 8) | ord($h[$p + 3]);
+    return str_pad((string)($v % 1000000), 6, '0', STR_PAD_LEFT);
+}
+function totp_verify(string $secret, string $code): ?int {
+    $code = preg_replace('/\D/', '', $code) ?? '';
+    if (strlen($code) !== 6 || $secret === '') return null;
+    $now = intdiv(time(), 30);
+    for ($d = -1; $d <= 1; $d++) { if (hash_equals(totp_code($secret, $now + $d), $code)) return $now + $d; }
+    return null;
+}
+function totp_ok(array $auth, string $code): bool { // código de 6 dígitos, sem reutilização
+    $st = totp_verify((string)($auth['totp'] ?? ''), $code);
+    if ($st === null) return false;
+    $f = MP_RL . '/totp-last.json';
+    $last = (int)((jload($f) ?? [])['step'] ?? 0);
+    if ($st <= $last) return false;
+    @file_put_contents($f, (string)json_encode(['step' => $st]), LOCK_EX);
+    return true;
+}
+function recovery_use(array $auth, string $code): bool {
+    $c = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $code) ?? '');
+    if (strlen($c) !== 12) return false;
+    $h = hash('sha256', substr($c, 0, 6) . '-' . substr($c, 6));
+    $list = is_array($auth['recovery'] ?? null) ? $auth['recovery'] : [];
+    if (!in_array($h, $list, true)) return false;
+    $uf = MP_DATA . '/logs/2fa-used.json';
+    $used = jload($uf) ?? [];
+    if (in_array($h, $used, true)) return false;
+    $used[] = $h;
+    @file_put_contents($uf, (string)json_encode($used), LOCK_EX);
+    return true;
+}
+function ip_in(string $ip, string $net): bool {
+    $p = explode('/', $net, 2);
+    $a = @inet_pton($ip); $b = @inet_pton($p[0]);
+    if ($a === false || $b === false || strlen($a) !== strlen($b)) return false;
+    $bits = isset($p[1]) ? (int)$p[1] : strlen($a) * 8;
+    $by = intdiv($bits, 8); $r = $bits % 8;
+    if (substr($a, 0, $by) !== substr($b, 0, $by)) return false;
+    if ($r === 0) return true;
+    $m = (0xFF << (8 - $r)) & 0xFF;
+    return (ord($a[$by]) & $m) === (ord($b[$by]) & $m);
 }
 function valid_net(string $s): bool {
     $ip = $s; $bits = null;
@@ -733,6 +799,7 @@ function job_submit(string $action, array $args, string $label): bool {
         return false;
     }
     $_SESSION['jobs'][$id] = ['label' => $label, 't' => time()];
+    audit($label);
     return true;
 }
 function job_collect(): int {
@@ -749,7 +816,8 @@ function job_collect(): int {
             $ok  = (bool)($r['ok'] ?? false);
             $msg = trim((string)($r['msg'] ?? ''));
             if ($msg === '') $msg = $j['label'] . ($ok ? ': concluído.' : ': falhou.');
-            flash($ok, $msg, stripos($msg, 'password') !== false);
+            flash($ok, $msg, stripos($msg, 'password') !== false || stripos($msg, 'chave') !== false || stripos($msg, 'recupera') !== false);
+            audit($j['label'] . ($ok ? ' — concluído' : ' — falhou'), $ok);
         } elseif (time() - (int)($j['t'] ?? 0) > 1800) {
             unset($jobs[$id]);
             flash(false, $j['label'] . ': sem resposta. No servidor: systemctl status minipainel-worker.path');
@@ -1118,6 +1186,13 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .cron-out{margin:0;padding:18px 26px;max-height:60vh;overflow:auto;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--hover)}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
+.lnk{border:0;background:none;color:var(--ink-2);font:inherit;text-decoration:underline;cursor:pointer;padding:0;display:block;margin:0 auto}
+.tfa{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center}
+.tfa-qr{background:#fff;border-radius:12px;padding:6px;line-height:0;min-width:180px;min-height:180px}
+.tfa-qr svg{width:180px;height:180px}
+.tfa-side{display:flex;flex-direction:column;gap:12px}
+.tfa-key{padding:10px 12px;border-radius:10px;background:var(--hover);font-size:15px;letter-spacing:.05em;word-break:break-all}
+@media (max-width:900px){.tfa{grid-template-columns:1fr}}
 .links.dom{margin-bottom:4px}
 .links.dom a{font-weight:600}
 svg.i.lock{width:14px;height:14px;color:#2ea36a;margin-right:4px;vertical-align:-2px}
@@ -1225,7 +1300,7 @@ dialog{text-align:left}
 CSS;
 }
 
-function render_login(string $err): void { ?>
+function render_login(string $err, bool $two = false): void { ?>
 <!doctype html>
 <html lang="pt-PT">
 <head><?= mp_head('Entrar') ?></head>
@@ -1240,6 +1315,18 @@ function render_login(string $err): void { ?>
     <div class="auth-foot">© <?= date('Y') ?> IDDigital Hosting · v<?= h(MP_VERSION) ?></div>
   </section>
   <section class="auth-main">
+    <?php if ($two): ?>
+    <form method="post" action="./" class="auth-form">
+      <h2>Verificação em dois passos</h2>
+      <p>Introduz o código de 6 dígitos da aplicação de autenticação.</p>
+      <?php if ($err !== ''): ?><div class="err"><?= h($err) ?></div><?php endif; ?>
+      <?= csrf_field() ?>
+      <label class="fld">Código<input class="in mono" name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus maxlength="14" placeholder="123456"></label>
+      <button class="btn" type="submit">Confirmar</button>
+      <p class="mu" style="margin:0;font-size:13px">Sem acesso à aplicação? Usa um dos códigos de recuperação (ex.: a1b2c3-d4e5f6).</p>
+    </form>
+    <form method="post" action="./" style="margin-top:-8px"><?= csrf_field() ?><input type="hidden" name="a" value="cancel2fa"><button class="lnk" type="submit">Voltar</button></form>
+    <?php else: ?>
     <form method="post" action="./" class="auth-form">
       <h2>Iniciar sessão</h2>
       <p>Acede ao painel de alojamento.</p>
@@ -1249,6 +1336,7 @@ function render_login(string $err): void { ?>
       <label class="fld">Password<input class="in" type="password" name="pass" autocomplete="current-password" required></label>
       <button class="btn" type="submit">Entrar</button>
     </form>
+    <?php endif; ?>
   </section>
 </div>
 </body>
@@ -1268,6 +1356,7 @@ $pages = [
     'servicos' => ['Serviços', 'pulse'],
     'ligacoes' => ['Ligações', 'ban'],
     'backups'  => ['Backups', 'archive'],
+    'auditoria'=> ['Auditoria', 'file'],
     'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
@@ -1315,6 +1404,14 @@ if (qget('bk') === 'dl') {
     exit;
 }
 
+if (qget('asset') === 'qr') {
+    if (empty($_SESSION['user'])) { http_response_code(401); exit; }
+    header('Content-Type: application/javascript; charset=utf-8');
+    header('Cache-Control: private, max-age=86400');
+    readfile('/opt/minipainel/qrcode.js');
+    exit;
+}
+
 if (qget('poll') === '1') {
     header('Content-Type: application/json');
     if (empty($_SESSION['user'])) { http_response_code(401); echo '{"pending":0}'; exit; }
@@ -1324,29 +1421,58 @@ if (qget('poll') === '1') {
 
 if (empty($_SESSION['user'])) {
     $err = '';
+    $two = !empty($_SESSION['pre2fa']) && time() - (int)($_SESSION['pre2fa']['t'] ?? 0) < 300;
+    if (!$two) unset($_SESSION['pre2fa']);
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $wait = rl_wait();
         if ($wait > 0) {
             $err = 'Demasiadas tentativas. Tenta novamente dentro de ' . (int)ceil($wait / 60) . ' min.';
         } elseif (!csrf_ok()) {
             $err = 'A sessão expirou. Tenta novamente.';
-        } else {
-            $u = post('user');
-            $p = post_raw('pass');
-            if ($auth !== null && hash_equals((string)($auth['user'] ?? ''), $u) && password_verify($p, (string)($auth['hash'] ?? ''))) {
+        } elseif ($two && post('a') === 'cancel2fa') {
+            unset($_SESSION['pre2fa']); header('Location: ./'); exit;
+        } elseif ($two) {
+            $u = (string)$_SESSION['pre2fa']['u'];
+            $code = post('code');
+            $viaRec = false;
+            $okc = $auth !== null && !empty($auth['totp']) && (totp_ok($auth, $code) || ($viaRec = recovery_use($auth, $code)));
+            if ($okc) {
                 rl_clear();
+                unset($_SESSION['pre2fa']);
                 session_regenerate_id(true);
-                $_SESSION['user'] = $u;
-                $_SESSION['seen'] = time();
+                $_SESSION['user'] = $u; $_SESSION['seen'] = time();
                 unset($_SESSION['csrf']);
+                audit($viaRec ? 'Início de sessão com código de recuperação' : 'Início de sessão (2FA)', true, $u);
+                if ($viaRec) flash(false, 'Entraste com um código de recuperação. Cada código só funciona uma vez: se já gastaste vários, gera novos desativando e voltando a ativar a verificação em dois passos (página Conta).');
                 go('resumo');
             }
             rl_fail();
             usleep(random_int(300000, 800000));
+            audit('Código de verificação em dois passos errado', false, $u);
+            $err = 'Código inválido ou já utilizado.';
+        } else {
+            $u = post('user');
+            $p = post_raw('pass');
+            if ($auth !== null && hash_equals((string)($auth['user'] ?? ''), $u) && password_verify($p, (string)($auth['hash'] ?? ''))) {
+                session_regenerate_id(true);
+                if (!empty($auth['totp'])) {
+                    $_SESSION['pre2fa'] = ['u' => $u, 't' => time()];
+                    header('Location: ./'); exit;
+                }
+                rl_clear();
+                $_SESSION['user'] = $u;
+                $_SESSION['seen'] = time();
+                unset($_SESSION['csrf']);
+                audit('Início de sessão', true, $u);
+                go('resumo');
+            }
+            rl_fail();
+            usleep(random_int(300000, 800000));
+            audit('Falha de início de sessão', false, $u);
             $err = 'Utilizador ou password incorretos.';
         }
     }
-    render_login($err);
+    render_login($err, $two);
     exit;
 }
 $_SESSION['seen'] = time();
@@ -1372,6 +1498,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
     switch ($a) {
         case 'sair':
+            audit('Fim de sessão');
             $_SESSION = [];
             session_destroy();
             header('Location: ./');
@@ -1459,6 +1586,46 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             job_submit('service', [$svc, $act], $names[$act] . ' ' . $svc);
             break;
 
+        case 'panel_allow':
+            $ips = array_values(array_filter(preg_split('/[\s,;]+/', post_raw('ips')) ?: []));
+            foreach ($ips as $ip) { if (!valid_net($ip)) { $bad('IP ou rede inválida: ' . $ip); break 2; } }
+            if ($ips) {
+                $inside = false;
+                foreach ($ips as $ip) { if (ip_in($myIp, $ip)) { $inside = true; break; } }
+                if (!$inside && $myIp !== '127.0.0.1' && $myIp !== '::1') { $bad('O teu IP atual (' . $myIp . ') não está na lista: ficarias sem acesso ao painel. Acrescenta-o.'); break; }
+            }
+            job_submit('panel-allow', [$ips ? implode(' ', $ips) : 'none'], 'IPs autorizados no painel: ' . ($ips ? implode(', ', $ips) : 'todos'));
+            break;
+
+        case 'ports_access':
+            job_submit('ports-access', [post('pa') === 'lan' ? 'lan' : 'all'], 'Acesso pelas portas dos sites: ' . (post('pa') === 'lan' ? 'só rede local' : 'todos'));
+            break;
+
+        case 'acct_user':
+            $nu = post('newuser');
+            if (!preg_match('/^[a-z][a-z0-9._-]{2,31}$/', $nu)) { $bad('Nome inválido: 3 a 32 caracteres (minúsculas, números, ".", "_" e "-"), a começar por letra.'); break; }
+            if ($auth === null || !password_verify(post_raw('atual'), (string)($auth['hash'] ?? ''))) { $bad('A password atual está incorreta.'); break; }
+            if (job_submit('panel-user', [$nu], 'Mudar o utilizador do painel para ' . $nu)) $_SESSION['user'] = $nu;
+            break;
+
+        case 'totp_enable':
+            $sec = (string)($_SESSION['totp_new'] ?? '');
+            if ($sec === '' || totp_verify($sec, post('code')) === null) { $bad('Código inválido. Confirma que a hora do telemóvel está certa e tenta de novo.'); $back = ['tfa' => 'setup']; break; }
+            unset($_SESSION['totp_new']);
+            job_submit('panel-2fa', ['set', $sec], 'Ativar a verificação em dois passos');
+            break;
+
+        case 'totp_disable':
+            if ($auth === null || !password_verify(post_raw('atual'), (string)($auth['hash'] ?? ''))) { $bad('A password atual está incorreta.'); break; }
+            if (!totp_ok($auth, post('code')) && !recovery_use($auth, post('code'))) { $bad('Código inválido.'); break; }
+            job_submit('panel-2fa', ['off'], 'Desativar a verificação em dois passos');
+            break;
+
+        case 'bk_key_show':
+            if ($auth === null || !password_verify(post_raw('atual'), (string)($auth['hash'] ?? ''))) { $bad('A password atual está incorreta.'); break; }
+            job_submit('bk-key', [], 'Mostrar a chave dos backups');
+            break;
+
         case 'site_domains':
             if (!valid_site($site)) { $bad('Site inválido.'); break; }
             $dl = strtolower(trim(preg_replace('/[\s,;]+/', ' ', post_raw('domains')) ?? ''));
@@ -1507,7 +1674,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             foreach ([$kd, $kw, $km] as $v) { if (!ctype_digit($v) || (int)$v > 999) { $bad('Os valores de retenção têm de ser números entre 0 e 999.'); break 2; } }
             if ((int)$kd < 1) { $bad('Guarda pelo menos 1 backup diário.'); break; }
             if ($rm !== 'none' && !preg_match('/^[a-z][a-z0-9-]{1,23}$/', $rm)) $rm = 'none';
-            job_submit('bk-conf', [post('on') === 'on' ? '--on' : '--off', '--time', $tm, '--daily', $kd, '--weekly', $kw, '--monthly', $km, '--remote', $rm], 'Agendamento dos backups');
+            job_submit('bk-conf', [post('on') === 'on' ? '--on' : '--off', '--time', $tm, '--daily', $kd, '--weekly', $kw, '--monthly', $km, '--remote', $rm, '--encrypt', post('encrypt') === 'off' ? 'off' : 'on'], 'Agendamento dos backups');
             break;
 
         case 'bk_remote_add':
@@ -1924,9 +2091,10 @@ $titles = [
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
     'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
-    'definicoes' => 'Modo do servidor (LAN ou Internet), Let\'s Encrypt e domínio do painel.',
+    'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados no painel, Let\'s Encrypt e domínio do painel.',
+    'auditoria'=> 'Quem fez o quê, quando e de onde.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'definicoes', 'conta']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'definicoes', 'conta']];
 $section = 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -2695,9 +2863,16 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
               <label class="fld">Semanais<input class="in" name="weekly" inputmode="numeric" pattern="[0-9]{1,3}" required value="<?= (int)$bkConf['keep_weekly'] ?>"></label>
               <label class="fld">Mensais<input class="in" name="monthly" inputmode="numeric" pattern="[0-9]{1,3}" required value="<?= (int)$bkConf['keep_monthly'] ?>"></label>
             </div>
+            <label class="fld" style="margin-top:14px">Cifrar as cópias remotas<select class="in" name="encrypt"><option value="on"<?= ($bkConf['encrypt'] ?? true) ? ' selected' : '' ?>>Sim (AES-256, recomendado)</option><option value="off"<?= ($bkConf['encrypt'] ?? true) ? '' : ' selected' ?>>Não</option></select><small>O destino remoto só vê ficheiros cifrados; a chave fica neste servidor</small></label>
             <label class="fld" style="margin-top:14px">Cópia remota<select class="in" name="remote"><option value="none">Só local</option><?php foreach ($bkRem as $r): ?><option value="<?= h($r['name']) ?>"<?= ($bkConf['remote'] ?? '') === $r['name'] ? ' selected' : '' ?>><?= h($r['name']) ?> (<?= h($r['type']) ?>)</option><?php endforeach; ?></select></label>
             <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
           </form>
+          <div class="card-f" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="mu" style="flex:1;min-width:220px">Guarda a <b>chave dos backups</b> fora deste servidor: é precisa para repor cópias remotas noutro servidor.</span><button class="btn sm sec" type="button" data-open="dlg-bk-key"><?= ic('key') ?>Mostrar chave</button></div>
+          <dialog id="dlg-bk-key"><form method="post"><?= act_fields('bk_key_show') ?>
+            <div class="dlg-h"><h3>Chave dos backups</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+            <div class="dlg-b"><label class="fld">Confirma com a password do painel<input class="in" type="password" name="atual" required autocomplete="current-password"></label><p class="mu" style="margin:0">A chave aparece numa notificação; copia-a para um gestor de passwords.</p></div>
+            <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Mostrar</button></div>
+          </form></dialog>
           <div class="card-f mu">A retenção aplica-se ao local e ao remoto: por exemplo, 7 diários, 4 semanais e 3 mensais cobrem cerca de 3 meses. Os backups manuais ficam até os apagares. Se o disco passar de 90%, o backup é cancelado e o erro aparece aqui.</div>
         </section>
 
@@ -2806,6 +2981,29 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">No modo Internet, cada domínio tem de ter um registo DNS (A ou AAAA) a apontar para o IP público deste servidor, e as portas 80 e 443 têm de chegar a ele (se houver router ou firewall à frente, reencaminha essas portas).</div>
       </section>
 
+      <div class="grid2e">
+      <section class="card">
+        <div class="card-h"><div><h2>Acesso pelas portas dos sites</h2><p>As portas próprias (ex.: :8001) servem os sites em HTTP, sem SSL.</p></div><span class="pill <?= ($srv['ports_access'] ?? 'all') === 'lan' ? 'p-ok' : 'p-off' ?>"><?= ($srv['ports_access'] ?? 'all') === 'lan' ? 'Só rede local' : 'Todos' ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('ports_access') ?>
+          <label class="chk"><input type="radio" name="pa" value="all"<?= ($srv['ports_access'] ?? 'all') !== 'lan' ? ' checked' : '' ?>> Abertas a qualquer IP</label>
+          <label class="chk" style="margin-top:8px"><input type="radio" name="pa" value="lan"<?= ($srv['ports_access'] ?? 'all') === 'lan' ? ' checked' : '' ?>> Só rede local (10.x, 172.16-31.x, 192.168.x) e IPs de confiança</label>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">Recomendado no modo Internet: os sites ficam públicos só pelos domínios (80/443, com HTTPS). Os IPs de confiança definem-se na página Ligações.</div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>IPs autorizados no painel</h2><p>Se preencheres, o painel (incluindo phpMyAdmin e ficheiros) só abre a partir destes IPs.</p></div><span class="pill <?= ($srv['panel_allow'] ?? '') !== '' ? 'p-ok' : 'p-off' ?>"><?= ($srv['panel_allow'] ?? '') !== '' ? 'Restrito' : 'Todos' ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('panel_allow') ?>
+          <label class="fld">IPs ou redes (um por linha)<textarea class="in mono cron-ta" name="ips" rows="4" placeholder="<?= h($myIp) ?>&#10;192.168.1.0/24"><?= h(str_replace(' ', "\n", (string)($srv['panel_allow'] ?? ''))) ?></textarea><small>O teu IP atual é <b class="mono"><?= h($myIp) ?></b> e tem de estar incluído. Vazio = qualquer IP.</small></label>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">Se ficares sem acesso, na consola do servidor: <span class="mono">mpanel panel-allow none</span></div>
+      </section>
+      </div>
+
       <section class="card">
         <div class="card-h"><div><h2>Domínio do painel</h2><p>Acesso ao painel por um nome, por exemplo hosting.iddigital.pt, com certificado válido.</p></div>
           <?php if (($srv['panel_domain'] ?? '') !== ''): ?><span class="pill p-ok"><?= h($srv['panel_domain']) ?></span><?php endif; ?></div>
@@ -2818,6 +3016,40 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php if (!empty($srv['panel_ssl_exp'])): ?><p class="mu" style="margin:12px 0 0">Certificado válido até <?= h(gmdate('d/m/Y', (int)$srv['panel_ssl_exp'] + tz_off(live_stats()))) ?>; é renovado automaticamente.</p><?php endif; ?>
           <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
         </form>
+      </section>
+
+<?php elseif ($page === 'auditoria'):
+    $alog = [];
+    $af = MP_DATA . '/logs/audit.log';
+    if (is_file($af)) {
+        $sz = (int)filesize($af); $fh = @fopen($af, 'r');
+        if ($fh) { if ($sz > 2000000) fseek($fh, $sz - 2000000); $buf = (string)stream_get_contents($fh); fclose($fh);
+            foreach (array_slice(array_reverse(array_filter(explode("\n", $buf))), 0, 1000) as $ln) { $j = json_decode($ln, true); if (is_array($j)) $alog[] = $j; } }
+    }
+    $tza = tz_off(live_stats());
+?>
+      <section class="card">
+        <div class="card-h"><div><h2>Registo de auditoria</h2><p>Inícios de sessão e todas as ações feitas no painel, com data, utilizador e IP.</p></div>
+          <input class="in cn-search" id="au-q" type="search" placeholder="Filtrar (ação, IP, utilizador)…" aria-label="Filtrar registo" autocomplete="off"></div>
+        <?php if (!$alog): ?>
+          <div class="empty">Ainda não há registos.</div>
+        <?php else: ?>
+        <table class="list cards" id="au-t">
+          <thead><tr><th>Data</th><th>Utilizador</th><th>IP</th><th>Ação</th><th>Resultado</th></tr></thead>
+          <tbody>
+          <?php foreach ($alog as $e): ?>
+            <tr>
+              <td class="first" data-label="Data"><span class="mono"><?= h(gmdate('d/m/Y H:i:s', (int)($e['ts'] ?? 0) + $tza)) ?></span></td>
+              <td data-label="Utilizador"><?= h($e['user'] ?? '') ?></td>
+              <td data-label="IP" class="mono"><?= h($e['ip'] ?? '') ?></td>
+              <td data-label="Ação"><?= h($e['action'] ?? '') ?></td>
+              <td data-label="Resultado"><span class="pill <?= !empty($e['ok']) ? 'p-ok' : 'p-err' ?>"><?= !empty($e['ok']) ? 'OK' : 'Falhou' ?></span></td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+        <div class="card-f mu">Mostra os últimos 1000 registos. O ficheiro completo está em /var/lib/minipainel/logs/audit.log e é rodado semanalmente (8 semanas).</div>
       </section>
 
 <?php elseif ($page === 'servicos'): ?>
@@ -2842,7 +3074,56 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">Recarregar aplica configurações sem cortar ligações. Antes de cada ação a configuração é testada; se tiver erros, nada é alterado. Os serviços arrancam sozinhos quando o servidor reinicia.</div>
       </section>
 
-<?php else: ?>
+<?php else:
+    $has2fa = !empty($auth['totp']);
+    $tfaNew = '';
+    if (!$has2fa && qget('tfa') === 'setup') {
+        if (empty($_SESSION['totp_new'])) $_SESSION['totp_new'] = b32_encode(random_bytes(20));
+        $tfaNew = (string)$_SESSION['totp_new'];
+    }
+?>
+      <div class="grid2e">
+      <section class="card">
+        <div class="card-h"><div><h2>Utilizador</h2><p>Nome usado para iniciar sessão no painel.</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('acct_user') ?>
+          <div class="fgrid">
+            <label class="fld">Novo nome de utilizador<input class="in" name="newuser" required pattern="[a-z][a-z0-9._\-]{2,31}" value="<?= h($_SESSION['user']) ?>" autocomplete="off"><small>3 a 32 caracteres; evita nomes óbvios como admin</small></label>
+            <label class="fld">Password atual<input class="in" type="password" name="atual" required autocomplete="current-password"></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Mudar nome</button></div>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Verificação em dois passos</h2><p>Pede um código de uma aplicação (Google Authenticator, Microsoft Authenticator, 1Password, Bitwarden…) depois da password.</p></div><span class="pill <?= $has2fa ? 'p-ok' : 'p-off' ?>"><?= $has2fa ? 'Ativa' : 'Desativada' ?></span></div>
+        <?php if ($has2fa): ?>
+        <form method="post" class="card-b">
+          <?= act_fields('totp_disable') ?>
+          <div class="fgrid">
+            <label class="fld">Password atual<input class="in" type="password" name="atual" required autocomplete="current-password"></label>
+            <label class="fld">Código atual<input class="in mono" name="code" required inputmode="numeric" autocomplete="one-time-code" maxlength="14"></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn dan" type="submit">Desativar</button></div>
+        </form>
+        <?php elseif ($tfaNew !== ''): $uri = 'otpauth://totp/' . rawurlencode('IDDigital Hosting:' . $_SESSION['user'] . '@' . ($sys['hostname'] ?? 'servidor')) . '?secret=' . $tfaNew . '&issuer=' . rawurlencode('IDDigital Hosting') . '&digits=6&period=30'; ?>
+        <form method="post" class="card-b tfa">
+          <?= act_fields('totp_enable') ?>
+          <div class="tfa-qr" id="tfa-qr" data-uri="<?= h($uri) ?>"></div>
+          <div class="tfa-side">
+            <p style="margin:0">1. Lê o código QR com a aplicação, ou introduz a chave manualmente:</p>
+            <div class="mono tfa-key"><?= h(trim(chunk_split($tfaNew, 4, ' '))) ?></div>
+            <label class="fld">2. Código de 6 dígitos mostrado na aplicação<input class="in mono" name="code" required inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus></label>
+            <div style="display:flex;gap:8px"><button class="btn" type="submit">Ativar</button><a class="btn sec" href="?p=conta">Cancelar</a></div>
+          </div>
+        </form>
+        <?php else: ?>
+        <div class="card-b"><a class="btn" href="?p=conta&amp;tfa=setup">Ativar verificação em dois passos</a></div>
+        <?php endif; ?>
+        <div class="card-f mu">Ao ativar recebes 8 códigos de recuperação. Se perderes o telemóvel e os códigos, desativa na consola do servidor: <span class="mono">mpanel panel-2fa off</span></div>
+      </section>
+      </div>
+
       <section class="card" style="max-width:none">
         <div class="card-h"><h2>Password do painel</h2><p>Utilizador: <?= h($_SESSION['user']) ?></p></div>
         <form method="post" class="card-b">
@@ -3032,6 +3313,20 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
 })();
 </script>
+<?php if ($page === 'conta' && !empty($_SESSION['totp_new']) && qget('tfa') === 'setup'): ?>
+<script src="?asset=qr"></script>
+<script>
+(function () { var el = document.getElementById('tfa-qr'); if (!el || typeof qrcode !== 'function') return;
+  var q = qrcode(0, 'M'); q.addData(el.getAttribute('data-uri')); q.make(); el.innerHTML = q.createSvgTag(5, 4); })();
+</script>
+<?php endif; ?>
+<?php if ($page === 'auditoria'): ?>
+<script>
+(function () { var q = document.getElementById('au-q'); if (!q) return;
+  q.addEventListener('input', function () { var f = q.value.toLowerCase();
+    document.querySelectorAll('#au-t tbody tr').forEach(function (tr) { tr.style.display = !f || tr.textContent.toLowerCase().indexOf(f) !== -1 ? '' : 'none'; }); }); })();
+</script>
+<?php endif; ?>
 <?php if ($page === 'backups'): ?>
 <script>
 (function () {
@@ -3570,13 +3865,2314 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 MPPANEL
 chown -R root:root /opt/minipainel/public
 chmod 644 /opt/minipainel/public/index.php
+# qrcode-generator (c) Kazuhiko Arase, licença MIT — usado para o código QR do 2FA
+cat > /opt/minipainel/qrcode.js <<'MPQR'
+//---------------------------------------------------------------------
+//
+// QR Code Generator for JavaScript
+//
+// Copyright (c) 2009 Kazuhiko Arase
+//
+// URL: http://www.d-project.com/
+//
+// Licensed under the MIT license:
+//  http://www.opensource.org/licenses/mit-license.php
+//
+// The word 'QR Code' is registered trademark of
+// DENSO WAVE INCORPORATED
+//  http://www.denso-wave.com/qrcode/faqpatent-e.html
+//
+//---------------------------------------------------------------------
+
+var qrcode = function() {
+
+  //---------------------------------------------------------------------
+  // qrcode
+  //---------------------------------------------------------------------
+
+  /**
+   * qrcode
+   * @param typeNumber 1 to 40
+   * @param errorCorrectionLevel 'L','M','Q','H'
+   */
+  var qrcode = function(typeNumber, errorCorrectionLevel) {
+
+    var PAD0 = 0xEC;
+    var PAD1 = 0x11;
+
+    var _typeNumber = typeNumber;
+    var _errorCorrectionLevel = QRErrorCorrectionLevel[errorCorrectionLevel];
+    var _modules = null;
+    var _moduleCount = 0;
+    var _dataCache = null;
+    var _dataList = [];
+
+    var _this = {};
+
+    var makeImpl = function(test, maskPattern) {
+
+      _moduleCount = _typeNumber * 4 + 17;
+      _modules = function(moduleCount) {
+        var modules = new Array(moduleCount);
+        for (var row = 0; row < moduleCount; row += 1) {
+          modules[row] = new Array(moduleCount);
+          for (var col = 0; col < moduleCount; col += 1) {
+            modules[row][col] = null;
+          }
+        }
+        return modules;
+      }(_moduleCount);
+
+      setupPositionProbePattern(0, 0);
+      setupPositionProbePattern(_moduleCount - 7, 0);
+      setupPositionProbePattern(0, _moduleCount - 7);
+      setupPositionAdjustPattern();
+      setupTimingPattern();
+      setupTypeInfo(test, maskPattern);
+
+      if (_typeNumber >= 7) {
+        setupTypeNumber(test);
+      }
+
+      if (_dataCache == null) {
+        _dataCache = createData(_typeNumber, _errorCorrectionLevel, _dataList);
+      }
+
+      mapData(_dataCache, maskPattern);
+    };
+
+    var setupPositionProbePattern = function(row, col) {
+
+      for (var r = -1; r <= 7; r += 1) {
+
+        if (row + r <= -1 || _moduleCount <= row + r) continue;
+
+        for (var c = -1; c <= 7; c += 1) {
+
+          if (col + c <= -1 || _moduleCount <= col + c) continue;
+
+          if ( (0 <= r && r <= 6 && (c == 0 || c == 6) )
+              || (0 <= c && c <= 6 && (r == 0 || r == 6) )
+              || (2 <= r && r <= 4 && 2 <= c && c <= 4) ) {
+            _modules[row + r][col + c] = true;
+          } else {
+            _modules[row + r][col + c] = false;
+          }
+        }
+      }
+    };
+
+    var getBestMaskPattern = function() {
+
+      var minLostPoint = 0;
+      var pattern = 0;
+
+      for (var i = 0; i < 8; i += 1) {
+
+        makeImpl(true, i);
+
+        var lostPoint = QRUtil.getLostPoint(_this);
+
+        if (i == 0 || minLostPoint > lostPoint) {
+          minLostPoint = lostPoint;
+          pattern = i;
+        }
+      }
+
+      return pattern;
+    };
+
+    var setupTimingPattern = function() {
+
+      for (var r = 8; r < _moduleCount - 8; r += 1) {
+        if (_modules[r][6] != null) {
+          continue;
+        }
+        _modules[r][6] = (r % 2 == 0);
+      }
+
+      for (var c = 8; c < _moduleCount - 8; c += 1) {
+        if (_modules[6][c] != null) {
+          continue;
+        }
+        _modules[6][c] = (c % 2 == 0);
+      }
+    };
+
+    var setupPositionAdjustPattern = function() {
+
+      var pos = QRUtil.getPatternPosition(_typeNumber);
+
+      for (var i = 0; i < pos.length; i += 1) {
+
+        for (var j = 0; j < pos.length; j += 1) {
+
+          var row = pos[i];
+          var col = pos[j];
+
+          if (_modules[row][col] != null) {
+            continue;
+          }
+
+          for (var r = -2; r <= 2; r += 1) {
+
+            for (var c = -2; c <= 2; c += 1) {
+
+              if (r == -2 || r == 2 || c == -2 || c == 2
+                  || (r == 0 && c == 0) ) {
+                _modules[row + r][col + c] = true;
+              } else {
+                _modules[row + r][col + c] = false;
+              }
+            }
+          }
+        }
+      }
+    };
+
+    var setupTypeNumber = function(test) {
+
+      var bits = QRUtil.getBCHTypeNumber(_typeNumber);
+
+      for (var i = 0; i < 18; i += 1) {
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+        _modules[Math.floor(i / 3)][i % 3 + _moduleCount - 8 - 3] = mod;
+      }
+
+      for (var i = 0; i < 18; i += 1) {
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+        _modules[i % 3 + _moduleCount - 8 - 3][Math.floor(i / 3)] = mod;
+      }
+    };
+
+    var setupTypeInfo = function(test, maskPattern) {
+
+      var data = (_errorCorrectionLevel << 3) | maskPattern;
+      var bits = QRUtil.getBCHTypeInfo(data);
+
+      // vertical
+      for (var i = 0; i < 15; i += 1) {
+
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+
+        if (i < 6) {
+          _modules[i][8] = mod;
+        } else if (i < 8) {
+          _modules[i + 1][8] = mod;
+        } else {
+          _modules[_moduleCount - 15 + i][8] = mod;
+        }
+      }
+
+      // horizontal
+      for (var i = 0; i < 15; i += 1) {
+
+        var mod = (!test && ( (bits >> i) & 1) == 1);
+
+        if (i < 8) {
+          _modules[8][_moduleCount - i - 1] = mod;
+        } else if (i < 9) {
+          _modules[8][15 - i - 1 + 1] = mod;
+        } else {
+          _modules[8][15 - i - 1] = mod;
+        }
+      }
+
+      // fixed module
+      _modules[_moduleCount - 8][8] = (!test);
+    };
+
+    var mapData = function(data, maskPattern) {
+
+      var inc = -1;
+      var row = _moduleCount - 1;
+      var bitIndex = 7;
+      var byteIndex = 0;
+      var maskFunc = QRUtil.getMaskFunction(maskPattern);
+
+      for (var col = _moduleCount - 1; col > 0; col -= 2) {
+
+        if (col == 6) col -= 1;
+
+        while (true) {
+
+          for (var c = 0; c < 2; c += 1) {
+
+            if (_modules[row][col - c] == null) {
+
+              var dark = false;
+
+              if (byteIndex < data.length) {
+                dark = ( ( (data[byteIndex] >>> bitIndex) & 1) == 1);
+              }
+
+              var mask = maskFunc(row, col - c);
+
+              if (mask) {
+                dark = !dark;
+              }
+
+              _modules[row][col - c] = dark;
+              bitIndex -= 1;
+
+              if (bitIndex == -1) {
+                byteIndex += 1;
+                bitIndex = 7;
+              }
+            }
+          }
+
+          row += inc;
+
+          if (row < 0 || _moduleCount <= row) {
+            row -= inc;
+            inc = -inc;
+            break;
+          }
+        }
+      }
+    };
+
+    var createBytes = function(buffer, rsBlocks) {
+
+      var offset = 0;
+
+      var maxDcCount = 0;
+      var maxEcCount = 0;
+
+      var dcdata = new Array(rsBlocks.length);
+      var ecdata = new Array(rsBlocks.length);
+
+      for (var r = 0; r < rsBlocks.length; r += 1) {
+
+        var dcCount = rsBlocks[r].dataCount;
+        var ecCount = rsBlocks[r].totalCount - dcCount;
+
+        maxDcCount = Math.max(maxDcCount, dcCount);
+        maxEcCount = Math.max(maxEcCount, ecCount);
+
+        dcdata[r] = new Array(dcCount);
+
+        for (var i = 0; i < dcdata[r].length; i += 1) {
+          dcdata[r][i] = 0xff & buffer.getBuffer()[i + offset];
+        }
+        offset += dcCount;
+
+        var rsPoly = QRUtil.getErrorCorrectPolynomial(ecCount);
+        var rawPoly = qrPolynomial(dcdata[r], rsPoly.getLength() - 1);
+
+        var modPoly = rawPoly.mod(rsPoly);
+        ecdata[r] = new Array(rsPoly.getLength() - 1);
+        for (var i = 0; i < ecdata[r].length; i += 1) {
+          var modIndex = i + modPoly.getLength() - ecdata[r].length;
+          ecdata[r][i] = (modIndex >= 0)? modPoly.getAt(modIndex) : 0;
+        }
+      }
+
+      var totalCodeCount = 0;
+      for (var i = 0; i < rsBlocks.length; i += 1) {
+        totalCodeCount += rsBlocks[i].totalCount;
+      }
+
+      var data = new Array(totalCodeCount);
+      var index = 0;
+
+      for (var i = 0; i < maxDcCount; i += 1) {
+        for (var r = 0; r < rsBlocks.length; r += 1) {
+          if (i < dcdata[r].length) {
+            data[index] = dcdata[r][i];
+            index += 1;
+          }
+        }
+      }
+
+      for (var i = 0; i < maxEcCount; i += 1) {
+        for (var r = 0; r < rsBlocks.length; r += 1) {
+          if (i < ecdata[r].length) {
+            data[index] = ecdata[r][i];
+            index += 1;
+          }
+        }
+      }
+
+      return data;
+    };
+
+    var createData = function(typeNumber, errorCorrectionLevel, dataList) {
+
+      var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, errorCorrectionLevel);
+
+      var buffer = qrBitBuffer();
+
+      for (var i = 0; i < dataList.length; i += 1) {
+        var data = dataList[i];
+        buffer.put(data.getMode(), 4);
+        buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+        data.write(buffer);
+      }
+
+      // calc num max data.
+      var totalDataCount = 0;
+      for (var i = 0; i < rsBlocks.length; i += 1) {
+        totalDataCount += rsBlocks[i].dataCount;
+      }
+
+      if (buffer.getLengthInBits() > totalDataCount * 8) {
+        throw 'code length overflow. ('
+          + buffer.getLengthInBits()
+          + '>'
+          + totalDataCount * 8
+          + ')';
+      }
+
+      // end code
+      if (buffer.getLengthInBits() + 4 <= totalDataCount * 8) {
+        buffer.put(0, 4);
+      }
+
+      // padding
+      while (buffer.getLengthInBits() % 8 != 0) {
+        buffer.putBit(false);
+      }
+
+      // padding
+      while (true) {
+
+        if (buffer.getLengthInBits() >= totalDataCount * 8) {
+          break;
+        }
+        buffer.put(PAD0, 8);
+
+        if (buffer.getLengthInBits() >= totalDataCount * 8) {
+          break;
+        }
+        buffer.put(PAD1, 8);
+      }
+
+      return createBytes(buffer, rsBlocks);
+    };
+
+    _this.addData = function(data, mode) {
+
+      mode = mode || 'Byte';
+
+      var newData = null;
+
+      switch(mode) {
+      case 'Numeric' :
+        newData = qrNumber(data);
+        break;
+      case 'Alphanumeric' :
+        newData = qrAlphaNum(data);
+        break;
+      case 'Byte' :
+        newData = qr8BitByte(data);
+        break;
+      case 'Kanji' :
+        newData = qrKanji(data);
+        break;
+      default :
+        throw 'mode:' + mode;
+      }
+
+      _dataList.push(newData);
+      _dataCache = null;
+    };
+
+    _this.isDark = function(row, col) {
+      if (row < 0 || _moduleCount <= row || col < 0 || _moduleCount <= col) {
+        throw row + ',' + col;
+      }
+      return _modules[row][col];
+    };
+
+    _this.getModuleCount = function() {
+      return _moduleCount;
+    };
+
+    _this.make = function() {
+      if (_typeNumber < 1) {
+        var typeNumber = 1;
+
+        for (; typeNumber < 40; typeNumber++) {
+          var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, _errorCorrectionLevel);
+          var buffer = qrBitBuffer();
+
+          for (var i = 0; i < _dataList.length; i++) {
+            var data = _dataList[i];
+            buffer.put(data.getMode(), 4);
+            buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+            data.write(buffer);
+          }
+
+          var totalDataCount = 0;
+          for (var i = 0; i < rsBlocks.length; i++) {
+            totalDataCount += rsBlocks[i].dataCount;
+          }
+
+          if (buffer.getLengthInBits() <= totalDataCount * 8) {
+            break;
+          }
+        }
+
+        _typeNumber = typeNumber;
+      }
+
+      makeImpl(false, getBestMaskPattern() );
+    };
+
+    _this.createTableTag = function(cellSize, margin) {
+
+      cellSize = cellSize || 2;
+      margin = (typeof margin == 'undefined')? cellSize * 4 : margin;
+
+      var qrHtml = '';
+
+      qrHtml += '<table style="';
+      qrHtml += ' border-width: 0px; border-style: none;';
+      qrHtml += ' border-collapse: collapse;';
+      qrHtml += ' padding: 0px; margin: ' + margin + 'px;';
+      qrHtml += '">';
+      qrHtml += '<tbody>';
+
+      for (var r = 0; r < _this.getModuleCount(); r += 1) {
+
+        qrHtml += '<tr>';
+
+        for (var c = 0; c < _this.getModuleCount(); c += 1) {
+          qrHtml += '<td style="';
+          qrHtml += ' border-width: 0px; border-style: none;';
+          qrHtml += ' border-collapse: collapse;';
+          qrHtml += ' padding: 0px; margin: 0px;';
+          qrHtml += ' width: ' + cellSize + 'px;';
+          qrHtml += ' height: ' + cellSize + 'px;';
+          qrHtml += ' background-color: ';
+          qrHtml += _this.isDark(r, c)? '#000000' : '#ffffff';
+          qrHtml += ';';
+          qrHtml += '"/>';
+        }
+
+        qrHtml += '</tr>';
+      }
+
+      qrHtml += '</tbody>';
+      qrHtml += '</table>';
+
+      return qrHtml;
+    };
+
+    _this.createSvgTag = function(cellSize, margin, alt, title) {
+
+      var opts = {};
+      if (typeof arguments[0] == 'object') {
+        // Called by options.
+        opts = arguments[0];
+        // overwrite cellSize and margin.
+        cellSize = opts.cellSize;
+        margin = opts.margin;
+        alt = opts.alt;
+        title = opts.title;
+      }
+
+      cellSize = cellSize || 2;
+      margin = (typeof margin == 'undefined')? cellSize * 4 : margin;
+
+      // Compose alt property surrogate
+      alt = (typeof alt === 'string') ? {text: alt} : alt || {};
+      alt.text = alt.text || null;
+      alt.id = (alt.text) ? alt.id || 'qrcode-description' : null;
+
+      // Compose title property surrogate
+      title = (typeof title === 'string') ? {text: title} : title || {};
+      title.text = title.text || null;
+      title.id = (title.text) ? title.id || 'qrcode-title' : null;
+
+      var size = _this.getModuleCount() * cellSize + margin * 2;
+      var c, mc, r, mr, qrSvg='', rect;
+
+      rect = 'l' + cellSize + ',0 0,' + cellSize +
+        ' -' + cellSize + ',0 0,-' + cellSize + 'z ';
+
+      qrSvg += '<svg version="1.1" xmlns="http://www.w3.org/2000/svg"';
+      qrSvg += !opts.scalable ? ' width="' + size + 'px" height="' + size + 'px"' : '';
+      qrSvg += ' viewBox="0 0 ' + size + ' ' + size + '" ';
+      qrSvg += ' preserveAspectRatio="xMinYMin meet"';
+      qrSvg += (title.text || alt.text) ? ' role="img" aria-labelledby="' +
+          escapeXml([title.id, alt.id].join(' ').trim() ) + '"' : '';
+      qrSvg += '>';
+      qrSvg += (title.text) ? '<title id="' + escapeXml(title.id) + '">' +
+          escapeXml(title.text) + '</title>' : '';
+      qrSvg += (alt.text) ? '<description id="' + escapeXml(alt.id) + '">' +
+          escapeXml(alt.text) + '</description>' : '';
+      qrSvg += '<rect width="100%" height="100%" fill="white" cx="0" cy="0"/>';
+      qrSvg += '<path d="';
+
+      for (r = 0; r < _this.getModuleCount(); r += 1) {
+        mr = r * cellSize + margin;
+        for (c = 0; c < _this.getModuleCount(); c += 1) {
+          if (_this.isDark(r, c) ) {
+            mc = c*cellSize+margin;
+            qrSvg += 'M' + mc + ',' + mr + rect;
+          }
+        }
+      }
+
+      qrSvg += '" stroke="transparent" fill="black"/>';
+      qrSvg += '</svg>';
+
+      return qrSvg;
+    };
+
+    _this.createDataURL = function(cellSize, margin) {
+
+      cellSize = cellSize || 2;
+      margin = (typeof margin == 'undefined')? cellSize * 4 : margin;
+
+      var size = _this.getModuleCount() * cellSize + margin * 2;
+      var min = margin;
+      var max = size - margin;
+
+      return createDataURL(size, size, function(x, y) {
+        if (min <= x && x < max && min <= y && y < max) {
+          var c = Math.floor( (x - min) / cellSize);
+          var r = Math.floor( (y - min) / cellSize);
+          return _this.isDark(r, c)? 0 : 1;
+        } else {
+          return 1;
+        }
+      } );
+    };
+
+    _this.createImgTag = function(cellSize, margin, alt) {
+
+      cellSize = cellSize || 2;
+      margin = (typeof margin == 'undefined')? cellSize * 4 : margin;
+
+      var size = _this.getModuleCount() * cellSize + margin * 2;
+
+      var img = '';
+      img += '<img';
+      img += '\u0020src="';
+      img += _this.createDataURL(cellSize, margin);
+      img += '"';
+      img += '\u0020width="';
+      img += size;
+      img += '"';
+      img += '\u0020height="';
+      img += size;
+      img += '"';
+      if (alt) {
+        img += '\u0020alt="';
+        img += escapeXml(alt);
+        img += '"';
+      }
+      img += '/>';
+
+      return img;
+    };
+
+    var escapeXml = function(s) {
+      var escaped = '';
+      for (var i = 0; i < s.length; i += 1) {
+        var c = s.charAt(i);
+        switch(c) {
+        case '<': escaped += '&lt;'; break;
+        case '>': escaped += '&gt;'; break;
+        case '&': escaped += '&amp;'; break;
+        case '"': escaped += '&quot;'; break;
+        default : escaped += c; break;
+        }
+      }
+      return escaped;
+    };
+
+    var _createHalfASCII = function(margin) {
+      var cellSize = 1;
+      margin = (typeof margin == 'undefined')? cellSize * 2 : margin;
+
+      var size = _this.getModuleCount() * cellSize + margin * 2;
+      var min = margin;
+      var max = size - margin;
+
+      var y, x, r1, r2, p;
+
+      var blocks = {
+        '██': '█',
+        '█ ': '▀',
+        ' █': '▄',
+        '  ': ' '
+      };
+
+      var blocksLastLineNoMargin = {
+        '██': '▀',
+        '█ ': '▀',
+        ' █': ' ',
+        '  ': ' '
+      };
+
+      var ascii = '';
+      for (y = 0; y < size; y += 2) {
+        r1 = Math.floor((y - min) / cellSize);
+        r2 = Math.floor((y + 1 - min) / cellSize);
+        for (x = 0; x < size; x += 1) {
+          p = '█';
+
+          if (min <= x && x < max && min <= y && y < max && _this.isDark(r1, Math.floor((x - min) / cellSize))) {
+            p = ' ';
+          }
+
+          if (min <= x && x < max && min <= y+1 && y+1 < max && _this.isDark(r2, Math.floor((x - min) / cellSize))) {
+            p += ' ';
+          }
+          else {
+            p += '█';
+          }
+
+          // Output 2 characters per pixel, to create full square. 1 character per pixels gives only half width of square.
+          ascii += (margin < 1 && y+1 >= max) ? blocksLastLineNoMargin[p] : blocks[p];
+        }
+
+        ascii += '\n';
+      }
+
+      if (size % 2 && margin > 0) {
+        return ascii.substring(0, ascii.length - size - 1) + Array(size+1).join('▀');
+      }
+
+      return ascii.substring(0, ascii.length-1);
+    };
+
+    _this.createASCII = function(cellSize, margin) {
+      cellSize = cellSize || 1;
+
+      if (cellSize < 2) {
+        return _createHalfASCII(margin);
+      }
+
+      cellSize -= 1;
+      margin = (typeof margin == 'undefined')? cellSize * 2 : margin;
+
+      var size = _this.getModuleCount() * cellSize + margin * 2;
+      var min = margin;
+      var max = size - margin;
+
+      var y, x, r, p;
+
+      var white = Array(cellSize+1).join('██');
+      var black = Array(cellSize+1).join('  ');
+
+      var ascii = '';
+      var line = '';
+      for (y = 0; y < size; y += 1) {
+        r = Math.floor( (y - min) / cellSize);
+        line = '';
+        for (x = 0; x < size; x += 1) {
+          p = 1;
+
+          if (min <= x && x < max && min <= y && y < max && _this.isDark(r, Math.floor((x - min) / cellSize))) {
+            p = 0;
+          }
+
+          // Output 2 characters per pixel, to create full square. 1 character per pixels gives only half width of square.
+          line += p ? white : black;
+        }
+
+        for (r = 0; r < cellSize; r += 1) {
+          ascii += line + '\n';
+        }
+      }
+
+      return ascii.substring(0, ascii.length-1);
+    };
+
+    _this.renderTo2dContext = function(context, cellSize) {
+      cellSize = cellSize || 2;
+      var length = _this.getModuleCount();
+      for (var row = 0; row < length; row++) {
+        for (var col = 0; col < length; col++) {
+          context.fillStyle = _this.isDark(row, col) ? 'black' : 'white';
+          context.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+        }
+      }
+    }
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrcode.stringToBytes
+  //---------------------------------------------------------------------
+
+  qrcode.stringToBytesFuncs = {
+    'default' : function(s) {
+      var bytes = [];
+      for (var i = 0; i < s.length; i += 1) {
+        var c = s.charCodeAt(i);
+        bytes.push(c & 0xff);
+      }
+      return bytes;
+    }
+  };
+
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['default'];
+
+  //---------------------------------------------------------------------
+  // qrcode.createStringToBytes
+  //---------------------------------------------------------------------
+
+  /**
+   * @param unicodeData base64 string of byte array.
+   * [16bit Unicode],[16bit Bytes], ...
+   * @param numChars
+   */
+  qrcode.createStringToBytes = function(unicodeData, numChars) {
+
+    // create conversion map.
+
+    var unicodeMap = function() {
+
+      var bin = base64DecodeInputStream(unicodeData);
+      var read = function() {
+        var b = bin.read();
+        if (b == -1) throw 'eof';
+        return b;
+      };
+
+      var count = 0;
+      var unicodeMap = {};
+      while (true) {
+        var b0 = bin.read();
+        if (b0 == -1) break;
+        var b1 = read();
+        var b2 = read();
+        var b3 = read();
+        var k = String.fromCharCode( (b0 << 8) | b1);
+        var v = (b2 << 8) | b3;
+        unicodeMap[k] = v;
+        count += 1;
+      }
+      if (count != numChars) {
+        throw count + ' != ' + numChars;
+      }
+
+      return unicodeMap;
+    }();
+
+    var unknownChar = '?'.charCodeAt(0);
+
+    return function(s) {
+      var bytes = [];
+      for (var i = 0; i < s.length; i += 1) {
+        var c = s.charCodeAt(i);
+        if (c < 128) {
+          bytes.push(c);
+        } else {
+          var b = unicodeMap[s.charAt(i)];
+          if (typeof b == 'number') {
+            if ( (b & 0xff) == b) {
+              // 1byte
+              bytes.push(b);
+            } else {
+              // 2bytes
+              bytes.push(b >>> 8);
+              bytes.push(b & 0xff);
+            }
+          } else {
+            bytes.push(unknownChar);
+          }
+        }
+      }
+      return bytes;
+    };
+  };
+
+  //---------------------------------------------------------------------
+  // QRMode
+  //---------------------------------------------------------------------
+
+  var QRMode = {
+    MODE_NUMBER :    1 << 0,
+    MODE_ALPHA_NUM : 1 << 1,
+    MODE_8BIT_BYTE : 1 << 2,
+    MODE_KANJI :     1 << 3
+  };
+
+  //---------------------------------------------------------------------
+  // QRErrorCorrectionLevel
+  //---------------------------------------------------------------------
+
+  var QRErrorCorrectionLevel = {
+    L : 1,
+    M : 0,
+    Q : 3,
+    H : 2
+  };
+
+  //---------------------------------------------------------------------
+  // QRMaskPattern
+  //---------------------------------------------------------------------
+
+  var QRMaskPattern = {
+    PATTERN000 : 0,
+    PATTERN001 : 1,
+    PATTERN010 : 2,
+    PATTERN011 : 3,
+    PATTERN100 : 4,
+    PATTERN101 : 5,
+    PATTERN110 : 6,
+    PATTERN111 : 7
+  };
+
+  //---------------------------------------------------------------------
+  // QRUtil
+  //---------------------------------------------------------------------
+
+  var QRUtil = function() {
+
+    var PATTERN_POSITION_TABLE = [
+      [],
+      [6, 18],
+      [6, 22],
+      [6, 26],
+      [6, 30],
+      [6, 34],
+      [6, 22, 38],
+      [6, 24, 42],
+      [6, 26, 46],
+      [6, 28, 50],
+      [6, 30, 54],
+      [6, 32, 58],
+      [6, 34, 62],
+      [6, 26, 46, 66],
+      [6, 26, 48, 70],
+      [6, 26, 50, 74],
+      [6, 30, 54, 78],
+      [6, 30, 56, 82],
+      [6, 30, 58, 86],
+      [6, 34, 62, 90],
+      [6, 28, 50, 72, 94],
+      [6, 26, 50, 74, 98],
+      [6, 30, 54, 78, 102],
+      [6, 28, 54, 80, 106],
+      [6, 32, 58, 84, 110],
+      [6, 30, 58, 86, 114],
+      [6, 34, 62, 90, 118],
+      [6, 26, 50, 74, 98, 122],
+      [6, 30, 54, 78, 102, 126],
+      [6, 26, 52, 78, 104, 130],
+      [6, 30, 56, 82, 108, 134],
+      [6, 34, 60, 86, 112, 138],
+      [6, 30, 58, 86, 114, 142],
+      [6, 34, 62, 90, 118, 146],
+      [6, 30, 54, 78, 102, 126, 150],
+      [6, 24, 50, 76, 102, 128, 154],
+      [6, 28, 54, 80, 106, 132, 158],
+      [6, 32, 58, 84, 110, 136, 162],
+      [6, 26, 54, 82, 110, 138, 166],
+      [6, 30, 58, 86, 114, 142, 170]
+    ];
+    var G15 = (1 << 10) | (1 << 8) | (1 << 5) | (1 << 4) | (1 << 2) | (1 << 1) | (1 << 0);
+    var G18 = (1 << 12) | (1 << 11) | (1 << 10) | (1 << 9) | (1 << 8) | (1 << 5) | (1 << 2) | (1 << 0);
+    var G15_MASK = (1 << 14) | (1 << 12) | (1 << 10) | (1 << 4) | (1 << 1);
+
+    var _this = {};
+
+    var getBCHDigit = function(data) {
+      var digit = 0;
+      while (data != 0) {
+        digit += 1;
+        data >>>= 1;
+      }
+      return digit;
+    };
+
+    _this.getBCHTypeInfo = function(data) {
+      var d = data << 10;
+      while (getBCHDigit(d) - getBCHDigit(G15) >= 0) {
+        d ^= (G15 << (getBCHDigit(d) - getBCHDigit(G15) ) );
+      }
+      return ( (data << 10) | d) ^ G15_MASK;
+    };
+
+    _this.getBCHTypeNumber = function(data) {
+      var d = data << 12;
+      while (getBCHDigit(d) - getBCHDigit(G18) >= 0) {
+        d ^= (G18 << (getBCHDigit(d) - getBCHDigit(G18) ) );
+      }
+      return (data << 12) | d;
+    };
+
+    _this.getPatternPosition = function(typeNumber) {
+      return PATTERN_POSITION_TABLE[typeNumber - 1];
+    };
+
+    _this.getMaskFunction = function(maskPattern) {
+
+      switch (maskPattern) {
+
+      case QRMaskPattern.PATTERN000 :
+        return function(i, j) { return (i + j) % 2 == 0; };
+      case QRMaskPattern.PATTERN001 :
+        return function(i, j) { return i % 2 == 0; };
+      case QRMaskPattern.PATTERN010 :
+        return function(i, j) { return j % 3 == 0; };
+      case QRMaskPattern.PATTERN011 :
+        return function(i, j) { return (i + j) % 3 == 0; };
+      case QRMaskPattern.PATTERN100 :
+        return function(i, j) { return (Math.floor(i / 2) + Math.floor(j / 3) ) % 2 == 0; };
+      case QRMaskPattern.PATTERN101 :
+        return function(i, j) { return (i * j) % 2 + (i * j) % 3 == 0; };
+      case QRMaskPattern.PATTERN110 :
+        return function(i, j) { return ( (i * j) % 2 + (i * j) % 3) % 2 == 0; };
+      case QRMaskPattern.PATTERN111 :
+        return function(i, j) { return ( (i * j) % 3 + (i + j) % 2) % 2 == 0; };
+
+      default :
+        throw 'bad maskPattern:' + maskPattern;
+      }
+    };
+
+    _this.getErrorCorrectPolynomial = function(errorCorrectLength) {
+      var a = qrPolynomial([1], 0);
+      for (var i = 0; i < errorCorrectLength; i += 1) {
+        a = a.multiply(qrPolynomial([1, QRMath.gexp(i)], 0) );
+      }
+      return a;
+    };
+
+    _this.getLengthInBits = function(mode, type) {
+
+      if (1 <= type && type < 10) {
+
+        // 1 - 9
+
+        switch(mode) {
+        case QRMode.MODE_NUMBER    : return 10;
+        case QRMode.MODE_ALPHA_NUM : return 9;
+        case QRMode.MODE_8BIT_BYTE : return 8;
+        case QRMode.MODE_KANJI     : return 8;
+        default :
+          throw 'mode:' + mode;
+        }
+
+      } else if (type < 27) {
+
+        // 10 - 26
+
+        switch(mode) {
+        case QRMode.MODE_NUMBER    : return 12;
+        case QRMode.MODE_ALPHA_NUM : return 11;
+        case QRMode.MODE_8BIT_BYTE : return 16;
+        case QRMode.MODE_KANJI     : return 10;
+        default :
+          throw 'mode:' + mode;
+        }
+
+      } else if (type < 41) {
+
+        // 27 - 40
+
+        switch(mode) {
+        case QRMode.MODE_NUMBER    : return 14;
+        case QRMode.MODE_ALPHA_NUM : return 13;
+        case QRMode.MODE_8BIT_BYTE : return 16;
+        case QRMode.MODE_KANJI     : return 12;
+        default :
+          throw 'mode:' + mode;
+        }
+
+      } else {
+        throw 'type:' + type;
+      }
+    };
+
+    _this.getLostPoint = function(qrcode) {
+
+      var moduleCount = qrcode.getModuleCount();
+
+      var lostPoint = 0;
+
+      // LEVEL1
+
+      for (var row = 0; row < moduleCount; row += 1) {
+        for (var col = 0; col < moduleCount; col += 1) {
+
+          var sameCount = 0;
+          var dark = qrcode.isDark(row, col);
+
+          for (var r = -1; r <= 1; r += 1) {
+
+            if (row + r < 0 || moduleCount <= row + r) {
+              continue;
+            }
+
+            for (var c = -1; c <= 1; c += 1) {
+
+              if (col + c < 0 || moduleCount <= col + c) {
+                continue;
+              }
+
+              if (r == 0 && c == 0) {
+                continue;
+              }
+
+              if (dark == qrcode.isDark(row + r, col + c) ) {
+                sameCount += 1;
+              }
+            }
+          }
+
+          if (sameCount > 5) {
+            lostPoint += (3 + sameCount - 5);
+          }
+        }
+      };
+
+      // LEVEL2
+
+      for (var row = 0; row < moduleCount - 1; row += 1) {
+        for (var col = 0; col < moduleCount - 1; col += 1) {
+          var count = 0;
+          if (qrcode.isDark(row, col) ) count += 1;
+          if (qrcode.isDark(row + 1, col) ) count += 1;
+          if (qrcode.isDark(row, col + 1) ) count += 1;
+          if (qrcode.isDark(row + 1, col + 1) ) count += 1;
+          if (count == 0 || count == 4) {
+            lostPoint += 3;
+          }
+        }
+      }
+
+      // LEVEL3
+
+      for (var row = 0; row < moduleCount; row += 1) {
+        for (var col = 0; col < moduleCount - 6; col += 1) {
+          if (qrcode.isDark(row, col)
+              && !qrcode.isDark(row, col + 1)
+              &&  qrcode.isDark(row, col + 2)
+              &&  qrcode.isDark(row, col + 3)
+              &&  qrcode.isDark(row, col + 4)
+              && !qrcode.isDark(row, col + 5)
+              &&  qrcode.isDark(row, col + 6) ) {
+            lostPoint += 40;
+          }
+        }
+      }
+
+      for (var col = 0; col < moduleCount; col += 1) {
+        for (var row = 0; row < moduleCount - 6; row += 1) {
+          if (qrcode.isDark(row, col)
+              && !qrcode.isDark(row + 1, col)
+              &&  qrcode.isDark(row + 2, col)
+              &&  qrcode.isDark(row + 3, col)
+              &&  qrcode.isDark(row + 4, col)
+              && !qrcode.isDark(row + 5, col)
+              &&  qrcode.isDark(row + 6, col) ) {
+            lostPoint += 40;
+          }
+        }
+      }
+
+      // LEVEL4
+
+      var darkCount = 0;
+
+      for (var col = 0; col < moduleCount; col += 1) {
+        for (var row = 0; row < moduleCount; row += 1) {
+          if (qrcode.isDark(row, col) ) {
+            darkCount += 1;
+          }
+        }
+      }
+
+      var ratio = Math.abs(100 * darkCount / moduleCount / moduleCount - 50) / 5;
+      lostPoint += ratio * 10;
+
+      return lostPoint;
+    };
+
+    return _this;
+  }();
+
+  //---------------------------------------------------------------------
+  // QRMath
+  //---------------------------------------------------------------------
+
+  var QRMath = function() {
+
+    var EXP_TABLE = new Array(256);
+    var LOG_TABLE = new Array(256);
+
+    // initialize tables
+    for (var i = 0; i < 8; i += 1) {
+      EXP_TABLE[i] = 1 << i;
+    }
+    for (var i = 8; i < 256; i += 1) {
+      EXP_TABLE[i] = EXP_TABLE[i - 4]
+        ^ EXP_TABLE[i - 5]
+        ^ EXP_TABLE[i - 6]
+        ^ EXP_TABLE[i - 8];
+    }
+    for (var i = 0; i < 255; i += 1) {
+      LOG_TABLE[EXP_TABLE[i] ] = i;
+    }
+
+    var _this = {};
+
+    _this.glog = function(n) {
+
+      if (n < 1) {
+        throw 'glog(' + n + ')';
+      }
+
+      return LOG_TABLE[n];
+    };
+
+    _this.gexp = function(n) {
+
+      while (n < 0) {
+        n += 255;
+      }
+
+      while (n >= 256) {
+        n -= 255;
+      }
+
+      return EXP_TABLE[n];
+    };
+
+    return _this;
+  }();
+
+  //---------------------------------------------------------------------
+  // qrPolynomial
+  //---------------------------------------------------------------------
+
+  function qrPolynomial(num, shift) {
+
+    if (typeof num.length == 'undefined') {
+      throw num.length + '/' + shift;
+    }
+
+    var _num = function() {
+      var offset = 0;
+      while (offset < num.length && num[offset] == 0) {
+        offset += 1;
+      }
+      var _num = new Array(num.length - offset + shift);
+      for (var i = 0; i < num.length - offset; i += 1) {
+        _num[i] = num[i + offset];
+      }
+      return _num;
+    }();
+
+    var _this = {};
+
+    _this.getAt = function(index) {
+      return _num[index];
+    };
+
+    _this.getLength = function() {
+      return _num.length;
+    };
+
+    _this.multiply = function(e) {
+
+      var num = new Array(_this.getLength() + e.getLength() - 1);
+
+      for (var i = 0; i < _this.getLength(); i += 1) {
+        for (var j = 0; j < e.getLength(); j += 1) {
+          num[i + j] ^= QRMath.gexp(QRMath.glog(_this.getAt(i) ) + QRMath.glog(e.getAt(j) ) );
+        }
+      }
+
+      return qrPolynomial(num, 0);
+    };
+
+    _this.mod = function(e) {
+
+      if (_this.getLength() - e.getLength() < 0) {
+        return _this;
+      }
+
+      var ratio = QRMath.glog(_this.getAt(0) ) - QRMath.glog(e.getAt(0) );
+
+      var num = new Array(_this.getLength() );
+      for (var i = 0; i < _this.getLength(); i += 1) {
+        num[i] = _this.getAt(i);
+      }
+
+      for (var i = 0; i < e.getLength(); i += 1) {
+        num[i] ^= QRMath.gexp(QRMath.glog(e.getAt(i) ) + ratio);
+      }
+
+      // recursive call
+      return qrPolynomial(num, 0).mod(e);
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // QRRSBlock
+  //---------------------------------------------------------------------
+
+  var QRRSBlock = function() {
+
+    var RS_BLOCK_TABLE = [
+
+      // L
+      // M
+      // Q
+      // H
+
+      // 1
+      [1, 26, 19],
+      [1, 26, 16],
+      [1, 26, 13],
+      [1, 26, 9],
+
+      // 2
+      [1, 44, 34],
+      [1, 44, 28],
+      [1, 44, 22],
+      [1, 44, 16],
+
+      // 3
+      [1, 70, 55],
+      [1, 70, 44],
+      [2, 35, 17],
+      [2, 35, 13],
+
+      // 4
+      [1, 100, 80],
+      [2, 50, 32],
+      [2, 50, 24],
+      [4, 25, 9],
+
+      // 5
+      [1, 134, 108],
+      [2, 67, 43],
+      [2, 33, 15, 2, 34, 16],
+      [2, 33, 11, 2, 34, 12],
+
+      // 6
+      [2, 86, 68],
+      [4, 43, 27],
+      [4, 43, 19],
+      [4, 43, 15],
+
+      // 7
+      [2, 98, 78],
+      [4, 49, 31],
+      [2, 32, 14, 4, 33, 15],
+      [4, 39, 13, 1, 40, 14],
+
+      // 8
+      [2, 121, 97],
+      [2, 60, 38, 2, 61, 39],
+      [4, 40, 18, 2, 41, 19],
+      [4, 40, 14, 2, 41, 15],
+
+      // 9
+      [2, 146, 116],
+      [3, 58, 36, 2, 59, 37],
+      [4, 36, 16, 4, 37, 17],
+      [4, 36, 12, 4, 37, 13],
+
+      // 10
+      [2, 86, 68, 2, 87, 69],
+      [4, 69, 43, 1, 70, 44],
+      [6, 43, 19, 2, 44, 20],
+      [6, 43, 15, 2, 44, 16],
+
+      // 11
+      [4, 101, 81],
+      [1, 80, 50, 4, 81, 51],
+      [4, 50, 22, 4, 51, 23],
+      [3, 36, 12, 8, 37, 13],
+
+      // 12
+      [2, 116, 92, 2, 117, 93],
+      [6, 58, 36, 2, 59, 37],
+      [4, 46, 20, 6, 47, 21],
+      [7, 42, 14, 4, 43, 15],
+
+      // 13
+      [4, 133, 107],
+      [8, 59, 37, 1, 60, 38],
+      [8, 44, 20, 4, 45, 21],
+      [12, 33, 11, 4, 34, 12],
+
+      // 14
+      [3, 145, 115, 1, 146, 116],
+      [4, 64, 40, 5, 65, 41],
+      [11, 36, 16, 5, 37, 17],
+      [11, 36, 12, 5, 37, 13],
+
+      // 15
+      [5, 109, 87, 1, 110, 88],
+      [5, 65, 41, 5, 66, 42],
+      [5, 54, 24, 7, 55, 25],
+      [11, 36, 12, 7, 37, 13],
+
+      // 16
+      [5, 122, 98, 1, 123, 99],
+      [7, 73, 45, 3, 74, 46],
+      [15, 43, 19, 2, 44, 20],
+      [3, 45, 15, 13, 46, 16],
+
+      // 17
+      [1, 135, 107, 5, 136, 108],
+      [10, 74, 46, 1, 75, 47],
+      [1, 50, 22, 15, 51, 23],
+      [2, 42, 14, 17, 43, 15],
+
+      // 18
+      [5, 150, 120, 1, 151, 121],
+      [9, 69, 43, 4, 70, 44],
+      [17, 50, 22, 1, 51, 23],
+      [2, 42, 14, 19, 43, 15],
+
+      // 19
+      [3, 141, 113, 4, 142, 114],
+      [3, 70, 44, 11, 71, 45],
+      [17, 47, 21, 4, 48, 22],
+      [9, 39, 13, 16, 40, 14],
+
+      // 20
+      [3, 135, 107, 5, 136, 108],
+      [3, 67, 41, 13, 68, 42],
+      [15, 54, 24, 5, 55, 25],
+      [15, 43, 15, 10, 44, 16],
+
+      // 21
+      [4, 144, 116, 4, 145, 117],
+      [17, 68, 42],
+      [17, 50, 22, 6, 51, 23],
+      [19, 46, 16, 6, 47, 17],
+
+      // 22
+      [2, 139, 111, 7, 140, 112],
+      [17, 74, 46],
+      [7, 54, 24, 16, 55, 25],
+      [34, 37, 13],
+
+      // 23
+      [4, 151, 121, 5, 152, 122],
+      [4, 75, 47, 14, 76, 48],
+      [11, 54, 24, 14, 55, 25],
+      [16, 45, 15, 14, 46, 16],
+
+      // 24
+      [6, 147, 117, 4, 148, 118],
+      [6, 73, 45, 14, 74, 46],
+      [11, 54, 24, 16, 55, 25],
+      [30, 46, 16, 2, 47, 17],
+
+      // 25
+      [8, 132, 106, 4, 133, 107],
+      [8, 75, 47, 13, 76, 48],
+      [7, 54, 24, 22, 55, 25],
+      [22, 45, 15, 13, 46, 16],
+
+      // 26
+      [10, 142, 114, 2, 143, 115],
+      [19, 74, 46, 4, 75, 47],
+      [28, 50, 22, 6, 51, 23],
+      [33, 46, 16, 4, 47, 17],
+
+      // 27
+      [8, 152, 122, 4, 153, 123],
+      [22, 73, 45, 3, 74, 46],
+      [8, 53, 23, 26, 54, 24],
+      [12, 45, 15, 28, 46, 16],
+
+      // 28
+      [3, 147, 117, 10, 148, 118],
+      [3, 73, 45, 23, 74, 46],
+      [4, 54, 24, 31, 55, 25],
+      [11, 45, 15, 31, 46, 16],
+
+      // 29
+      [7, 146, 116, 7, 147, 117],
+      [21, 73, 45, 7, 74, 46],
+      [1, 53, 23, 37, 54, 24],
+      [19, 45, 15, 26, 46, 16],
+
+      // 30
+      [5, 145, 115, 10, 146, 116],
+      [19, 75, 47, 10, 76, 48],
+      [15, 54, 24, 25, 55, 25],
+      [23, 45, 15, 25, 46, 16],
+
+      // 31
+      [13, 145, 115, 3, 146, 116],
+      [2, 74, 46, 29, 75, 47],
+      [42, 54, 24, 1, 55, 25],
+      [23, 45, 15, 28, 46, 16],
+
+      // 32
+      [17, 145, 115],
+      [10, 74, 46, 23, 75, 47],
+      [10, 54, 24, 35, 55, 25],
+      [19, 45, 15, 35, 46, 16],
+
+      // 33
+      [17, 145, 115, 1, 146, 116],
+      [14, 74, 46, 21, 75, 47],
+      [29, 54, 24, 19, 55, 25],
+      [11, 45, 15, 46, 46, 16],
+
+      // 34
+      [13, 145, 115, 6, 146, 116],
+      [14, 74, 46, 23, 75, 47],
+      [44, 54, 24, 7, 55, 25],
+      [59, 46, 16, 1, 47, 17],
+
+      // 35
+      [12, 151, 121, 7, 152, 122],
+      [12, 75, 47, 26, 76, 48],
+      [39, 54, 24, 14, 55, 25],
+      [22, 45, 15, 41, 46, 16],
+
+      // 36
+      [6, 151, 121, 14, 152, 122],
+      [6, 75, 47, 34, 76, 48],
+      [46, 54, 24, 10, 55, 25],
+      [2, 45, 15, 64, 46, 16],
+
+      // 37
+      [17, 152, 122, 4, 153, 123],
+      [29, 74, 46, 14, 75, 47],
+      [49, 54, 24, 10, 55, 25],
+      [24, 45, 15, 46, 46, 16],
+
+      // 38
+      [4, 152, 122, 18, 153, 123],
+      [13, 74, 46, 32, 75, 47],
+      [48, 54, 24, 14, 55, 25],
+      [42, 45, 15, 32, 46, 16],
+
+      // 39
+      [20, 147, 117, 4, 148, 118],
+      [40, 75, 47, 7, 76, 48],
+      [43, 54, 24, 22, 55, 25],
+      [10, 45, 15, 67, 46, 16],
+
+      // 40
+      [19, 148, 118, 6, 149, 119],
+      [18, 75, 47, 31, 76, 48],
+      [34, 54, 24, 34, 55, 25],
+      [20, 45, 15, 61, 46, 16]
+    ];
+
+    var qrRSBlock = function(totalCount, dataCount) {
+      var _this = {};
+      _this.totalCount = totalCount;
+      _this.dataCount = dataCount;
+      return _this;
+    };
+
+    var _this = {};
+
+    var getRsBlockTable = function(typeNumber, errorCorrectionLevel) {
+
+      switch(errorCorrectionLevel) {
+      case QRErrorCorrectionLevel.L :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 0];
+      case QRErrorCorrectionLevel.M :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 1];
+      case QRErrorCorrectionLevel.Q :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 2];
+      case QRErrorCorrectionLevel.H :
+        return RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 3];
+      default :
+        return undefined;
+      }
+    };
+
+    _this.getRSBlocks = function(typeNumber, errorCorrectionLevel) {
+
+      var rsBlock = getRsBlockTable(typeNumber, errorCorrectionLevel);
+
+      if (typeof rsBlock == 'undefined') {
+        throw 'bad rs block @ typeNumber:' + typeNumber +
+            '/errorCorrectionLevel:' + errorCorrectionLevel;
+      }
+
+      var length = rsBlock.length / 3;
+
+      var list = [];
+
+      for (var i = 0; i < length; i += 1) {
+
+        var count = rsBlock[i * 3 + 0];
+        var totalCount = rsBlock[i * 3 + 1];
+        var dataCount = rsBlock[i * 3 + 2];
+
+        for (var j = 0; j < count; j += 1) {
+          list.push(qrRSBlock(totalCount, dataCount) );
+        }
+      }
+
+      return list;
+    };
+
+    return _this;
+  }();
+
+  //---------------------------------------------------------------------
+  // qrBitBuffer
+  //---------------------------------------------------------------------
+
+  var qrBitBuffer = function() {
+
+    var _buffer = [];
+    var _length = 0;
+
+    var _this = {};
+
+    _this.getBuffer = function() {
+      return _buffer;
+    };
+
+    _this.getAt = function(index) {
+      var bufIndex = Math.floor(index / 8);
+      return ( (_buffer[bufIndex] >>> (7 - index % 8) ) & 1) == 1;
+    };
+
+    _this.put = function(num, length) {
+      for (var i = 0; i < length; i += 1) {
+        _this.putBit( ( (num >>> (length - i - 1) ) & 1) == 1);
+      }
+    };
+
+    _this.getLengthInBits = function() {
+      return _length;
+    };
+
+    _this.putBit = function(bit) {
+
+      var bufIndex = Math.floor(_length / 8);
+      if (_buffer.length <= bufIndex) {
+        _buffer.push(0);
+      }
+
+      if (bit) {
+        _buffer[bufIndex] |= (0x80 >>> (_length % 8) );
+      }
+
+      _length += 1;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrNumber
+  //---------------------------------------------------------------------
+
+  var qrNumber = function(data) {
+
+    var _mode = QRMode.MODE_NUMBER;
+    var _data = data;
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return _data.length;
+    };
+
+    _this.write = function(buffer) {
+
+      var data = _data;
+
+      var i = 0;
+
+      while (i + 2 < data.length) {
+        buffer.put(strToNum(data.substring(i, i + 3) ), 10);
+        i += 3;
+      }
+
+      if (i < data.length) {
+        if (data.length - i == 1) {
+          buffer.put(strToNum(data.substring(i, i + 1) ), 4);
+        } else if (data.length - i == 2) {
+          buffer.put(strToNum(data.substring(i, i + 2) ), 7);
+        }
+      }
+    };
+
+    var strToNum = function(s) {
+      var num = 0;
+      for (var i = 0; i < s.length; i += 1) {
+        num = num * 10 + chatToNum(s.charAt(i) );
+      }
+      return num;
+    };
+
+    var chatToNum = function(c) {
+      if ('0' <= c && c <= '9') {
+        return c.charCodeAt(0) - '0'.charCodeAt(0);
+      }
+      throw 'illegal char :' + c;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrAlphaNum
+  //---------------------------------------------------------------------
+
+  var qrAlphaNum = function(data) {
+
+    var _mode = QRMode.MODE_ALPHA_NUM;
+    var _data = data;
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return _data.length;
+    };
+
+    _this.write = function(buffer) {
+
+      var s = _data;
+
+      var i = 0;
+
+      while (i + 1 < s.length) {
+        buffer.put(
+          getCode(s.charAt(i) ) * 45 +
+          getCode(s.charAt(i + 1) ), 11);
+        i += 2;
+      }
+
+      if (i < s.length) {
+        buffer.put(getCode(s.charAt(i) ), 6);
+      }
+    };
+
+    var getCode = function(c) {
+
+      if ('0' <= c && c <= '9') {
+        return c.charCodeAt(0) - '0'.charCodeAt(0);
+      } else if ('A' <= c && c <= 'Z') {
+        return c.charCodeAt(0) - 'A'.charCodeAt(0) + 10;
+      } else {
+        switch (c) {
+        case ' ' : return 36;
+        case '$' : return 37;
+        case '%' : return 38;
+        case '*' : return 39;
+        case '+' : return 40;
+        case '-' : return 41;
+        case '.' : return 42;
+        case '/' : return 43;
+        case ':' : return 44;
+        default :
+          throw 'illegal char :' + c;
+        }
+      }
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qr8BitByte
+  //---------------------------------------------------------------------
+
+  var qr8BitByte = function(data) {
+
+    var _mode = QRMode.MODE_8BIT_BYTE;
+    var _data = data;
+    var _bytes = qrcode.stringToBytes(data);
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return _bytes.length;
+    };
+
+    _this.write = function(buffer) {
+      for (var i = 0; i < _bytes.length; i += 1) {
+        buffer.put(_bytes[i], 8);
+      }
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrKanji
+  //---------------------------------------------------------------------
+
+  var qrKanji = function(data) {
+
+    var _mode = QRMode.MODE_KANJI;
+    var _data = data;
+
+    var stringToBytes = qrcode.stringToBytesFuncs['SJIS'];
+    if (!stringToBytes) {
+      throw 'sjis not supported.';
+    }
+    !function(c, code) {
+      // self test for sjis support.
+      var test = stringToBytes(c);
+      if (test.length != 2 || ( (test[0] << 8) | test[1]) != code) {
+        throw 'sjis not supported.';
+      }
+    }('\u53cb', 0x9746);
+
+    var _bytes = stringToBytes(data);
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return _mode;
+    };
+
+    _this.getLength = function(buffer) {
+      return ~~(_bytes.length / 2);
+    };
+
+    _this.write = function(buffer) {
+
+      var data = _bytes;
+
+      var i = 0;
+
+      while (i + 1 < data.length) {
+
+        var c = ( (0xff & data[i]) << 8) | (0xff & data[i + 1]);
+
+        if (0x8140 <= c && c <= 0x9FFC) {
+          c -= 0x8140;
+        } else if (0xE040 <= c && c <= 0xEBBF) {
+          c -= 0xC140;
+        } else {
+          throw 'illegal char at ' + (i + 1) + '/' + c;
+        }
+
+        c = ( (c >>> 8) & 0xff) * 0xC0 + (c & 0xff);
+
+        buffer.put(c, 13);
+
+        i += 2;
+      }
+
+      if (i < data.length) {
+        throw 'illegal char at ' + (i + 1);
+      }
+    };
+
+    return _this;
+  };
+
+  //=====================================================================
+  // GIF Support etc.
+  //
+
+  //---------------------------------------------------------------------
+  // byteArrayOutputStream
+  //---------------------------------------------------------------------
+
+  var byteArrayOutputStream = function() {
+
+    var _bytes = [];
+
+    var _this = {};
+
+    _this.writeByte = function(b) {
+      _bytes.push(b & 0xff);
+    };
+
+    _this.writeShort = function(i) {
+      _this.writeByte(i);
+      _this.writeByte(i >>> 8);
+    };
+
+    _this.writeBytes = function(b, off, len) {
+      off = off || 0;
+      len = len || b.length;
+      for (var i = 0; i < len; i += 1) {
+        _this.writeByte(b[i + off]);
+      }
+    };
+
+    _this.writeString = function(s) {
+      for (var i = 0; i < s.length; i += 1) {
+        _this.writeByte(s.charCodeAt(i) );
+      }
+    };
+
+    _this.toByteArray = function() {
+      return _bytes;
+    };
+
+    _this.toString = function() {
+      var s = '';
+      s += '[';
+      for (var i = 0; i < _bytes.length; i += 1) {
+        if (i > 0) {
+          s += ',';
+        }
+        s += _bytes[i];
+      }
+      s += ']';
+      return s;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // base64EncodeOutputStream
+  //---------------------------------------------------------------------
+
+  var base64EncodeOutputStream = function() {
+
+    var _buffer = 0;
+    var _buflen = 0;
+    var _length = 0;
+    var _base64 = '';
+
+    var _this = {};
+
+    var writeEncoded = function(b) {
+      _base64 += String.fromCharCode(encode(b & 0x3f) );
+    };
+
+    var encode = function(n) {
+      if (n < 0) {
+        // error.
+      } else if (n < 26) {
+        return 0x41 + n;
+      } else if (n < 52) {
+        return 0x61 + (n - 26);
+      } else if (n < 62) {
+        return 0x30 + (n - 52);
+      } else if (n == 62) {
+        return 0x2b;
+      } else if (n == 63) {
+        return 0x2f;
+      }
+      throw 'n:' + n;
+    };
+
+    _this.writeByte = function(n) {
+
+      _buffer = (_buffer << 8) | (n & 0xff);
+      _buflen += 8;
+      _length += 1;
+
+      while (_buflen >= 6) {
+        writeEncoded(_buffer >>> (_buflen - 6) );
+        _buflen -= 6;
+      }
+    };
+
+    _this.flush = function() {
+
+      if (_buflen > 0) {
+        writeEncoded(_buffer << (6 - _buflen) );
+        _buffer = 0;
+        _buflen = 0;
+      }
+
+      if (_length % 3 != 0) {
+        // padding
+        var padlen = 3 - _length % 3;
+        for (var i = 0; i < padlen; i += 1) {
+          _base64 += '=';
+        }
+      }
+    };
+
+    _this.toString = function() {
+      return _base64;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // base64DecodeInputStream
+  //---------------------------------------------------------------------
+
+  var base64DecodeInputStream = function(str) {
+
+    var _str = str;
+    var _pos = 0;
+    var _buffer = 0;
+    var _buflen = 0;
+
+    var _this = {};
+
+    _this.read = function() {
+
+      while (_buflen < 8) {
+
+        if (_pos >= _str.length) {
+          if (_buflen == 0) {
+            return -1;
+          }
+          throw 'unexpected end of file./' + _buflen;
+        }
+
+        var c = _str.charAt(_pos);
+        _pos += 1;
+
+        if (c == '=') {
+          _buflen = 0;
+          return -1;
+        } else if (c.match(/^\s$/) ) {
+          // ignore if whitespace.
+          continue;
+        }
+
+        _buffer = (_buffer << 6) | decode(c.charCodeAt(0) );
+        _buflen += 6;
+      }
+
+      var n = (_buffer >>> (_buflen - 8) ) & 0xff;
+      _buflen -= 8;
+      return n;
+    };
+
+    var decode = function(c) {
+      if (0x41 <= c && c <= 0x5a) {
+        return c - 0x41;
+      } else if (0x61 <= c && c <= 0x7a) {
+        return c - 0x61 + 26;
+      } else if (0x30 <= c && c <= 0x39) {
+        return c - 0x30 + 52;
+      } else if (c == 0x2b) {
+        return 62;
+      } else if (c == 0x2f) {
+        return 63;
+      } else {
+        throw 'c:' + c;
+      }
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // gifImage (B/W)
+  //---------------------------------------------------------------------
+
+  var gifImage = function(width, height) {
+
+    var _width = width;
+    var _height = height;
+    var _data = new Array(width * height);
+
+    var _this = {};
+
+    _this.setPixel = function(x, y, pixel) {
+      _data[y * _width + x] = pixel;
+    };
+
+    _this.write = function(out) {
+
+      //---------------------------------
+      // GIF Signature
+
+      out.writeString('GIF87a');
+
+      //---------------------------------
+      // Screen Descriptor
+
+      out.writeShort(_width);
+      out.writeShort(_height);
+
+      out.writeByte(0x80); // 2bit
+      out.writeByte(0);
+      out.writeByte(0);
+
+      //---------------------------------
+      // Global Color Map
+
+      // black
+      out.writeByte(0x00);
+      out.writeByte(0x00);
+      out.writeByte(0x00);
+
+      // white
+      out.writeByte(0xff);
+      out.writeByte(0xff);
+      out.writeByte(0xff);
+
+      //---------------------------------
+      // Image Descriptor
+
+      out.writeString(',');
+      out.writeShort(0);
+      out.writeShort(0);
+      out.writeShort(_width);
+      out.writeShort(_height);
+      out.writeByte(0);
+
+      //---------------------------------
+      // Local Color Map
+
+      //---------------------------------
+      // Raster Data
+
+      var lzwMinCodeSize = 2;
+      var raster = getLZWRaster(lzwMinCodeSize);
+
+      out.writeByte(lzwMinCodeSize);
+
+      var offset = 0;
+
+      while (raster.length - offset > 255) {
+        out.writeByte(255);
+        out.writeBytes(raster, offset, 255);
+        offset += 255;
+      }
+
+      out.writeByte(raster.length - offset);
+      out.writeBytes(raster, offset, raster.length - offset);
+      out.writeByte(0x00);
+
+      //---------------------------------
+      // GIF Terminator
+      out.writeString(';');
+    };
+
+    var bitOutputStream = function(out) {
+
+      var _out = out;
+      var _bitLength = 0;
+      var _bitBuffer = 0;
+
+      var _this = {};
+
+      _this.write = function(data, length) {
+
+        if ( (data >>> length) != 0) {
+          throw 'length over';
+        }
+
+        while (_bitLength + length >= 8) {
+          _out.writeByte(0xff & ( (data << _bitLength) | _bitBuffer) );
+          length -= (8 - _bitLength);
+          data >>>= (8 - _bitLength);
+          _bitBuffer = 0;
+          _bitLength = 0;
+        }
+
+        _bitBuffer = (data << _bitLength) | _bitBuffer;
+        _bitLength = _bitLength + length;
+      };
+
+      _this.flush = function() {
+        if (_bitLength > 0) {
+          _out.writeByte(_bitBuffer);
+        }
+      };
+
+      return _this;
+    };
+
+    var getLZWRaster = function(lzwMinCodeSize) {
+
+      var clearCode = 1 << lzwMinCodeSize;
+      var endCode = (1 << lzwMinCodeSize) + 1;
+      var bitLength = lzwMinCodeSize + 1;
+
+      // Setup LZWTable
+      var table = lzwTable();
+
+      for (var i = 0; i < clearCode; i += 1) {
+        table.add(String.fromCharCode(i) );
+      }
+      table.add(String.fromCharCode(clearCode) );
+      table.add(String.fromCharCode(endCode) );
+
+      var byteOut = byteArrayOutputStream();
+      var bitOut = bitOutputStream(byteOut);
+
+      // clear code
+      bitOut.write(clearCode, bitLength);
+
+      var dataIndex = 0;
+
+      var s = String.fromCharCode(_data[dataIndex]);
+      dataIndex += 1;
+
+      while (dataIndex < _data.length) {
+
+        var c = String.fromCharCode(_data[dataIndex]);
+        dataIndex += 1;
+
+        if (table.contains(s + c) ) {
+
+          s = s + c;
+
+        } else {
+
+          bitOut.write(table.indexOf(s), bitLength);
+
+          if (table.size() < 0xfff) {
+
+            if (table.size() == (1 << bitLength) ) {
+              bitLength += 1;
+            }
+
+            table.add(s + c);
+          }
+
+          s = c;
+        }
+      }
+
+      bitOut.write(table.indexOf(s), bitLength);
+
+      // end code
+      bitOut.write(endCode, bitLength);
+
+      bitOut.flush();
+
+      return byteOut.toByteArray();
+    };
+
+    var lzwTable = function() {
+
+      var _map = {};
+      var _size = 0;
+
+      var _this = {};
+
+      _this.add = function(key) {
+        if (_this.contains(key) ) {
+          throw 'dup key:' + key;
+        }
+        _map[key] = _size;
+        _size += 1;
+      };
+
+      _this.size = function() {
+        return _size;
+      };
+
+      _this.indexOf = function(key) {
+        return _map[key];
+      };
+
+      _this.contains = function(key) {
+        return typeof _map[key] != 'undefined';
+      };
+
+      return _this;
+    };
+
+    return _this;
+  };
+
+  var createDataURL = function(width, height, getPixel) {
+    var gif = gifImage(width, height);
+    for (var y = 0; y < height; y += 1) {
+      for (var x = 0; x < width; x += 1) {
+        gif.setPixel(x, y, getPixel(x, y) );
+      }
+    }
+
+    var b = byteArrayOutputStream();
+    gif.write(b);
+
+    var base64 = base64EncodeOutputStream();
+    var bytes = b.toByteArray();
+    for (var i = 0; i < bytes.length; i += 1) {
+      base64.writeByte(bytes[i]);
+    }
+    base64.flush();
+
+    return 'data:image/gif;base64,' + base64;
+  };
+
+  //---------------------------------------------------------------------
+  // returns qrcode function.
+
+  return qrcode;
+}();
+
+// multibyte support
+!function() {
+
+  qrcode.stringToBytesFuncs['UTF-8'] = function(s) {
+    // http://stackoverflow.com/questions/18729405/how-to-convert-utf8-string-to-byte-array
+    function toUTF8Array(str) {
+      var utf8 = [];
+      for (var i=0; i < str.length; i++) {
+        var charcode = str.charCodeAt(i);
+        if (charcode < 0x80) utf8.push(charcode);
+        else if (charcode < 0x800) {
+          utf8.push(0xc0 | (charcode >> 6),
+              0x80 | (charcode & 0x3f));
+        }
+        else if (charcode < 0xd800 || charcode >= 0xe000) {
+          utf8.push(0xe0 | (charcode >> 12),
+              0x80 | ((charcode>>6) & 0x3f),
+              0x80 | (charcode & 0x3f));
+        }
+        // surrogate pair
+        else {
+          i++;
+          // UTF-16 encodes 0x10000-0x10FFFF by
+          // subtracting 0x10000 and splitting the
+          // 20 bits of 0x0-0xFFFFF into two halves
+          charcode = 0x10000 + (((charcode & 0x3ff)<<10)
+            | (str.charCodeAt(i) & 0x3ff));
+          utf8.push(0xf0 | (charcode >>18),
+              0x80 | ((charcode>>12) & 0x3f),
+              0x80 | ((charcode>>6) & 0x3f),
+              0x80 | (charcode & 0x3f));
+        }
+      }
+      return utf8;
+    }
+    return toUTF8Array(s);
+  };
+
+}();
+
+(function (factory) {
+  if (typeof define === 'function' && define.amd) {
+      define([], factory);
+  } else if (typeof exports === 'object') {
+      module.exports = factory();
+  }
+}(function () {
+    return qrcode;
+}));
+MPQR
+chmod 644 /opt/minipainel/qrcode.js
 
 say "A instalar o gestor de ficheiros..."
 install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v1.9.1 — gestor de ficheiros (API)
+ * IDDigital Hosting v1.10.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -3972,11 +6568,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v1.9.1
+#  mpanel — IDDigital Hosting CLI v1.10.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.9.1"
+MP_VERSION="1.10.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -4181,7 +6777,7 @@ write_nginx(){
 EOF
   chmod 644 "$inc"
   {
-    printf '# IDDigital Hosting — site %s (gerido pelo mpanel; não editar à mão)\n# acesso por porta (LAN)\nserver {\n    listen %s%s;\n%s\n    server_name _;\n    include %s;\n}\n' "$n" "$p" "$dflt" "$l6" "$inc"
+    printf '# IDDigital Hosting — site %s (gerido pelo mpanel; não editar à mão)\n# acesso por porta (LAN)\nserver {\n    listen %s%s;\n%s\n    server_name _;\n    include %s;\n    include %s;\n}\n' "$n" "$p" "$dflt" "$l6" "$PORTS_ALLOW_INC" "$inc"
     domain_servers "mp-$n" "$inc" "$(site_get "$n" DOMAINS)" "$(site_get "$n" SSL)" "$(site_get "$n" HTTPS)" "$(site_get "$n" WWW)"
   } > "$dest"
   chmod 644 "$dest"
@@ -5030,6 +7626,7 @@ cmd_allow_add(){
   fw_ip_valid "$ip" || die "IP ou rede inválida: $ip"
   touch "$FW_ALLOW"; chmod 600 "$FW_ALLOW"
   grep -qxF "$ip" "$FW_ALLOW" || echo "$ip" >> "$FW_ALLOW"
+  if [ "$(srv_get PORTS_ACCESS all)" = lan ]; then ports_allow_write; apply_nginx >/dev/null 2>&1; fi
   if [ -f "$FW_BLOCKS" ] && cut -d'|' -f1 "$FW_BLOCKS" | grep -qxF "$ip"; then fw_has_nft && fw_nft_del "$ip"; fw_list_set "$ip"; fi
   fw_write_state
   echo "$ip adicionado aos IPs de confiança (nunca é bloqueado)."
@@ -5041,6 +7638,7 @@ cmd_allow_del(){
   if [ -f "$FW_ALLOW" ]; then grep -vxF "$ip" "$FW_ALLOW" > "$FW_ALLOW.tmp"; mv -f "$FW_ALLOW.tmp" "$FW_ALLOW"; fi
   [ -f "$FW_ALLOW" ] && grep -qxF "$ip" "$FW_ALLOW" && die "Não foi possível remover $ip."
   chmod 600 "$FW_ALLOW" 2>/dev/null
+  if [ "$(srv_get PORTS_ACCESS all)" = lan ]; then ports_allow_write; apply_nginx >/dev/null 2>&1; fi
   fw_write_state
   echo "$ip removido dos IPs de confiança."
   return 0
@@ -5341,7 +7939,8 @@ bk_write_state(){
   jq -n --argjson sets "${sets:-[]}" --argjson rem "$(bk_remotes)" --arg total "${total:-0}" \
      --arg en "$(bk_conf ENABLED 1)" --arg time "$(bk_conf TIME 03:00)" --arg kd "$(bk_conf KEEP_DAILY 7)" --arg kw "$(bk_conf KEEP_WEEKLY 4)" \
      --arg km "$(bk_conf KEEP_MONTHLY 3)" --arg r "$(bk_conf REMOTE '')" --argjson last "$(cat "$DATA/stats/backup-last.json" 2>/dev/null || echo null)" \
-     '{conf:{enabled:($en=="1"), time:$time, keep_daily:($kd|tonumber), keep_weekly:($kw|tonumber), keep_monthly:($km|tonumber), remote:$r},
+     --arg ec "$(bk_conf ENCRYPT 1)" \
+     '{conf:{enabled:($en=="1"), time:$time, keep_daily:($kd|tonumber), keep_weekly:($kw|tonumber), keep_monthly:($km|tonumber), remote:$r, encrypt:($ec=="1")},
        remotes:$rem, sets:$sets, total:($total|tonumber), last:$last}' > "$BK_STATE.tmp" \
     && chown root:"$PANEL_SYSUSER" "$BK_STATE.tmp" && chmod 640 "$BK_STATE.tmp" && mv -f "$BK_STATE.tmp" "$BK_STATE"
   return 0
@@ -5414,10 +8013,19 @@ bk_upload(){ # site id remote
   local s=$1 id=$2 r=$3 root
   bk_remote_ok "$r" || return 1
   root=$(bk_remote_root "$r"); [ -n "$root" ] || { echo "Destino remoto '$r' não existe." >&2; return 1; }
+  local src="$BK_DIR/$s/$id" stage="" enc=false rc
+  if [ "$(bk_conf ENCRYPT 1)" = 1 ]; then
+    bk_status "Cifra de $s"
+    stage=$(mktemp -d /var/tmp/mp-bkup.XXXXXX)
+    bk_encrypt_dir "$src" "$stage" || { rm -rf "$stage"; echo "Falhou a cifra do backup." >&2; return 1; }
+    src=$stage; enc=true
+  fi
   bk_status "Envio de $s para $r"
-  bk_rc copy "$BK_DIR/$s/$id" "$r:$root/$(bk_host)/$s/$id" --transfers 2 2>&1 | tail -n 3 >&2
-  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
-  jq --arg r "$r" '.remote = $r' "$BK_DIR/$s/$id/manifest.json" > "$BK_DIR/$s/$id/manifest.tmp" && mv -f "$BK_DIR/$s/$id/manifest.tmp" "$BK_DIR/$s/$id/manifest.json"
+  bk_rc copy "$src" "$r:$root/$(bk_host)/$s/$id" --transfers 2 2>&1 | tail -n 3 >&2
+  rc=${PIPESTATUS[0]}
+  [ -n "$stage" ] && rm -rf "$stage"
+  [ "$rc" -eq 0 ] || return 1
+  jq --arg r "$r" --argjson e "$enc" '.remote = $r | .remote_enc = $e' "$BK_DIR/$s/$id/manifest.json" > "$BK_DIR/$s/$id/manifest.tmp" && mv -f "$BK_DIR/$s/$id/manifest.tmp" "$BK_DIR/$s/$id/manifest.json"
   chown root:"$PANEL_SYSUSER" "$BK_DIR/$s/$id/manifest.json"; chmod 640 "$BK_DIR/$s/$id/manifest.json"
   [ -f "$BK_DIR/$s/$id/manifest.sig" ] && bk_sign "$BK_DIR/$s/$id"
 }
@@ -5517,6 +8125,7 @@ bk_need_set(){ # site id -> garante cópia local (vai buscar ao destino remoto s
   root=$(bk_remote_root "$r")
   BK_FETCHED=1
   bk_rc copy "$r:$root/$(bk_host)/$s/$id" "$BK_DIR/$s/$id" >/dev/null 2>&1 && [ -f "$BK_DIR/$s/$id/manifest.json" ] || die "O backup $id de $s não existe localmente nem em $r."
+  bk_decrypt_dir "$BK_DIR/$s/$id" || { rm -rf "${BK_DIR:?}/$s/$id"; die "Não foi possível decifrar o backup: a chave dos backups deste servidor não é a mesma que o cifrou (usa 'mpanel bk-key-set')."; }
   chown -R root:"$PANEL_SYSUSER" "$BK_DIR/$s/$id"
 }
 cmd_bk_restore(){
@@ -5607,8 +8216,8 @@ cmd_bk_delete(){
   return 0
 }
 cmd_bk_conf(){
-  local en tm kd kw km r re_t='^([01][0-9]|2[0-3]):[0-5][0-9]$' re_n='^[0-9]{1,3}$'
-  en=$(bk_conf ENABLED 1); tm=$(bk_conf TIME 03:00); kd=$(bk_conf KEEP_DAILY 7); kw=$(bk_conf KEEP_WEEKLY 4); km=$(bk_conf KEEP_MONTHLY 3); r=$(bk_conf REMOTE '')
+  local en tm kd kw km r ec re_t='^([01][0-9]|2[0-3]):[0-5][0-9]$' re_n='^[0-9]{1,3}$'
+  en=$(bk_conf ENABLED 1); tm=$(bk_conf TIME 03:00); kd=$(bk_conf KEEP_DAILY 7); kw=$(bk_conf KEEP_WEEKLY 4); km=$(bk_conf KEEP_MONTHLY 3); r=$(bk_conf REMOTE ''); ec=$(bk_conf ENCRYPT 1)
   while [ $# -gt 0 ]; do
     case "$1" in
       --on) en=1; shift ;; --off) en=0; shift ;;
@@ -5617,6 +8226,7 @@ cmd_bk_conf(){
       --weekly) kw="${2:-}"; shift 2 || shift ;;
       --monthly) km="${2:-}"; shift 2 || shift ;;
       --remote) r="${2:-}"; shift 2 || shift ;;
+      --encrypt) case "${2:-}" in on|1) ec=1 ;; off|0) ec=0 ;; *) die "--encrypt on|off" ;; esac; shift 2 || shift ;;
       *) die "Opção desconhecida: $1" ;;
     esac
   done
@@ -5625,7 +8235,7 @@ cmd_bk_conf(){
   [ "$kd" -ge 1 ] || die "Guarda pelo menos 1 backup diário."
   [ "$r" = none ] && r=""
   [ -z "$r" ] || [ -n "$(bk_remote_root "$r")" ] || die "O destino remoto '$r' não existe."
-  printf 'ENABLED=%s\nTIME=%s\nKEEP_DAILY=%s\nKEEP_WEEKLY=%s\nKEEP_MONTHLY=%s\nREMOTE=%s\n' "$en" "$tm" "$kd" "$kw" "$km" "$r" > "$BK_CONF"; chmod 600 "$BK_CONF"
+  printf 'ENABLED=%s\nTIME=%s\nKEEP_DAILY=%s\nKEEP_WEEKLY=%s\nKEEP_MONTHLY=%s\nREMOTE=%s\nENCRYPT=%s\n' "$en" "$tm" "$kd" "$kw" "$km" "$r" "$ec" > "$BK_CONF"; chmod 600 "$BK_CONF"
   bk_cron_apply; bk_write_state
   if [ "$en" = 1 ]; then echo "Backups automáticos todos os dias às $tm (guarda $kd diários, $kw semanais e $km mensais)${r:+, com cópia em $r}."
   else echo "Backups automáticos desativados."; fi
@@ -5936,6 +8546,7 @@ cmd_ssl_renew(){ command -v certbot >/dev/null 2>&1 || die "O certbot não está
 cmd_ngx_sync(){ # regenera a configuração nginx de todos os sites, do servidor por omissão e do domínio do painel
   local n
   install -d -m 755 "$NGX_INC" "$NGX_CONFD" "$ACME_ROOT"
+  panel_allow_write; ports_allow_write
   for n in $(site_names); do write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"; done
   ngx_default_sync; panel_domain_write
   apply_nginx || die "Configuração do nginx inválida depois de regenerar (nginx -t)."
@@ -5943,11 +8554,133 @@ cmd_ngx_sync(){ # regenera a configuração nginx de todos os sites, do servidor
   return 0
 }
 
-write_auth(){
-  local u=$1 hsh=$2
-  jq -n --arg u "$u" --arg h "$hsh" '{user:$u,hash:$h}' > "$AUTH.tmp" || return 1
-  chown root:"$PANEL_SYSUSER" "$AUTH.tmp"; chmod 640 "$AUTH.tmp"
-  mv -f "$AUTH.tmp" "$AUTH"
+# ---------- segurança do painel e das portas dos sites ----------
+PANEL_ALLOW_INC=/etc/nginx/minipainel/panel-allow.inc
+PORTS_ALLOW_INC=/etc/nginx/minipainel/ports-allow.inc
+audit_cli(){ # regista ações feitas diretamente na consola
+  [ -t 0 ] || return 0
+  jq -cn --arg t "$EPOCHSECONDS" --arg a "$1" '{ts:($t|tonumber), ip:"consola", user:"root", action:$a, ok:true}' >> "$DATA/logs/audit.log" 2>/dev/null
+  chown "$PANEL_SYSUSER:$PANEL_SYSUSER" "$DATA/logs/audit.log" 2>/dev/null; return 0
+}
+auth_update(){ # filtro jq aplicado ao auth.json
+  local base='{}'; [ -s "$AUTH" ] && base=$(cat "$AUTH")
+  jq "$@" <<<"$base" > "$AUTH.tmp" || { rm -f "$AUTH.tmp"; return 1; }
+  chown root:"$PANEL_SYSUSER" "$AUTH.tmp"; chmod 640 "$AUTH.tmp"; mv -f "$AUTH.tmp" "$AUTH"
+}
+panel_allow_write(){
+  local l ip; l=$(srv_get PANEL_ALLOW '')
+  {
+    echo "# IDDigital Hosting — IPs autorizados a abrir o painel (gerado pelo painel)"
+    if [ -n "$l" ]; then
+      printf '    allow 127.0.0.1;\n    allow ::1;\n'
+      for ip in $l; do printf '    allow %s;\n' "$ip"; done
+      printf '    deny all;\n'
+    fi
+  } > "$PANEL_ALLOW_INC"
+  chmod 644 "$PANEL_ALLOW_INC"
+}
+ports_allow_write(){
+  local ip
+  {
+    echo "# IDDigital Hosting — acesso pelas portas dos sites (gerado pelo painel)"
+    if [ "$(srv_get PORTS_ACCESS all)" = lan ]; then
+      for ip in 127.0.0.0/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10; do printf '    allow %s;\n' "$ip"; done
+      if [ -f "$FW_ALLOW" ]; then grep -v '^\s*\(#\|$\)' "$FW_ALLOW" | awk '{print $1}' | while read -r ip; do fw_ip_valid "$ip" && printf '    allow %s;\n' "$ip"; done; fi
+      printf '    deny all;\n'
+    fi
+  } > "$PORTS_ALLOW_INC"
+  chmod 644 "$PORTS_ALLOW_INC"
+}
+cmd_panel_allow(){
+  local l="$*" ip
+  [ "$l" = none ] && l=""
+  l=$(printf '%s' "$l" | tr ',;\n' '   ' | xargs)
+  for ip in $l; do fw_ip_valid "$ip" || die "IP ou rede inválida: $ip"; done
+  srv_set PANEL_ALLOW "$l"; panel_allow_write
+  apply_nginx || { srv_set PANEL_ALLOW ""; panel_allow_write; apply_nginx >/dev/null 2>&1; die "Configuração do nginx inválida; o painel continua aberto a todos."; }
+  audit_cli "IPs autorizados no painel: ${l:-todos}"
+  if [ -n "$l" ]; then echo "O painel só abre a partir de: $l (e do próprio servidor). Para anular na consola: mpanel panel-allow none"
+  else echo "O painel abre a partir de qualquer IP."; fi
+  return 0
+}
+cmd_ports_access(){
+  local m="${1:-}"
+  case "$m" in all|lan) ;; *) die "Usa: mpanel ports-access all|lan" ;; esac
+  srv_set PORTS_ACCESS "$m"; ports_allow_write
+  apply_nginx || die "Configuração do nginx inválida (nginx -t)."
+  if [ "$m" = lan ]; then echo "As portas dos sites só respondem à rede local e aos IPs de confiança. Os domínios (80/443) continuam públicos."
+  else echo "As portas dos sites respondem a qualquer IP."; fi
+  return 0
+}
+cmd_panel_user(){
+  local u="${1:-}" re='^[a-z][a-z0-9._-]{2,31}$'
+  [[ "$u" =~ $re ]] || die "Nome inválido: 3 a 32 caracteres (minúsculas, números, '.', '_' e '-'), a começar por letra."
+  auth_update --arg u "$u" '.user = $u' || die "Falha ao gravar."
+  sed -i "s/^PANEL_USER=.*/PANEL_USER=$u/" "$CONF"
+  audit_cli "Utilizador do painel alterado para $u"
+  echo "O utilizador do painel passa a ser '$u'. Usa-o no próximo início de sessão."
+  return 0
+}
+cmd_panel_2fa(){
+  local a="${1:-}" sec="${2:-}" re='^[A-Z2-7]{16,64}$' codes="" hashes="[]" c i
+  case "$a" in
+    set)
+      [[ "$sec" =~ $re ]] || die "Segredo inválido."
+      for i in 1 2 3 4 5 6 7 8; do
+        c="$(openssl rand -hex 3)-$(openssl rand -hex 3)"; codes+="$c "
+        hashes=$(jq -c --arg h "$(printf '%s' "$c" | sha256sum | awk '{print $1}')" '. + [$h]' <<<"$hashes")
+      done
+      auth_update --arg s "$sec" --argjson r "$hashes" '.totp = $s | .recovery = $r' || die "Falha ao gravar."
+      rm -f "$DATA/logs/2fa-used.json"
+      audit_cli "Verificação em dois passos ativada"
+      echo "Verificação em dois passos ativada."
+      echo "Códigos de recuperação (guarda-os em local seguro; cada um só funciona uma vez):"
+      for c in $codes; do echo "  $c"; done
+      ;;
+    off)
+      auth_update 'del(.totp, .recovery)' || die "Falha ao gravar."
+      rm -f "$DATA/logs/2fa-used.json"
+      audit_cli "Verificação em dois passos desativada"
+      echo "Verificação em dois passos desativada."
+      ;;
+    *) die "Usa: mpanel panel-2fa off (para desativar na consola)" ;;
+  esac
+  return 0
+}
+
+# ---------- cifra das cópias remotas dos backups ----------
+bk_enc_pass(){ # ficheiro temporário com a frase de cifra (derivada da chave dos backups)
+  local f; f=$(mktemp /run/mp-bkenc.XXXXXX); chmod 600 "$f"
+  bk_key_ensure
+  printf 'enc:%s' "$(tr -d '[:space:]' < "$BK_KEY")" | sha256sum | awk '{print $1}' > "$f"
+  echo "$f"
+}
+bk_encrypt_dir(){ # origem destino
+  local src=$1 dst=$2 pf rel
+  pf=$(bk_enc_pass)
+  while IFS= read -r rel; do
+    mkdir -p "$dst/$(dirname "$rel")"
+    case "$rel" in
+      manifest.json|manifest.sig) cp -p "$src/$rel" "$dst/$rel" ;;
+      *) openssl enc -aes-256-ctr -pbkdf2 -iter 100000 -salt -pass "file:$pf" -in "$src/$rel" -out "$dst/$rel.enc" || { rm -f "$pf"; return 1; } ;;
+    esac
+  done < <(cd "$src" && find . -type f -printf '%P\n')
+  : > "$dst/ENCRYPTED"
+  rm -f "$pf"
+}
+bk_decrypt_dir(){ # pasta (decifra no lugar)
+  local dir=$1 pf f
+  [ -f "$dir/ENCRYPTED" ] || return 0
+  pf=$(bk_enc_pass)
+  while IFS= read -r f; do
+    openssl enc -d -aes-256-ctr -pbkdf2 -iter 100000 -pass "file:$pf" -in "$f" -out "${f%.enc}" 2>/dev/null || { rm -f "$pf"; return 1; }
+    rm -f "$f"
+  done < <(find "$dir" -type f -name '*.enc')
+  rm -f "$pf" "$dir/ENCRYPTED"
+}
+
+write_auth(){ # mantém a verificação em dois passos ao mudar a password
+  auth_update --arg u "$1" --arg h "$2" '.user = $u | .hash = $h'
 }
 
 cmd_passwd(){
@@ -6030,13 +8763,14 @@ write_state(){
     --arg host "$host" --arg ip "$ip" --arg os "$os" --arg up "${up:-0}" --arg disk "${disk:-0}" --arg ram "${ram:-0}" \
     --arg load "${load:-0}" --arg cpus "${cpus:-1}" --arg pport "$PANEL_PORT" --arg pphp "$PANEL_PHP" \
     --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$(cron_state_json)" \
+    --arg spa "$(srv_get PORTS_ACCESS all)" --arg spal "$(srv_get PANEL_ALLOW '')" \
     --arg smode "$(srv_get MODE lan)" --arg semail "$(srv_get EMAIL '')" --arg spd "$(srv_get PANEL_DOMAIN '')" --arg spssl "$(srv_get PANEL_SSL le)" --arg spexp "$( [ -n "$(srv_get PANEL_DOMAIN '')" ] && cert_expiry mp-painel)" \
     --arg defphp "$DEFAULT_PHP" --arg gen "$(date '+%Y-%m-%d %H:%M:%S')" --arg ver "$MP_VERSION" \
     --arg ng "$(systemctl is-active nginx 2>/dev/null)" --arg db "$(systemctl is-active mariadb 2>/dev/null)" \
     '{version:$ver, generated:$gen, default_php:$defphp, php:$php, sites:$sites, databases:$dbs,
       services:{nginx:($ng=="active"), mariadb:($db=="active")}, service_list:$svcs,
       pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm}, crons:$crons,
-      server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end)},
+      server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
   chown root:"$PANEL_SYSUSER" "$STATE.tmp"; chmod 640 "$STATE.tmp"
@@ -6068,7 +8802,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -6086,7 +8820,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v1.9.1 (mpanel)
+IDDigital Hosting — CLI v1.10.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -6119,6 +8853,12 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Segurança do painel
+  panel-allow "IP rede/24 ..."|none    IPs autorizados a abrir o painel (none = todos)
+  panel-user <nome>                    muda o nome de utilizador do painel
+  panel-2fa off                        desativa a verificação em dois passos (recuperação na consola)
+  ports-access all|lan                 portas dos sites abertas a todos ou só à rede local
 
 Modo do servidor, domínios e SSL
   server-mode lan|internet [--email endereço]
@@ -6212,6 +8952,10 @@ dispatch(){
     panel-domain)      cmd_panel_domain "$@" ;;
     ssl-renew)         cmd_ssl_renew ;;
     ngx-sync)          cmd_ngx_sync ;;
+    panel-allow)       cmd_panel_allow "$@" ;;
+    ports-access)      cmd_ports_access "$@" ;;
+    panel-user)        cmd_panel_user "$@" ;;
+    panel-2fa)         cmd_panel_2fa "$@" ;;
     backup-start)      cmd_backup_start "$@" ;;
     bk-list)           cmd_bk_list "$@" ;;
     bk-restore)        cmd_bk_restore "$@" ;;
@@ -6249,7 +8993,7 @@ if [ "$cmd" = worker ]; then cmd_worker; exit 0; fi
 dispatch "$@"; rc=$?
 if [ "$rc" -eq 0 ]; then
   case "$cmd" in
-    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|state|refresh)
+    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|panel-allow|ports-access|panel-user|panel-2fa|state|refresh)
       write_state || { echo "ERRO: não foi possível gerar o estado do painel ($STATE)." >&2; rc=1; } ;;
   esac
 fi
@@ -6291,7 +9035,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.9.1
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.10.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -6604,7 +9348,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v1.9.1
+#  mpanel-cron — IDDigital Hosting v1.10.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -6653,9 +9397,13 @@ done
 say "A configurar os backups..."
 install -d -o root -g minipainel -m 750 /var/backups/minipainel
 if [ ! -f /etc/minipainel/backup.conf ]; then
-  printf 'ENABLED=1\nTIME=03:00\nKEEP_DAILY=7\nKEEP_WEEKLY=4\nKEEP_MONTHLY=3\nREMOTE=\n' > /etc/minipainel/backup.conf
+  printf 'ENABLED=1\nTIME=03:00\nKEEP_DAILY=7\nKEEP_WEEKLY=4\nKEEP_MONTHLY=3\nREMOTE=\nENCRYPT=1\n' > /etc/minipainel/backup.conf
   chmod 600 /etc/minipainel/backup.conf
 fi
+grep -q '^ENCRYPT=' /etc/minipainel/backup.conf || echo 'ENCRYPT=1' >> /etc/minipainel/backup.conf
+grep -q '^PORTS_ACCESS=' /etc/minipainel/server.conf 2>/dev/null || echo 'PORTS_ACCESS=all' >> /etc/minipainel/server.conf
+grep -q '^PANEL_ALLOW=' /etc/minipainel/server.conf 2>/dev/null || echo 'PANEL_ALLOW=' >> /etc/minipainel/server.conf
+touch /var/lib/minipainel/logs/audit.log; chown minipainel:minipainel /var/lib/minipainel/logs/audit.log; chmod 640 /var/lib/minipainel/logs/audit.log
 
 say "A configurar a firewall de ligações (nftables)..."
 [ -f /etc/minipainel/firewall.conf ] || printf 'AUTO=0\nLIMIT=150\nDURATION=3600\n' > /etc/minipainel/firewall.conf
