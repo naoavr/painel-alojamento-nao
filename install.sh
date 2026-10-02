@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.1.1 — instalador (MiniPainel)
+#  IDDigital Hosting v2.2.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.1.1.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.2.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.1.1"
+MP_VERSION="2.2.0"
 PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -78,6 +78,7 @@ NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
 
 UPGRADE=0
 [ -f /etc/minipainel/minipainel.conf ] && UPGRADE=1
+PREV_VERSION=$(cat /etc/minipainel/version 2>/dev/null || echo 0)
 conf_get(){ grep -m1 "^$1=" /etc/minipainel/minipainel.conf 2>/dev/null | cut -d= -f2- || true; }
 
 if [ "$UPGRADE" -eq 0 ] && [ "$FORCE" -eq 0 ]; then
@@ -521,7 +522,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.1.1 — painel web (MiniPainel)
+ * IDDigital Hosting v2.2.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -529,7 +530,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.1.1';
+const MP_VERSION = '2.2.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1203,6 +1204,8 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line-2)}
+.kv span{color:var(--ink-2)}
 .dd-menu a[aria-current]{background:var(--hover);font-weight:700}
 .fm-pre{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;white-space:nowrap;flex:0 0 auto}
 .fm-pre + .crumbs{margin-left:-6px}
@@ -1390,6 +1393,7 @@ $pages = [
     'ligacoes' => ['Ligações', 'ban'],
     'backups'  => ['Backups', 'archive'],
     'auditoria'=> ['Auditoria', 'file'],
+    'atualizacoes' => ['Atualizações', 'download'],
     'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
@@ -1679,6 +1683,37 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if ($op === 'limit') { $lm = post('limit'); if (!ctype_digit($lm) || strlen($lm) > 6) { $bad('Limite inválido.'); break; } job_submit('mail-site', [$site, '--limit', $lm], 'Limite de envio de ' . $site . ': ' . $lm . '/hora'); }
             else job_submit('mail-site', [$site, '--' . $op], ['suspend' => 'Suspender', 'resume' => 'Retomar', 'purge' => 'Apagar retidos do'][$op] . ' envio de email de ' . $site);
             $back = ['t' => 'envio'];
+            break;
+
+        case 'update_check':
+            job_submit('update-check', [], 'Procurar atualizações do painel');
+            break;
+        case 'update_start':
+            job_submit('update-start', post('unsigned') === '1' ? ['--allow-unsigned'] : [], 'Atualizar o painel' . (post('unsigned') === '1' ? ' (sem assinatura)' : ''));
+            break;
+        case 'update_key':
+            if (post('op') === 'clear') { job_submit('update-key', ['clear'], 'Remover a chave das atualizações'); break; }
+            $pem = trim(str_replace("\r", '', post_raw('pem')));
+            if (!preg_match('/^-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+\/=\n]+\n-----END PUBLIC KEY-----$/', $pem) || strlen($pem) > 400) { $bad('Chave inválida: cola a chave pública completa (formato PEM).'); break; }
+            job_submit('update-key', ['set', str_replace("\n", '\n', $pem)], 'Guardar a chave das atualizações');
+            break;
+        case 'update_rollback':
+            $fn = post('file');
+            if (!preg_match('/^\d{8}-\d{6}-v[0-9.]+\.tar\.gz$/', $fn)) { $bad('Cópia inválida.'); break; }
+            job_submit('update-rollback', [$fn], 'Repor a cópia ' . $fn);
+            break;
+        case 'os_check':
+            job_submit('os-check', [], 'Procurar atualizações do sistema');
+            break;
+        case 'os_start':
+            job_submit('os-start', post('op') === 'security' ? ['--security'] : [], post('op') === 'security' ? 'Instalar atualizações de segurança do sistema' : 'Instalar todas as atualizações do sistema');
+            break;
+        case 'os_auto':
+            job_submit('os-auto', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desligar atualizações automáticas' : 'Ativar atualizações de segurança automáticas');
+            break;
+        case 'reboot':
+            if ($auth === null || !password_verify(post_raw('atual'), (string)($auth['hash'] ?? ''))) { $bad('A password está incorreta.'); break; }
+            job_submit('reboot', [], 'Reiniciar o servidor');
             break;
 
         case 'mail_list':
@@ -2219,9 +2254,10 @@ $titles = [
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
     'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados no painel, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
+    'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'email', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'email', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'atualizacoes']];
 $section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -3471,6 +3507,106 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   <?php endif; ?>
 <?php endif; ?>
 
+<?php elseif ($page === 'atualizacoes'):
+    $up = jload(MP_STATS . '/update.json') ?? [];
+    $upLast = jload(MP_STATS . '/update-last.json');
+    $osu = jload(MP_STATS . '/os-updates.json') ?? [];
+    $upRun = jload(MP_STATS . '/update-run.json');
+    $snaps = is_array($state['updates']['snaps'] ?? null) ? $state['updates']['snaps'] : [];
+    $hasKey = !empty($up['key']);
+    $pk = is_array($osu['packages'] ?? null) ? $osu['packages'] : [];
+?>
+      <?php if ($upRun): ?>
+        <div class="card bk-run" data-bk-running><div class="row-list"><div class="item"><span class="spin"></span><div class="grow"><div class="nm"><?= ($upRun['kind'] ?? '') === 'sistema' ? 'Atualização do sistema em curso' : 'Atualização do painel em curso' ?></div><div class="mu"><?= h($upRun['step'] ?? '') ?> · há <?= max(1, (int)ceil((time() - (int)($upRun['since'] ?? time())) / 60)) ?> min</div></div><span class="mu">A página atualiza sozinha. O painel pode ficar indisponível alguns segundos.</span></div></div></div>
+      <?php elseif ($upLast && (int)($upLast['ts'] ?? 0) > time() - 86400): ?>
+        <div class="card"><div class="card-b" style="color:<?= !empty($upLast['ok']) ? 'var(--ok)' : 'var(--err)' ?>"><b><?= !empty($upLast['ok']) ? 'Concluído' : 'Falhou' ?>:</b> <?= h($upLast['msg'] ?? '') ?> <span class="mu">(<?= h(ago((int)$upLast['ts'], time())) ?>)</span></div></div>
+      <?php endif; ?>
+
+      <div class="grid2e">
+      <section class="card">
+        <div class="card-h"><div><h2>Painel</h2><p>Versão do IDDigital Hosting e atualizações publicadas no GitHub.</p></div>
+          <?php if (!empty($up['newer'])): ?><span class="pill p-warn">Versão nova disponível</span><?php elseif (!empty($up['latest'])): ?><span class="pill p-ok">Atualizado</span><?php endif; ?></div>
+        <div class="card-b">
+          <div class="kv"><span>Instalada</span><b>v<?= h(MP_VERSION) ?></b></div>
+          <div class="kv"><span>Publicada</span><b><?= !empty($up['latest']) ? 'v' . h($up['latest']) . (!empty($up['date']) ? ' <span class="mu">(' . h($up['date']) . ')</span>' : '') : '—' ?></b></div>
+          <div class="kv"><span>Verificação</span><b><?= $hasKey ? '<span class="pill p-ok">Assinatura obrigatória</span>' : '<span class="pill p-err">Sem chave de assinatura</span>' ?></b></div>
+          <div class="kv"><span>Última procura</span><b><?= !empty($up['checked']) ? h(ago((int)$up['checked'], time())) : 'nunca' ?></b></div>
+          <?php if (!empty($up['error'])): ?><p style="color:var(--err);margin:12px 0 0"><?= h($up['error']) ?></p><?php endif; ?>
+          <?php if (!empty($up['newer']) && ($up['notes'] ?? '') !== ''): ?><div class="fsec">Novidades da v<?= h($up['latest']) ?></div><pre class="cron-out" style="padding:12px 14px;border-radius:12px;max-height:220px"><?= h($up['notes']) ?></pre><?php endif; ?>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+            <form method="post"><?= act_fields('update_check') ?><button class="btn sec" type="submit"><?= ic('reload') ?>Procurar atualizações</button></form>
+            <?php if (!empty($up['newer'])): ?>
+            <form method="post" data-confirm="Atualizar o painel para a v<?= h($up['latest']) ?>? É guardada uma cópia da versão atual e, se algo falhar, é reposta automaticamente."><?= act_fields('update_start') ?>
+              <?php if (!$hasKey): ?><label class="chk" style="margin-bottom:8px"><input type="checkbox" name="unsigned" value="1" required> Instalar sem verificação de assinatura (não recomendado)</label><?php endif; ?>
+              <button class="btn" type="submit"><?= ic('download') ?>Atualizar para v<?= h($up['latest']) ?></button></form>
+            <?php endif; ?>
+          </div>
+        </div>
+        <div class="card-f mu">Antes de atualizar: verifica a assinatura e o SHA-256, guarda uma cópia do painel e da configuração e, depois, confirma que o painel responde. Se não responder, repõe a versão anterior sozinho. Os sites, bases de dados, email e backups não são tocados.</div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Chave de assinatura</h2><p>Chave pública Ed25519 com que as versões são assinadas. Só são instaladas versões assinadas pela chave privada correspondente.</p></div><span class="pill <?= $hasKey ? 'p-ok' : 'p-err' ?>"><?= $hasKey ? 'Configurada' : 'Em falta' ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('update_key', ['op' => 'set']) ?>
+          <label class="fld">Chave pública (PEM)<textarea class="in mono cron-ta" name="pem" rows="4" required placeholder="-----BEGIN PUBLIC KEY-----&#10;MCowBQYDK2VwAyEA…&#10;-----END PUBLIC KEY-----"></textarea><small>Gerada no teu computador com <span class="mono">release.sh keygen</span>; a chave privada nunca vem para o servidor</small></label>
+          <div style="display:flex;gap:8px;margin-top:14px"><button class="btn" type="submit"><?= $hasKey ? 'Substituir chave' : 'Guardar chave' ?></button></div>
+        </form>
+        <?php if ($hasKey): ?><form method="post" class="card-f" data-confirm="Remover a chave? As atualizações deixam de ser verificadas."><?= act_fields('update_key', ['op' => 'clear']) ?><button class="btn sm sec" type="submit">Remover chave</button></form><?php endif; ?>
+      </section>
+      </div>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Sistema operativo</h2><p>Pacotes do sistema (nginx, PHP, MariaDB, email…) instalados pelo <?= h(($sys['os'] ?? '') !== '' ? $sys['os'] : 'sistema') ?>.</p></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <?php if (!empty($osu['reboot'])): ?><span class="pill p-warn">Precisa de reiniciar</span><?php endif; ?>
+            <span class="pill <?= !empty($osu['auto']) ? 'p-ok' : 'p-off' ?>">Automáticas: <?= !empty($osu['auto']) ? 'segurança' : 'desligadas' ?></span>
+          </div></div>
+        <section class="stats" style="padding:0 26px">
+          <div class="stat"><span class="tile t-blue"><?= ic('download') ?></span><div><div class="k">Disponíveis</div><div class="v"><?= isset($osu['total']) ? (int)$osu['total'] : '—' ?></div></div></div>
+          <div class="stat"><span class="tile <?= !empty($osu['security']) ? 't-warn' : 't-acc' ?>"><?= ic('lock') ?></span><div><div class="k">De segurança</div><div class="v"><?= isset($osu['security']) ? (int)$osu['security'] : '—' ?></div></div></div>
+          <div class="stat"><span class="tile t-vio"><?= ic('clock') ?></span><div><div class="k">Última procura</div><div class="v" style="font-size:16px"><?= !empty($osu['checked']) ? h(ago((int)$osu['checked'], time())) : 'nunca' ?></div></div></div>
+        </section>
+        <div class="card-b" style="display:flex;gap:8px;flex-wrap:wrap">
+          <form method="post"><?= act_fields('os_check') ?><button class="btn sec" type="submit"><?= ic('reload') ?>Procurar</button></form>
+          <?php if (!empty($osu['security'])): ?><form method="post" data-confirm="Instalar as atualizações de segurança do sistema?"><?= act_fields('os_start', ['op' => 'security']) ?><button class="btn" type="submit">Instalar as de segurança (<?= (int)$osu['security'] ?>)</button></form><?php endif; ?>
+          <?php if (!empty($osu['total'])): ?><form method="post" data-confirm="Instalar todas as atualizações do sistema? Os serviços podem reiniciar por breves segundos."><?= act_fields('os_start', ['op' => 'all']) ?><button class="btn sec" type="submit">Instalar todas (<?= (int)$osu['total'] ?>)</button></form><?php endif; ?>
+          <form method="post"><?= act_fields('os_auto', ['op' => !empty($osu['auto']) ? 'off' : 'on']) ?><button class="btn sec" type="submit"><?= !empty($osu['auto']) ? 'Desligar automáticas' : 'Ativar atualizações de segurança automáticas' ?></button></form>
+          <?php if (!empty($osu['reboot'])): ?><button class="btn dan" type="button" data-open="dlg-reboot"><?= ic('reload') ?>Reiniciar o servidor</button><?php endif; ?>
+        </div>
+        <?php if ($pk): ?>
+        <table class="list cards">
+          <thead><tr><th>Pacote</th><th>Versão nova</th><th>Tipo</th></tr></thead>
+          <tbody>
+          <?php foreach (array_slice($pk, 0, 60) as $p): ?>
+            <tr><td class="first mono" data-label="Pacote"><?= h($p['name'] ?? '') ?></td><td class="mono mu" data-label="Versão"><?= h($p['version'] ?? '') ?></td><td data-label="Tipo"><?= !empty($p['security']) ? '<span class="pill p-warn">Segurança</span>' : '<span class="pill p-off">Normal</span>' ?></td></tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php if (count($pk) > 60): ?><div class="card-f mu">E mais <?= count($pk) - 60 ?> pacotes.</div><?php endif; ?>
+        <?php endif; ?>
+        <div class="card-f mu">As atualizações automáticas instalam só as de segurança e nunca reiniciam o servidor sozinhas. A procura é feita todos os dias de madrugada.</div>
+      </section>
+
+      <?php if ($snaps): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Cópias anteriores do painel</h2><p>Guardadas antes de cada atualização (painel, configuração e serviços). Repor volta a pôr essa versão do painel.</p></div></div>
+        <div class="row-list">
+          <?php foreach ($snaps as $sn): $fn = (string)$sn['file']; ?>
+            <div class="item"><span class="av t-vio"><?= ic('archive') ?></span><div class="grow"><div class="nm mono"><?= h($fn) ?></div><div class="mu"><?= h(fmt_bytes((float)$sn['size'])) ?></div></div>
+              <form method="post" data-confirm="Repor esta cópia do painel? A configuração volta ao estado dessa altura."><?= act_fields('update_rollback', ['file' => $fn]) ?><button class="btn sm sec" type="submit">Repor</button></form></div>
+          <?php endforeach; ?>
+        </div>
+      </section>
+      <?php endif; ?>
+
+      <dialog id="dlg-reboot"><form method="post"><?= act_fields('reboot') ?>
+        <div class="dlg-h"><h3>Reiniciar o servidor</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b"><p style="margin:0">O servidor reinicia dentro de 1 minuto. Os sites, o email e o painel ficam indisponíveis durante o arranque (normalmente 1 a 2 minutos).</p>
+          <label class="fld">Confirma com a password do painel<input class="in" type="password" name="atual" required autocomplete="current-password"></label></div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Reiniciar</button></div>
+      </form></dialog>
+
 <?php elseif ($page === 'auditoria'):
     $alog = [];
     $af = MP_DATA . '/logs/audit.log';
@@ -3778,6 +3914,12 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 (function () { var q = document.getElementById('au-q'); if (!q) return;
   q.addEventListener('input', function () { var f = q.value.toLowerCase();
     document.querySelectorAll('#au-t tbody tr').forEach(function (tr) { tr.style.display = !f || tr.textContent.toLowerCase().indexOf(f) !== -1 ? '' : 'none'; }); }); })();
+</script>
+<?php endif; ?>
+<?php if ($page === 'atualizacoes'): ?>
+<script>
+(function () { function tick() { if (document.querySelector('dialog[open]')) setTimeout(tick, 5000); else location.reload(); }
+  if (document.querySelector('[data-bk-running]')) setTimeout(tick, 5000); })();
 </script>
 <?php endif; ?>
 <?php if ($page === 'backups'): ?>
@@ -6626,7 +6768,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.1.1 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.2.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7033,11 +7175,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.1.1
+#  mpanel — IDDigital Hosting CLI v2.2.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.1.1"
+MP_VERSION="2.2.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -10013,6 +10155,219 @@ mail_history_json(){ # últimas mensagens rejeitadas ou marcadas como spam (hist
      subject:(.subject // ""), ip:(.ip // ""), symbols:([(.symbols // {}) | to_entries[] | select((.value.score // 0) >= 1) | .key] | .[0:8])}] | .[0:150]' 2>/dev/null || echo '[]'
 }
 
+# ============================ ATUALIZAÇÕES ===================================
+UPD_CONF=/etc/minipainel/update.conf          # URL=, KEY (chave pública em update.pub)
+UPD_PUB=/etc/minipainel/update.pub
+UPD_DIR=/var/lib/minipainel/update
+UPD_SNAP=/var/backups/minipainel/_atualizacoes
+UPD_STATE=$DATA/stats/update.json
+OSU_STATE=$DATA/stats/os-updates.json
+UPD_RUN=$DATA/stats/update-run.json
+upd_url(){ local v; v=$(grep -m1 '^URL=' "$UPD_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-https://raw.githubusercontent.com/naoavr/painel-alojamento-nao/main}"; }
+upd_status(){ # passo em curso (texto) ou vazio para terminar
+  if [ -n "${1:-}" ]; then jq -n --arg s "$1" --arg k "${2:-painel}" --arg t "$EPOCHSECONDS" '{step:$s, kind:$k, since:($t|tonumber)}' > "$UPD_RUN.tmp" && chown root:"$PANEL_SYSUSER" "$UPD_RUN.tmp" && chmod 640 "$UPD_RUN.tmp" && mv -f "$UPD_RUN.tmp" "$UPD_RUN"
+  else rm -f "$UPD_RUN"; fi
+}
+upd_save(){ # ficheiro json
+  printf '%s\n' "$2" > "$1.tmp" && chown root:"$PANEL_SYSUSER" "$1.tmp" && chmod 640 "$1.tmp" && mv -f "$1.tmp" "$1"
+}
+upd_newer(){ [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$2" ]; }   # $2 é mais recente que $1
+upd_verify(){ # pasta -> 0 assinatura válida; 2 sem chave configurada; 1 falha
+  local d=$1 sum
+  sum=$(sha256sum "$d/install.sh" | awk '{print $1}')
+  [ "$sum" = "$(jq -r '.sha256 // ""' "$d/version.json" 2>/dev/null)" ] || return 1
+  [ -s "$UPD_PUB" ] || return 2
+  [ -s "$d/install.sh.sig" ] || return 1
+  base64 -d "$d/install.sh.sig" > "$d/sig.bin" 2>/dev/null || return 1
+  openssl pkeyutl -verify -pubin -inkey "$UPD_PUB" -rawin -in "$d/install.sh" -sigfile "$d/sig.bin" >/dev/null 2>&1 || return 1
+  return 0
+}
+cmd_update_check(){
+  local u j latest notes signed=false
+  u=$(upd_url)
+  j=$(curl -fsSL -m 20 "$u/version.json" 2>/dev/null) || j=""
+  if [ -z "$j" ] || ! jq -e '.version' >/dev/null 2>&1 <<<"$j"; then
+    upd_save "$UPD_STATE" "$(jq -n --arg c "$MP_VERSION" --arg t "$EPOCHSECONDS" --arg u "$u" '{current:$c, latest:null, checked:($t|tonumber), error:"Não foi possível obter version.json de \($u)", key:false}' | jq --argjson k "$([ -s "$UPD_PUB" ] && echo true || echo false)" '.key = $k')"
+    die "Não foi possível obter $u/version.json (o repositório ainda não publica version.json?)."
+  fi
+  latest=$(jq -r '.version' <<<"$j"); notes=$(jq -r '.notes // ""' <<<"$j")
+  [ -s "$UPD_PUB" ] && signed=true
+  upd_save "$UPD_STATE" "$(jq -n --arg c "$MP_VERSION" --arg l "$latest" --arg n "$notes" --arg d "$(jq -r '.date // ""' <<<"$j")" --arg t "$EPOCHSECONDS" --argjson k "$signed" \
+     --argjson nw "$(upd_newer "$MP_VERSION" "$latest" && echo true || echo false)" \
+     '{current:$c, latest:$l, notes:$n, date:$d, checked:($t|tonumber), newer:$nw, key:$k, error:null}')"
+  if upd_newer "$MP_VERSION" "$latest"; then echo "Há uma versão nova: $latest (instalada: $MP_VERSION)."; else echo "O painel está atualizado ($MP_VERSION)."; fi
+  return 0
+}
+upd_snapshot(){ # cópia do painel antes de atualizar -> imprime o caminho
+  local ts f
+  ts=$(date '+%Y%m%d-%H%M%S'); install -d -m 700 "$UPD_SNAP"; f="$UPD_SNAP/$ts-v$MP_VERSION.tar.gz"
+  local items=(etc/minipainel opt/minipainel usr/local/sbin/mpanel usr/local/sbin/mpanel-stats usr/local/sbin/mpanel-cron usr/local/sbin/mp-sendmail
+    etc/nginx/minipainel etc/nginx/nginx.conf var/lib/minipainel/auth.json) x
+  for x in /etc/php/*/fpm/pool.d /etc/opt/remi/*/php-fpm.d /etc/php-fpm.d /etc/systemd/system/minipainel-*; do [ -e "$x" ] && items+=("${x#/}"); done
+  tar -C / -czf "$f" --ignore-failed-read "${items[@]}" 2>/dev/null
+  chmod 600 "$f"; echo "$f"
+}
+upd_restore(){ # ficheiro
+  tar -C / -xzpf "$1" || return 1
+  systemctl daemon-reload >/dev/null 2>&1
+  local v; for v in $(php_installed); do systemctl restart "$(php_service "$v")" >/dev/null 2>&1; done
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+  systemctl restart minipainel-stats.service minipainel-worker.path >/dev/null 2>&1
+  return 0
+}
+upd_health(){ # o painel responde depois da atualização?
+  local c i
+  nginx -t >/dev/null 2>&1 || return 1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    c=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 "https://127.0.0.1:$PANEL_PORT/" 2>/dev/null)
+    [ "$c" = 200 ] && return 0; sleep 2
+  done
+  return 1
+}
+upd_finish(){ # ok msg
+  local f=$DATA/stats/update-last.json
+  upd_save "$f" "$(jq -n --arg t "$EPOCHSECONDS" --argjson ok "$1" --arg m "$2" '{ts:($t|tonumber), ok:$ok, msg:$m}')"
+  jq -cn --arg t "$EPOCHSECONDS" --arg a "$2" --argjson ok "$1" '{ts:($t|tonumber), ip:"servidor", user:"atualização", action:$a, ok:$ok}' >> "$DATA/logs/audit.log" 2>/dev/null
+  upd_status ""
+}
+# Corre noutra unidade do systemd: o instalador reinicia serviços do painel e não pode matar este processo.
+# Corre a partir de uma cópia: o instalador substitui o próprio mpanel durante a atualização.
+upd_spawn(){ # comando...
+  local cp=/run/minipainel-upd.sh
+  install -m 700 /usr/local/sbin/mpanel "$cp"
+  if command -v systemd-run >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemd-run --quiet --collect --unit="minipainel-upd-$EPOCHSECONDS" /bin/bash "$cp" "$@" >/dev/null 2>&1
+  else
+    setsid /bin/bash "$cp" "$@" >/dev/null 2>&1 < /dev/null &
+  fi
+}
+cmd_update_start(){ [ -f "$UPD_RUN" ] && die "Já está a decorrer uma atualização."; upd_status "A preparar" painel; upd_spawn update-run "$@"; echo "Atualização iniciada. O progresso aparece na página Atualizações."; return 0; }
+cmd_update_run(){
+  local u d v rc snap log allow_unsigned=0
+  [ "${1:-}" = "--allow-unsigned" ] && allow_unsigned=1
+  exec 6>/run/minipainel-update.lock; flock -n 6 || die "Já está a decorrer uma atualização."
+  u=$(upd_url); d="$UPD_DIR/novo"; rm -rf "$d"; install -d -m 700 "$d"
+  upd_status "A descarregar a versão nova" painel
+  curl -fsSL -m 120 -o "$d/version.json" "$u/version.json" && curl -fsSL -m 300 -o "$d/install.sh" "$u/install.sh" || { upd_finish false "Atualização falhou: não foi possível descarregar de $u."; die "Falhou o download."; }
+  curl -fsSL -m 60 -o "$d/install.sh.sig" "$u/install.sh.sig" 2>/dev/null
+  v=$(jq -r '.version // ""' "$d/version.json")
+  upd_status "A verificar a assinatura" painel
+  upd_verify "$d"; rc=$?
+  if [ "$rc" = 1 ]; then upd_finish false "Atualização para $v recusada: o ficheiro não corresponde ao version.json ou a assinatura é inválida."; die "Verificação falhou."; fi
+  if [ "$rc" = 2 ] && [ "$allow_unsigned" = 0 ]; then upd_finish false "Atualização para $v recusada: não está configurada a chave pública das atualizações (ou confirma a instalação sem assinatura)."; die "Sem chave de assinatura."; fi
+  bash -n "$d/install.sh" || { upd_finish false "Atualização para $v recusada: o instalador tem erros de sintaxe."; die "Instalador inválido."; }
+  upd_status "A guardar uma cópia da versão atual ($MP_VERSION)" painel
+  snap=$(upd_snapshot)
+  upd_status "A instalar a versão $v" painel
+  log="$UPD_DIR/instalacao-$v-$(date +%Y%m%d-%H%M%S).log"
+  if bash "$d/install.sh" --panel-port "$PANEL_PORT" > "$log" 2>&1 && upd_health; then
+    cp "$d/install.sh" "$UPD_DIR/install-$v.sh"
+    upd_finish true "Painel atualizado de $MP_VERSION para $v."
+    /usr/local/sbin/mpanel update-check >/dev/null 2>&1
+    return 0
+  fi
+  upd_status "A instalação falhou; a repor a versão $MP_VERSION" painel
+  upd_restore "$snap"
+  if upd_health; then upd_finish false "A atualização para $v falhou e foi reposta a versão $MP_VERSION. Registo: $log"
+  else upd_finish false "A atualização para $v falhou e a reposição automática não pôs o painel a responder. Na consola: tar -C / -xzpf $snap ; registo: $log"; fi
+  return 1
+}
+cmd_update_rollback(){
+  local f="${1:-}"
+  [ -n "$f" ] || f=$(ls -1t "$UPD_SNAP"/*.tar.gz 2>/dev/null | head -1)
+  case "$f" in "$UPD_SNAP"/*.tar.gz) ;; *) f="$UPD_SNAP/$f" ;; esac
+  [ -f "$f" ] && [[ "$(basename "$f")" =~ ^[0-9]{8}-[0-9]{6}-v[0-9.]+\.tar\.gz$ ]] || die "Cópia não encontrada: $1"
+  upd_restore "$f" || die "Falhou a reposição."
+  jq -cn --arg t "$EPOCHSECONDS" --arg a "Reposta a cópia $(basename "$f")" '{ts:($t|tonumber), ip:"servidor", user:"atualização", action:$a, ok:true}' >> "$DATA/logs/audit.log"
+  echo "Reposta a cópia $(basename "$f"). Atualiza a página do painel."
+  return 0
+}
+cmd_update_key(){ # set <PEM em base64 numa linha> | clear
+  case "${1:-}" in
+    set) local pem tmp; tmp=$(mktemp); printf '%s' "${2:-}" | sed 's/\\n/\n/g' > "$tmp"
+      grep -q 'BEGIN PUBLIC KEY' "$tmp" && openssl pkey -pubin -in "$tmp" -noout >/dev/null 2>&1 || { rm -f "$tmp"; die "Chave pública inválida (formato PEM, Ed25519)."; }
+      [ "$(openssl pkey -pubin -in "$tmp" -noout -text 2>/dev/null | head -1 | grep -ci ed25519)" = 1 ] || { rm -f "$tmp"; die "A chave tem de ser Ed25519."; }
+      install -m 644 "$tmp" "$UPD_PUB"; rm -f "$tmp"; echo "Chave pública das atualizações guardada." ;;
+    clear) rm -f "$UPD_PUB"; echo "Chave pública das atualizações removida." ;;
+    *) die "Usa: mpanel update-key set \"<PEM>\" | clear" ;;
+  esac
+  [ -f "$UPD_STATE" ] && upd_save "$UPD_STATE" "$(jq --argjson k "$([ -s "$UPD_PUB" ] && echo true || echo false)" '.key = $k' "$UPD_STATE")"
+  return 0
+}
+upd_snaps_json(){ ls -1t "$UPD_SNAP"/*.tar.gz 2>/dev/null | head -n 10 | while read -r f; do printf '%s\t%s\n' "$(basename "$f")" "$(stat -c %s "$f")"; done | jq -R 'split("\t") | {file:.[0], size:(.[1]|tonumber)}' | jq -cs '.'; }
+
+# --- atualizações do sistema operativo ---
+cmd_os_check(){
+  local list sec total reboot=false auto=false
+  upd_status "A procurar atualizações do sistema" sistema
+  if [ "$OS_FAMILY" = debian ]; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1
+    list=$(apt list --upgradable 2>/dev/null | awk -F'[/ ]' 'NR>1 && $1 != "" {sec = ($2 ~ /security/) ? "1" : "0"; print $1 "\t" $3 "\t" sec}')
+    [ -f /var/run/reboot-required ] && reboot=true
+    [ -f /etc/apt/apt.conf.d/20auto-upgrades ] && grep -q 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades && auto=true
+  else
+    local secl; secl=$(dnf -q updateinfo list --security 2>/dev/null | awk '{print $3}' | sed -E 's/-[0-9][^-]*-[^-]*$//' | sort -u)
+    list=$(dnf -q check-update 2>/dev/null | awk 'NF==3 && $1 ~ /\./ {n=$1; sub(/\.[^.]+$/, "", n); print n "\t" $2}' | while IFS=$'\t' read -r n v; do printf '%s\t%s\t%s\n' "$n" "$v" "$(grep -qxF "$n" <<<"$secl" && echo 1 || echo 0)"; done)
+    command -v needs-restarting >/dev/null 2>&1 && { needs-restarting -r >/dev/null 2>&1 || reboot=true; }
+    systemctl is-enabled dnf-automatic.timer >/dev/null 2>&1 && auto=true
+  fi
+  total=$(printf '%s' "$list" | grep -c . ); sec=$(printf '%s\n' "$list" | awk -F'\t' '$3 == "1"' | grep -c .)
+  upd_save "$OSU_STATE" "$(printf '%s\n' "$list" | grep . | jq -R 'split("\t") | {name:.[0], version:.[1], security:(.[2] == "1")}' | jq -cs \
+     --arg t "$EPOCHSECONDS" --argjson r "$reboot" --argjson a "$auto" '{checked:($t|tonumber), total:length, security:(map(select(.security)) | length), reboot:$r, auto:$a, packages:(sort_by(if .security then 0 else 1 end) | .[0:300])}')"
+  upd_status ""
+  echo "$total atualizações do sistema disponíveis ($sec de segurança).$([ "$reboot" = true ] && echo " O servidor precisa de ser reiniciado.")"
+  return 0
+}
+cmd_os_start(){ [ -f "$UPD_RUN" ] && die "Já está a decorrer uma atualização."; upd_status "A preparar" sistema; upd_spawn os-run "$@"; echo "Atualização do sistema iniciada em segundo plano."; return 0; }
+cmd_os_run(){
+  local only_sec=0 rc log
+  [ "${1:-}" = "--security" ] && only_sec=1
+  exec 6>/run/minipainel-update.lock; flock -n 6 || die "Já está a decorrer uma atualização."
+  log="$UPD_DIR/sistema-$(date +%Y%m%d-%H%M%S).log"; install -d -m 700 "$UPD_DIR"
+  upd_status "A instalar atualizações do sistema$([ "$only_sec" = 1 ] && echo ' (segurança)')" sistema
+  if [ "$OS_FAMILY" = debian ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    local opts=(-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+    if [ "$only_sec" = 1 ]; then
+      local pk; pk=$(apt list --upgradable 2>/dev/null | awk -F'/' 'NR>1 && $2 ~ /security/ {print $1}')
+      if [ -n "$pk" ]; then apt-get install "${opts[@]}" --only-upgrade $pk > "$log" 2>&1; rc=$?; else rc=0; echo "Sem atualizações de segurança." > "$log"; fi
+    else apt-get upgrade "${opts[@]}" > "$log" 2>&1; rc=$?; fi
+  else
+    if [ "$only_sec" = 1 ]; then dnf -y upgrade --security > "$log" 2>&1; rc=$?; else dnf -y upgrade > "$log" 2>&1; rc=$?; fi
+  fi
+  # os serviços do painel continuam ativos?
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
+  local v; for v in $(php_installed); do systemctl is-active "$(php_service "$v")" >/dev/null 2>&1 || systemctl restart "$(php_service "$v")" >/dev/null 2>&1; done
+  if [ "$rc" = 0 ]; then upd_finish true "Atualizações do sistema instaladas$([ "$only_sec" = 1 ] && echo ' (segurança)')."
+  else upd_finish false "As atualizações do sistema terminaram com erro (código $rc). Registo: $log"; fi
+  cmd_os_check >/dev/null 2>&1
+  return 0
+}
+cmd_os_auto(){
+  case "${1:-}" in
+    on)
+      if [ "$OS_FAMILY" = debian ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q unattended-upgrades >/dev/null 2>&1 || die "Falhou a instalação do unattended-upgrades."
+        printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\nAPT::Periodic::AutocleanInterval "7";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+        printf '// IDDigital Hosting — só atualizações de segurança, sem reiniciar sozinho\nUnattended-Upgrade::Automatic-Reboot "false";\nUnattended-Upgrade::Remove-Unused-Dependencies "true";\nDpkg::Options { "--force-confdef"; "--force-confold"; };\n' > /etc/apt/apt.conf.d/52minipainel-unattended
+        systemctl enable --now unattended-upgrades >/dev/null 2>&1
+      else
+        dnf install -y -q dnf-automatic >/dev/null 2>&1 || die "Falhou a instalação do dnf-automatic."
+        sed -i 's/^upgrade_type *=.*/upgrade_type = security/; s/^apply_updates *=.*/apply_updates = yes/' /etc/dnf/automatic.conf
+        systemctl enable --now dnf-automatic.timer >/dev/null 2>&1
+      fi
+      echo "Atualizações de segurança automáticas ativadas (o servidor não é reiniciado sozinho)." ;;
+    off)
+      if [ "$OS_FAMILY" = debian ]; then printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "0";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+      else systemctl disable --now dnf-automatic.timer >/dev/null 2>&1; fi
+      echo "Atualizações automáticas desativadas." ;;
+    *) die "Usa: mpanel os-auto on|off" ;;
+  esac
+  [ -f "$OSU_STATE" ] && upd_save "$OSU_STATE" "$(jq --argjson a "$([ "$1" = on ] && echo true || echo false)" '.auto = $a' "$OSU_STATE")"
+  return 0
+}
+cmd_reboot(){ echo "O servidor vai reiniciar dentro de 1 minuto."; jq -cn --arg t "$EPOCHSECONDS" '{ts:($t|tonumber), ip:"servidor", user:"sistema", action:"Reinício do servidor pedido", ok:true}' >> "$DATA/logs/audit.log"; shutdown -r +1 "Reinício pedido no IDDigital Hosting" >/dev/null 2>&1 || ( sleep 60; reboot ) >/dev/null 2>&1 & return 0; }
+
 write_auth(){ # mantém a verificação em dois passos ao mudar a password
   auth_update --arg u "$1" --arg h "$2" '.user = $u | .hash = $h'
 }
@@ -10107,6 +10462,7 @@ write_state(){
     --arg load "${load:-0}" --arg cpus "${cpus:-1}" --arg pport "$PANEL_PORT" --arg pphp "$PANEL_PHP" \
     --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$(cron_state_json)" \
     --argjson mail "$(mail_state_json 2>/dev/null || echo '{"enabled":false}')" \
+    --argjson usnaps "$(upd_snaps_json 2>/dev/null || echo '[]')" \
     --arg spa "$(srv_get PORTS_ACCESS all)" --arg spal "$(srv_get PANEL_ALLOW '')" \
     --arg smode "$(srv_get MODE lan)" --arg semail "$(srv_get EMAIL '')" --arg spd "$(srv_get PANEL_DOMAIN '')" --arg spssl "$(srv_get PANEL_SSL le)" --arg spexp "$( [ -n "$(srv_get PANEL_DOMAIN '')" ] && cert_expiry mp-painel)" \
     --arg defphp "$DEFAULT_PHP" --arg gen "$(date '+%Y-%m-%d %H:%M:%S')" --arg ver "$MP_VERSION" \
@@ -10115,6 +10471,7 @@ write_state(){
       services:{nginx:($ng=="active"), mariadb:($db=="active")}, service_list:$svcs,
       pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm}, crons:$crons,
       mail:$mail,
+      updates:{snaps:$usnaps},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
@@ -10147,7 +10504,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -10165,7 +10522,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.1.1 (mpanel)
+IDDigital Hosting — CLI v2.2.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -10198,6 +10555,15 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Atualizações
+  update-check                         procura uma versão nova do painel (version.json no GitHub)
+  update-start [--allow-unsigned]      atualiza o painel (cópia automática e reposição se falhar)
+  update-rollback [ficheiro]           repõe uma cópia anterior do painel
+  update-key set "<PEM>" | clear       chave pública que assina as versões
+  os-check | os-start [--security]     atualizações do sistema operativo
+  os-auto on|off                       atualizações de segurança automáticas
+  reboot                               reinicia o servidor dentro de 1 minuto
 
 Email (Postfix + Dovecot + Rspamd)
   mail-enable --host mail.dominio.pt   instala e ativa o email
@@ -10329,6 +10695,14 @@ dispatch(){
     mail-site)         cmd_mail_site "$@" ;;
     mail-queue)        cmd_mail_queue "$@" ;;
     mail-list)         cmd_mail_list "$@" ;;
+    update-check)      cmd_update_check ;;
+    update-start)      cmd_update_start "$@" ;;
+    update-rollback)   cmd_update_rollback "$@" ;;
+    update-key)        cmd_update_key "$@" ;;
+    os-check)          cmd_os_check ;;
+    os-start)          cmd_os_start "$@" ;;
+    os-auto)           cmd_os_auto "$@" ;;
+    reboot)            cmd_reboot ;;
     backup-start)      cmd_backup_start "$@" ;;
     bk-list)           cmd_bk_list "$@" ;;
     bk-restore)        cmd_bk_restore "$@" ;;
@@ -10359,6 +10733,9 @@ esac
 # o backup usa o seu próprio bloqueio, para não impedir as outras operações do painel
 if [ "$cmd" = backup-run ]; then shift; cmd_backup_run "$@"; exit $?; fi
 if [ "$cmd" = mail-spool ]; then cmd_mail_spool; exit $?; fi
+# as atualizações têm bloqueio próprio: o instalador volta a chamar o mpanel durante a instalação
+if [ "$cmd" = update-run ]; then shift; cmd_update_run "$@"; exit $?; fi
+if [ "$cmd" = os-run ]; then shift; cmd_os_run "$@"; exit $?; fi
 exec 9>"$LOCK"
 flock -w 300 9 || die "Outra operação do painel está em curso."
 
@@ -10409,7 +10786,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.1.1
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.2.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -10754,7 +11131,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.1.1
+#  mp-sendmail — IDDigital Hosting v2.2.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -10792,7 +11169,7 @@ fi
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.1.1
+#  mpanel-cron — IDDigital Hosting v2.2.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -10960,6 +11337,22 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel cron-sync >/dev/null || warn "Não foi possível sincronizar as tarefas agendadas (mpanel cron-sync)."
 /usr/local/sbin/mpanel bk-init >/dev/null || warn "Não foi possível configurar os backups (mpanel bk-init)."
 /usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
+
+# --- migrações numeradas: cada passo corre uma vez, por ordem, só se a versão anterior for mais antiga ---
+mig_2_2_0(){
+  [ -f /etc/minipainel/update.conf ] || printf 'URL=https://raw.githubusercontent.com/naoavr/painel-alojamento-nao/main\n' > /etc/minipainel/update.conf
+  install -d -m 700 /var/lib/minipainel/update /var/backups/minipainel/_atualizacoes
+}
+MIGRATIONS=("2.2.0:mig_2_2_0")
+for m in "${MIGRATIONS[@]}"; do
+  mv_=${m%%:*}; mf_=${m#*:}
+  if [ "$PREV_VERSION" = 0 ] || [ "$(printf '%s\n%s\n' "$PREV_VERSION" "$mv_" | sort -V | head -1)" = "$PREV_VERSION" ] && [ "$PREV_VERSION" != "$mv_" ]; then
+    "$mf_" || warn "A migração $mv_ falhou."
+  fi
+done
+echo "$MP_VERSION" > /etc/minipainel/version
+printf '# IDDigital Hosting — procura diária de atualizações (painel e sistema)\nSHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nMAILTO=""\n%d 5 * * * root /usr/local/sbin/mpanel update-check >/dev/null 2>&1; /usr/local/sbin/mpanel os-check >/dev/null 2>&1\n' "$(( RANDOM % 60 ))" > /etc/cron.d/minipainel-updates
+chmod 644 /etc/cron.d/minipainel-updates
 if grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null; then
   /usr/local/sbin/mpanel mail-enable >/dev/null || warn "Não foi possível atualizar a configuração do email (mpanel mail-enable)."
 fi
