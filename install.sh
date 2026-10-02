@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v1.9.0 — instalador (MiniPainel)
+#  IDDigital Hosting v1.9.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.9.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.9.1.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -16,8 +17,8 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.9.0"
-PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
+MP_VERSION="1.9.1"
+PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
 PHP_ARG=0
@@ -287,6 +288,7 @@ http {
     keepalive_timeout 65;
     types_hash_max_size 4096;
     server_tokens off;
+    fastcgi_hide_header X-Powered-By;
     client_max_body_size 128M;
     access_log /var/log/nginx/access.log;
 
@@ -501,7 +503,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v1.9.0 — painel web (MiniPainel)
+ * IDDigital Hosting v1.9.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -509,7 +511,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.9.0';
+const MP_VERSION = '1.9.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -863,7 +865,7 @@ svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .mu{color:var(--ink-2);font-size:12.5px}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-.p-ok{background:var(--ok-bg);color:var(--ok)}.p-off{background:var(--line-2);color:var(--ink-2)}.p-err{background:var(--err-bg);color:var(--err)}
+.p-ok{background:var(--ok-bg);color:var(--ok)}.p-warn{background:var(--warn-bg);color:var(--warn)}.p-off{background:var(--line-2);color:var(--ink-2)}.p-err{background:var(--err-bg);color:var(--err)}
 .port{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;background:var(--acc-bg);color:var(--acc-ink);padding:2px 8px;border-radius:6px;font-size:12.5px}
 .lim{display:flex;flex-wrap:wrap;gap:4px 10px;color:var(--ink-2);font-size:12.5px}
 .lim b{color:var(--ink);font-weight:600}
@@ -1649,6 +1651,14 @@ $dbAdmin = is_array($state['db_admin'] ?? null) ? $state['db_admin'] : [];
 $pmaOn   = !empty($pma['installed']);
 $srv     = is_array($state['server'] ?? null) ? $state['server'] : ['mode' => 'lan'];
 $isNet   = ($srv['mode'] ?? 'lan') === 'internet';
+/* Fim do suporte de segurança de cada versão de PHP (php.net/supported-versions) */
+function php_support(string $v): array {
+    $eol = ['8.2' => '2026-12-31', '8.3' => '2027-12-31', '8.4' => '2028-12-31', '8.5' => '2029-12-31'];
+    if (!isset($eol[$v])) return version_compare($v, '8.2', '<') ? ['Sem suporte de segurança', 'p-err'] : ['Suportada', 'p-ok'];
+    $t = strtotime($eol[$v]);
+    if ($t < time()) return ['Sem suporte de segurança', 'p-err'];
+    return ['Suporte até ' . date('d/m/Y', $t), $t - time() < 180 * 86400 ? 'p-warn' : 'p-ok'];
+}
 function site_main_url(array $s): string {
     $doms = trim((string)($s['domains'] ?? ''));
     if ($doms === '') return '';
@@ -2307,7 +2317,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php foreach ($phps as $p): $v = (string)($p['version'] ?? '');
                 $ni = count(array_filter(is_array($p['extensions'] ?? null) ? $p['extensions'] : [], function ($e) { return !empty($e['installed']); })); ?>
             <tr>
-              <td class="first" data-label="Versão"><div class="who"><span class="av t-vio"><?= ic('code') ?></span><a class="nm" href="?p=php&amp;v=<?= h(rawurlencode($v)) ?>">PHP <?= h($v) ?></a></div></td>
+              <td class="first" data-label="Versão"><div class="who"><span class="av t-vio"><?= ic('code') ?></span><div><a class="nm" href="?p=php&amp;v=<?= h(rawurlencode($v)) ?>">PHP <?= h($v) ?></a><?php $sup = php_support($v); ?><div><span class="pill <?= $sup[1] ?>"><?= h($sup[0]) ?></span></div></div></div></td>
               <td data-label="Serviço"><span class="pill <?= !empty($p['active']) ? 'p-ok' : 'p-err' ?>"><?= !empty($p['active']) ? 'A correr' : 'Parado' ?></span></td>
               <td class="r" data-label="Sites"><?= (int)($bySite[$v] ?? 0) ?></td>
               <td class="r" data-label="Extensões opcionais"><?= $ni ?></td>
@@ -3566,7 +3576,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v1.9.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v1.9.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -3962,11 +3972,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v1.9.0
+#  mpanel — IDDigital Hosting CLI v1.9.1
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.9.0"
+MP_VERSION="1.9.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -4123,6 +4133,7 @@ php_admin_value[session.gc_probability] = 1
 php_admin_value[session.gc_divisor] = 100
 php_admin_value[error_log] = $WWW_ROOT/$n/logs/php-error.log
 php_admin_flag[log_errors] = on
+php_admin_flag[expose_php] = off
 php_value[memory_limit] = $(lim_get "$n" MEM)M
 php_value[upload_max_filesize] = $(lim_get "$n" UPLOAD)M
 php_value[post_max_size] = $(lim_get "$n" UPLOAD)M
@@ -4462,8 +4473,8 @@ cmd_site_fixperms(){
   web_join "$n"
   chown "$u:$u" "$WWW_ROOT/$n"; chmod 2750 "$WWW_ROOT/$n"
   chown -R "$u:$u" "$d"
-  find "$d" -type d -exec chmod 2750 {} +
-  find "$d" -type f -exec chmod 640 {} +
+  runuser -u "$u" -- find "$d" -type d -exec chmod 2750 {} +
+  runuser -u "$u" -- find "$d" -type f -exec chmod 640 {} +
   se_restore "$d"
   apply_nginx >/dev/null 2>&1
   echo "Permissões corrigidas em $d (dono e grupo $u; o nginx lê através do grupo do site)."
@@ -5205,15 +5216,14 @@ cmd_cron_run(){
   cron_need "$n"; cron_need_id "$n" "$id"
   cron_write_site "$n"
   st="$WWW_ROOT/$n/logs/cron-$id.status"
-  [ -L "$st" ] && rm -f "$st"
-  s1=$(cat "$st" 2>/dev/null)
+  s1=$(runuser -u "mp_$n" -- cat "$st" 2>/dev/null)
   setsid runuser -u "mp_$n" -- /usr/local/sbin/mpanel-cron "$n" "$id" >/dev/null 2>&1 < /dev/null &
   for i in $(seq 1 40); do
     sleep 0.5
-    out=$(cat "$st" 2>/dev/null)
+    out=$(runuser -u "mp_$n" -- cat "$st" 2>/dev/null)
     if [ -n "$out" ] && [ "$out" != "$s1" ] && [[ "$out" != *running* ]]; then
       echo "Tarefa $id executada; terminou com código ${out##* }."
-      if [ ! -L "$WWW_ROOT/$n/logs/cron-$id.log" ]; then echo "Últimas linhas:"; tail -n 12 "$WWW_ROOT/$n/logs/cron-$id.log" 2>/dev/null | grep -v '^=== '; fi
+      echo "Últimas linhas:"; runuser -u "mp_$n" -- tail -n 12 "$WWW_ROOT/$n/logs/cron-$id.log" 2>/dev/null | grep -v '^=== '
       return 0
     fi
   done
@@ -5264,6 +5274,58 @@ BK_LOCK=/run/minipainel-backup.lock
 bk_conf(){ local v; v=$(grep -m1 "^$1=" "$BK_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
 bk_remotes(){ if [ -s "$BK_REMOTES" ]; then cat "$BK_REMOTES"; else echo '[]'; fi; }
 bk_rc(){ rclone --config "$BK_RCLONE" "$@"; }
+# Tipos aceites na configuração colada (destinos remotos reais). sftp e s3 só pelo formulário.
+BK_RAW_TYPES=" drive onedrive dropbox b2 webdav ftp pcloud box mega swift azureblob azurefiles gcs koofr opendrive yandex jottacloud sharefile seafile hidrive putio storj protondrive mailru premiumizeme quatrix sugarsync zoho filefabric "
+bk_section(){ awk -v n="[$1]" '$0 == n { f = 1; next } /^\[/ { f = 0 } f' "$BK_RCLONE" 2>/dev/null; }
+bk_cfg_check(){ # $1 = texto da secção (sem o cabeçalho); $2 = form|raw. Imprime o motivo se for inseguro.
+  local txt=$1 how=$2 type k v line
+  type=$(printf '%s\n' "$txt" | awk -F= '/^[[:space:]]*type[[:space:]]*=/ { v = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v; exit }')
+  [ -n "$type" ] || { echo "falta o tipo (type = ...)"; return 1; }
+  if [ "$how" = raw ]; then
+    [[ "$BK_RAW_TYPES" == *" $type "* ]] || { echo "o tipo '$type' não é permitido aqui (usa o formulário para SFTP e S3)"; return 1; }
+  else
+    case "$type" in sftp|s3) ;; *) [[ "$BK_RAW_TYPES" == *" $type "* ]] || { echo "o tipo '$type' não é permitido"; return 1; } ;; esac
+  fi
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*|';'*) continue ;; esac
+    [[ "$line" == *=* ]] || { echo "linha inválida: $line"; return 1; }
+    k=${line%%=*}; k=${k//[[:space:]]/}; v=${line#*=}; v=${v#"${v%%[![:space:]]*}"}
+    case "$k" in
+      ssh|remote|upstreams) echo "a opção '$k' não é permitida"; return 1 ;;
+      key_file) [ "$how" = form ] && [[ "$v" == /etc/minipainel/rclone-keys/*.key ]] && [[ "$v" != *..* ]] || { echo "a opção '$k' não é permitida"; return 1; } ;;
+      *_file|*_path|*file) echo "a opção '$k' não é permitida (lê ficheiros locais)"; return 1 ;;
+    esac
+  done <<<"$txt"
+  return 0
+}
+bk_remote_ok(){ # nome -> 0 se o destino estiver configurado de forma segura
+  local why; why=$(bk_cfg_check "$(bk_section "$1")" form) && return 0
+  echo "O destino '$1' tem uma configuração não permitida ($why). Remove-o e volta a criá-lo." >&2
+  return 1
+}
+BK_KEY=/etc/minipainel/backup.key
+bk_key_ensure(){ if [ ! -s "$BK_KEY" ]; then ( umask 077; openssl rand -hex 32 > "$BK_KEY" ); fi; chmod 600 "$BK_KEY"; }
+# HMAC-SHA256 do manifesto (a chave nunca passa na linha de comandos)
+bk_hmac(){ "$(php_cli "$PANEL_PHP")" -r 'echo hash_hmac("sha256", (string)file_get_contents($argv[1]), trim((string)file_get_contents($argv[2])));' "$1" "$BK_KEY" 2>/dev/null; }
+bk_sign(){ bk_key_ensure; bk_hmac "$1/manifest.json" > "$1/manifest.sig"; chown root:"$PANEL_SYSUSER" "$1/manifest.sig"; chmod 640 "$1/manifest.sig"; }
+# 0 = assinatura e ficheiros válidos; 1 = alterado; 2 = backup antigo sem assinatura
+bk_verify(){
+  local dir=$1 f rel listed
+  [ -f "$dir/manifest.sig" ] || return 2
+  [ -s "$BK_KEY" ] || return 1
+  [ "$(cat "$dir/manifest.sig")" = "$(bk_hmac "$dir/manifest.json")" ] || return 1
+  jq -e '.sums | type == "object"' "$dir/manifest.json" >/dev/null 2>&1 || return 1
+  ( cd "$dir" && jq -r '.sums | to_entries[] | "\(.value)  \(.key)"' manifest.json | sha256sum -c --quiet --strict >/dev/null 2>&1 ) || return 1
+  listed=$(jq -r '.sums | keys[]' "$dir/manifest.json")
+  while IFS= read -r f; do
+    rel=${f#"$dir"/}
+    case "$rel" in manifest.json|manifest.sig) continue ;; esac
+    printf '%s\n' "$listed" | grep -qxF "$rel" || return 1
+  done < <(find "$dir" -type f)
+  return 0
+}
+cmd_bk_key(){ bk_key_ensure; echo "Chave dos backups (guarda-a fora do servidor; é precisa para repor backups remotos noutro servidor):"; cat "$BK_KEY"; return 0; }
+cmd_bk_key_set(){ local k="${1:-}" re='^[0-9a-f]{64}$'; [[ "$k" =~ $re ]] || die "Chave inválida (64 caracteres hexadecimais)."; ( umask 077; echo "$k" > "$BK_KEY" ); echo "Chave dos backups definida."; return 0; }
 bk_remote_root(){ bk_remotes | jq -r --arg n "$1" '.[] | select(.name == $n) | .root'; }
 bk_host(){ hostname -s 2>/dev/null || echo servidor; }
 bk_gz(){ if command -v pigz >/dev/null 2>&1; then echo "pigz -6"; else echo "gzip -6"; fi; }
@@ -5337,21 +5399,27 @@ bk_make(){
   done
   rm -f "$dir.part/.err"
   size=$(du -sb "$dir.part" | awk '{print $1}')
+  local sums
+  sums=$(cd "$dir.part" && find . -type f -printf '%P\n' | sort | while IFS= read -r f; do printf '%s\t%s\n' "$f" "$(sha256sum "$f" | awk '{print $1}')"; done | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -cs 'add // {}')
   jq -n --arg s "$s" --arg id "$id" --arg t "$type" --arg c "$EPOCHSECONDS" --arg sz "$size" --argjson f "$files" --argjson dbs "$dbs" \
         --arg v "$MP_VERSION" --arg php "$( [ -f "$SITES_DIR/$s.conf" ] && site_get "$s" PHP)" \
-        '{site:$s, id:$id, type:$t, created:($c|tonumber), size:($sz|tonumber), files:$f, dbs:$dbs, version:$v, php:$php, remote:""}' > "$dir.part/manifest.json"
+        --argjson sums "$sums" \
+        '{site:$s, id:$id, type:$t, created:($c|tonumber), size:($sz|tonumber), files:$f, dbs:$dbs, version:$v, php:$php, remote:"", sums:$sums}' > "$dir.part/manifest.json"
+  bk_sign "$dir.part"
   chown -R root:"$PANEL_SYSUSER" "$dir.part"; find "$dir.part" -type f -exec chmod 640 {} +; chmod 750 "$dir.part"; [ -d "$dir.part/config" ] && chmod 750 "$dir.part/config"
   mv "$dir.part" "$dir"
   echo "$id"
 }
 bk_upload(){ # site id remote
   local s=$1 id=$2 r=$3 root
+  bk_remote_ok "$r" || return 1
   root=$(bk_remote_root "$r"); [ -n "$root" ] || { echo "Destino remoto '$r' não existe." >&2; return 1; }
   bk_status "Envio de $s para $r"
   bk_rc copy "$BK_DIR/$s/$id" "$r:$root/$(bk_host)/$s/$id" --transfers 2 2>&1 | tail -n 3 >&2
   [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
   jq --arg r "$r" '.remote = $r' "$BK_DIR/$s/$id/manifest.json" > "$BK_DIR/$s/$id/manifest.tmp" && mv -f "$BK_DIR/$s/$id/manifest.tmp" "$BK_DIR/$s/$id/manifest.json"
   chown root:"$PANEL_SYSUSER" "$BK_DIR/$s/$id/manifest.json"; chmod 640 "$BK_DIR/$s/$id/manifest.json"
+  [ -f "$BK_DIR/$s/$id/manifest.sig" ] && bk_sign "$BK_DIR/$s/$id"
 }
 # Retenção avô-pai-filho: lê ids (AAAAMMDD-HHMMSS) no stdin e imprime os que devem ser apagados
 bk_gfs(){
@@ -5377,6 +5445,7 @@ bk_prune_local(){ # site
 }
 bk_prune_remote(){ # site remote
   local s=$1 r=$2 root id
+  bk_remote_ok "$r" 2>/dev/null || return 0
   root=$(bk_remote_root "$r"); [ -n "$root" ] || return 0
   for id in $(bk_rc lsf --dirs-only "$r:$root/$(bk_host)/$s" 2>/dev/null | tr -d '/' | grep -E '^[0-9]{8}-[0-9]{6}$' | bk_gfs); do
     bk_rc purge "$r:$root/$(bk_host)/$s/$id" >/dev/null 2>&1
@@ -5441,20 +5510,37 @@ bk_need_set(){ # site id -> garante cópia local (vai buscar ao destino remoto s
   local s=$1 id=$2 re='^[0-9]{8}-[0-9]{6}$' r root
   [[ "$id" =~ $re ]] || die "Identificador de backup inválido: $id"
   case "$s" in _bd|_sistema) ;; *) valid_site "$s" || die "Site inválido: $s" ;; esac
+  BK_FETCHED=0
   [ -f "$BK_DIR/$s/$id/manifest.json" ] && return 0
   r=$(bk_conf REMOTE ''); [ -n "$r" ] || die "O backup $id de $s não existe localmente."
+  bk_remote_ok "$r" || die "Destino remoto recusado por razões de segurança."
   root=$(bk_remote_root "$r")
+  BK_FETCHED=1
   bk_rc copy "$r:$root/$(bk_host)/$s/$id" "$BK_DIR/$s/$id" >/dev/null 2>&1 && [ -f "$BK_DIR/$s/$id/manifest.json" ] || die "O backup $id de $s não existe localmente nem em $r."
   chown -R root:"$PANEL_SYSUSER" "$BK_DIR/$s/$id"
 }
 cmd_bk_restore(){
-  local s="${1:-}" id="${2:-}" what=all dir m d f uexists tmp pre="" created=0 port php
+  local s="${1:-}" id="${2:-}" what=all dir m d f uexists tmp pre="" created=0 port php noverify=0 vr newpw="" BK_FETCHED=0
   [ $# -ge 2 ] && shift 2
-  [ "${1:-}" = "--what" ] && what="${2:-all}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --what) what="${2:-all}"; shift 2 || shift ;;
+      --no-verify) noverify=1; shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
   case "$what" in all|files|db) ;; *) die "Use --what all|files|db" ;; esac
   [ "$s" = _sistema ] && die "A configuração do sistema não é reposta pelo painel; extrai sistema.tar.gz manualmente se precisares."
   bk_need_set "$s" "$id"
   dir="$BK_DIR/$s/$id"; m="$dir/manifest.json"
+  bk_verify "$dir"; vr=$?
+  if [ "$vr" = 1 ] && [ "$noverify" = 0 ]; then
+    [ "$BK_FETCHED" = 1 ] && rm -rf "${dir:?}"
+    die "Restauro recusado: a assinatura do backup não é válida ou os ficheiros foram alterados. Se vem de outro servidor, define primeiro a chave com 'mpanel bk-key-set'."
+  fi
+  if [ "$vr" = 2 ] && [ "$BK_FETCHED" = 1 ] && [ "$noverify" = 0 ]; then
+    rm -rf "${dir:?}"; die "Restauro recusado: o backup remoto não tem assinatura (é anterior à v1.9.1). Para o repor mesmo assim, usa no servidor: mpanel bk-restore $s $id --no-verify"
+  fi
   if [ "$s" != _bd ]; then
     if ! site_exists "$s"; then
       [ "$what" = db ] && die "O site $s não existe; repõe tudo (--what all) para o recriar."
@@ -5473,8 +5559,9 @@ cmd_bk_restore(){
     pre=$(bk_make _bd pre-restauro 2>/dev/null) || die "Não foi possível criar a cópia de segurança antes de repor; nada foi alterado."
   fi
   if [ "$what" != db ] && [ "$s" != _bd ]; then
-    tmp="$WWW_ROOT/.restauro-$s-$$"; mkdir -p "$tmp"
-    tar -C "$tmp" -xzpf "$dir/ficheiros.tar.gz" "$s/public_html" || { rm -rf "$tmp"; die "Falhou a extração dos ficheiros."; }
+    tmp="$WWW_ROOT/.restauro-$s-$$"; install -d -m 700 "$tmp"
+    tar -C "$tmp" --no-same-owner -xzpf "$dir/ficheiros.tar.gz" "$s/public_html" || { rm -rf "$tmp"; die "Falhou a extração dos ficheiros."; }
+    find "$tmp" -type f -perm /6000 -exec chmod ug-s {} + 2>/dev/null
     [ -d "$tmp/$s/public_html" ] || { rm -rf "$tmp"; die "O backup não contém public_html."; }
     mv "$WWW_ROOT/$s/public_html" "$WWW_ROOT/$s/.public_html.antes-$id" && mv "$tmp/$s/public_html" "$WWW_ROOT/$s/public_html" || {
       [ -d "$WWW_ROOT/$s/.public_html.antes-$id" ] && mv "$WWW_ROOT/$s/.public_html.antes-$id" "$WWW_ROOT/$s/public_html"; rm -rf "$tmp"; die "Falhou a substituição dos ficheiros; nada foi alterado."; }
@@ -5490,12 +5577,24 @@ cmd_bk_restore(){
       db_exec "DROP DATABASE IF EXISTS \`$d\`; CREATE DATABASE \`$d\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || die "Falhou a recriação da base de dados $d."
       gzip -dc "$f" | mysql -uroot "$d" || die "Falhou a importação de $d${pre:+ (o estado anterior está no backup $pre)}."
       uexists=$(db_q "SELECT COUNT(*) FROM mysql.user WHERE User='$d' AND Host='localhost'" 2>/dev/null)
-      if [ "$uexists" = 0 ] && [ -f "$dir/bd-$d.user.sql" ]; then mysql -uroot < "$dir/bd-$d.user.sql" 2>/dev/null; db_exec "FLUSH PRIVILEGES;"; fi
+      if [ "$uexists" = 0 ]; then
+        # recria só o utilizador da própria base de dados, com o hash da password original (nunca executa o SQL do backup)
+        local hsh ng="${d//_/\\_}"
+        hsh=$( [ -f "$dir/bd-$d.user.sql" ] && grep -m1 -oE "IDENTIFIED BY PASSWORD '\*[0-9A-F]{40}'" "$dir/bd-$d.user.sql" | grep -oE '\*[0-9A-F]{40}')
+        if [ -n "$hsh" ]; then
+          db_exec "CREATE USER '$d'@'localhost' IDENTIFIED BY PASSWORD '$hsh'; GRANT ALL PRIVILEGES ON \`$ng\`.* TO '$d'@'localhost'; FLUSH PRIVILEGES;" || warn "Não foi possível recriar o utilizador $d."
+        else
+          local pw; pw=$(gen_pass 20)
+          db_exec "CREATE USER '$d'@'localhost' IDENTIFIED BY '$pw'; GRANT ALL PRIVILEGES ON \`$ng\`.* TO '$d'@'localhost'; FLUSH PRIVILEGES;" && newpw+=" $d: $pw"
+        fi
+      fi
       [ "$s" != _bd ] && dbmap_set "$d" "$s"
     done
   fi
   bk_write_state
   echo "Backup $id de $s reposto ($what).${pre:+ O estado anterior ficou guardado no backup $pre.}$([ "$created" = 1 ] && echo " O site foi recriado.")"
+  [ "$vr" = 2 ] && echo "Aviso: backup antigo, sem assinatura (anterior à v1.9.1)."
+  [ -n "$newpw" ] && echo "Utilizadores recriados com password nova (atualiza a configuração do site):$newpw"
   return 0
 }
 cmd_bk_delete(){
@@ -5568,8 +5667,9 @@ cmd_bk_remote_add(){ # nome tipo opções...
       root="$bucket${root:+/$root}" ;;
     rclone)
       [ -n "$raw" ] || die "Cola a secção de configuração do rclone."
-      raw=$(printf '%s' "$raw" | sed 's/\\n/\n/g')
-      printf '%s\n' "$raw" | grep -q "^\[$n\]$" || die "A configuração tem de começar por [$n]."
+      raw=$(printf '%s' "$raw" | sed 's/\\n/\n/g' | sed 's/[[:space:]]*$//')
+      [ "$(printf '%s\n' "$raw" | grep -c '^\[')" = 1 ] && [ "$(printf '%s\n' "$raw" | sed -n '1{/^\[/p}')" = "[$n]" ] || die "A configuração tem de ter uma só secção, a começar por [$n]."
+      local why; why=$(bk_cfg_check "$(printf '%s\n' "$raw" | sed '1d')" raw) || die "Configuração recusada: $why."
       grep -q "^\[$n\]$" "$BK_RCLONE" && die "Já existe [$n] na configuração do rclone."
       printf '\n%s\n' "$raw" >> "$BK_RCLONE"
       root=${root:-iddigital-hosting} ;;
@@ -5583,6 +5683,7 @@ cmd_bk_remote_add(){ # nome tipo opções...
 cmd_bk_remote_test(){
   local n="${1:-}" root f
   root=$(bk_remote_root "$n"); [ -n "$root" ] || die "O destino $n não existe."
+  bk_remote_ok "$n" || die "Destino recusado por razões de segurança."
   local errf; errf=$(mktemp)
   f="teste-$(bk_host)-$EPOCHSECONDS.txt"
   echo "IDDigital Hosting: teste de escrita" | bk_rc rcat "$n:$root/$f" 2>"$errf" || { head -c 400 "$errf" >&2; rm -f "$errf"; die "Não foi possível escrever em $n:$root."; }
@@ -5600,7 +5701,11 @@ cmd_bk_remote_del(){
   echo "Destino $n removido (os backups já enviados para lá não foram apagados)."
   return 0
 }
-cmd_bk_init(){ install -d -o root -g "$PANEL_SYSUSER" -m 750 "$BK_DIR"; bk_cron_apply; bk_write_state; echo "Backups configurados."; return 0; }
+cmd_bk_init(){
+  install -d -o root -g "$PANEL_SYSUSER" -m 750 "$BK_DIR"; bk_key_ensure; bk_cron_apply; bk_write_state
+  local r; for r in $(bk_remotes | jq -r '.[].name'); do bk_remote_ok "$r" || true; done
+  echo "Backups configurados."; return 0
+}
 cmd_bk_list(){
   local s="${1:-}"
   printf '%-12s %-16s %-13s %-10s %-8s %s\n' SITE ID TIPO TAMANHO REMOTO "BASES DE DADOS"
@@ -5981,7 +6086,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v1.9.0 (mpanel)
+IDDigital Hosting — CLI v1.9.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -6032,6 +6137,7 @@ Backups (local em /var/backups/minipainel + destinos remotos via rclone)
   bk-remote-add <nome> s3 --access A --secret S --bucket B [--endpoint E] [--region R] [--provider Other]
   bk-remote-add <nome> rclone --config "[nome]\ntype = drive\n..."
   bk-remote-test <nome> | bk-remote-del <nome>
+  bk-key | bk-key-set <chave>          chave que assina os backups (precisa dela para repor noutro servidor)
   db-link <base-de-dados> <site>|none   associa uma base de dados a um site (entra nos backups dele)
 
 Tarefas agendadas (cron; correm como o utilizador do site)
@@ -6115,6 +6221,8 @@ dispatch(){
     bk-remote-add)     cmd_bk_remote_add "$@" ;;
     bk-remote-test)    cmd_bk_remote_test "$@" ;;
     bk-remote-del)     cmd_bk_remote_del "$@" ;;
+    bk-key)            cmd_bk_key ;;
+    bk-key-set)        cmd_bk_key_set "$@" ;;
     fm-sync)           cmd_fm_sync ;;
     status)            cmd_status ;;
     passwd)            cmd_passwd "$@" ;;
@@ -6183,7 +6291,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.9.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.9.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -6388,11 +6496,11 @@ update_crons(){
       [ -f "$f" ] && [ ! -L "$f" ] || continue
       id=${f##*/cron-}; id=${id%.status}
       [[ "$id" =~ ^[a-f0-9]{8}$ ]] || continue
-      read -r a b c < "$f"
+      read -r a b c < <(runuser -u "mp_$n" -- cat "$f" 2>/dev/null)
       [[ "$a" =~ $re_n ]] && [[ "$b" =~ $re_n ]] && [[ "$c" =~ $re_c ]] || continue
       t='""'
       if [ -f "$WWW_ROOT/$n/logs/cron-$id.log" ] && [ ! -L "$WWW_ROOT/$n/logs/cron-$id.log" ]; then
-        t=$(tail -n 20 "$WWW_ROOT/$n/logs/cron-$id.log" 2>/dev/null | cut -c1-500 | jq -Rs .)
+        t=$(runuser -u "mp_$n" -- tail -n 20 "$WWW_ROOT/$n/logs/cron-$id.log" 2>/dev/null | cut -c1-500 | jq -Rs .)
       fi
       o+="$sep\"$n:$id\":{\"start\":$a,\"end\":$b,\"rc\":\"$c\",\"tail\":$t}"; sep=","
     done
@@ -6496,7 +6604,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v1.9.0
+#  mpanel-cron — IDDigital Hosting v1.9.1
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
