@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.1.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.1.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.1.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.1.1.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.1.0"
+MP_VERSION="2.1.1"
 PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -521,7 +521,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.1.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.1.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -529,7 +529,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.1.0';
+const MP_VERSION = '2.1.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1203,6 +1203,7 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dd-menu a[aria-current]{background:var(--hover);font-weight:700}
 .fm-pre{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;white-space:nowrap;flex:0 0 auto}
 .fm-pre + .crumbs{margin-left:-6px}
 .fm-pre a{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);text-decoration:none;font-weight:600}
@@ -2220,8 +2221,8 @@ $titles = [
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'email', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'definicoes', 'conta']];
-$section = 'Geral';
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'email', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria']];
+$section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
 $today = gmdate('d/m/Y', time() + tz_off($lvTop));
@@ -2278,7 +2279,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <details class="dd me">
           <summary class="chip" aria-label="Conta"><span class="av-me"><?= h(substr((string)$_SESSION['user'], 0, 1)) ?></span><span class="lbl"><?= h($_SESSION['user']) ?></span><?= ic('chev', 'chev') ?></summary>
           <div class="dd-menu">
-            <a href="?p=conta"><?= ic('user') ?>Conta e password</a>
+            <a href="?p=conta"<?= $page === 'conta' ? ' aria-current="page"' : '' ?>><?= ic('user') ?>Conta e segurança</a>
+            <a href="?p=definicoes"<?= $page === 'definicoes' ? ' aria-current="page"' : '' ?>><?= ic('sliders') ?>Definições</a>
             <hr>
             <form method="post"><?= act_fields('sair') ?><button type="submit"><?= ic('out') ?>Sair</button></form>
           </div>
@@ -6624,7 +6626,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.1.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.1.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7031,11 +7033,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.1.0
+#  mpanel — IDDigital Hosting CLI v2.1.1
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.1.0"
+MP_VERSION="2.1.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -10163,7 +10165,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.1.0 (mpanel)
+IDDigital Hosting — CLI v2.1.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -10407,7 +10409,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.1.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.1.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -10752,7 +10754,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.1.0
+#  mp-sendmail — IDDigital Hosting v2.1.1
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -10790,7 +10792,7 @@ fi
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.1.0
+#  mpanel-cron — IDDigital Hosting v2.1.1
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
