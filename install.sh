@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v1.7.0 — instalador (MiniPainel)
+#  IDDigital Hosting v1.8.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.7.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.8.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -16,7 +16,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.7.0"
+MP_VERSION="1.8.0"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -146,7 +146,7 @@ selinux_on(){ command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/nu
 say "A instalar pacotes base ($OS_ID $OS_VER)..."
 if [ "$OS_FAMILY" = debian ]; then
   apt-get update -q
-  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables cron nginx mariadb-server mariadb-client
+  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables cron pigz rclone nginx mariadb-server mariadb-client
   if [ "$OS_ID" = ubuntu ]; then
     pkg_install software-properties-common
     add-apt-repository -y ppa:ondrej/php
@@ -163,7 +163,8 @@ else
   dnf install -y -q dnf-plugins-core || true
   dnf config-manager --set-enabled crb >/dev/null 2>&1 || true
   rpm -q remi-release >/dev/null 2>&1 || dnf install -y -q "https://rpms.remirepo.net/enterprise/remi-release-${EL_MAJOR}.rpm"
-  pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate nftables cronie policycoreutils-python-utils
+  pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate nftables cronie pigz policycoreutils-python-utils
+  pkg_install_soft rclone
 fi
 ok "Pacotes base instalados."
 
@@ -436,15 +437,15 @@ listen.mode = 0660
 pm = ondemand
 pm.max_children = 4
 pm.process_idle_timeout = 30s
-request_terminate_timeout = 900s
-php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/
+request_terminate_timeout = 0
+php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/
 php_admin_value[session.save_path] = /var/lib/minipainel/sessions
 php_admin_value[upload_tmp_dir] = /var/lib/minipainel/tmp
 php_admin_value[sys_temp_dir] = /var/lib/minipainel/tmp
 php_admin_value[error_log] = /var/lib/minipainel/logs/php-error.log
 php_admin_flag[log_errors] = on
 php_admin_flag[display_errors] = off
-php_admin_value[max_execution_time] = 870
+php_value[max_execution_time] = 870
 php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec
 php_admin_value[session.gc_probability] = 1
 php_admin_value[session.gc_divisor] = 100
@@ -494,7 +495,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v1.7.0 — painel web (MiniPainel)
+ * IDDigital Hosting v1.8.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -502,7 +503,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.7.0';
+const MP_VERSION = '1.8.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -512,6 +513,7 @@ const MP_STATE   = MP_DATA . '/state.json';
 const MP_AUTH    = MP_DATA . '/auth.json';
 const MP_IDLE    = 7200;
 const MP_STATS   = MP_DATA . '/stats';
+const MP_BK      = '/var/backups/minipainel';
 const RX_SITE    = '/^[a-z][a-z0-9-]{0,23}$/';
 const RX_DB      = '/^[a-z][a-z0-9_]{0,31}$/';
 const RX_PASS    = '/^[A-Za-z0-9._@%+=:,!#*-]{8,64}$/';
@@ -695,6 +697,7 @@ const ICONS = [
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
     'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'archive'=> '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
 ];
 /* Logótipo IDDigital Hosting (SVG em linha; o texto usa Arial ou equivalente métrico) */
 function brand_logo(string $cls = 'brand-logo'): string {
@@ -1106,6 +1109,10 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .cron-help{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:-6px}
 .cron-out{margin:0;padding:18px 26px;max-height:60vh;overflow:auto;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--hover)}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
+.bk-run .item{gap:16px}
+dialog{text-align:left}
+.rm-grp{display:grid;gap:14px}
+.rm-grp[hidden]{display:none}
 .auth{background:var(--card)}
 .auth-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh}
 .auth-side{background-color:#13283a;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:48px 48px;color:#fff;padding:52px 56px;display:flex;flex-direction:column;justify-content:space-between;gap:40px}
@@ -1241,6 +1248,7 @@ $pages = [
     'php'      => ['PHP', 'code'],
     'servicos' => ['Serviços', 'pulse'],
     'ligacoes' => ['Ligações', 'ban'],
+    'backups'  => ['Backups', 'archive'],
     'conta'    => ['Conta', 'user'],
 ];
 $pg   = qget('p');
@@ -1266,6 +1274,24 @@ if (qget('stats') === 'conns') {
     session_write_close();
     $d = @file_get_contents(MP_STATS . '/conns.json');
     echo $d !== false ? $d : '{}';
+    exit;
+}
+
+if (qget('bk') === 'dl') {
+    if (empty($_SESSION['user'])) { http_response_code(401); exit; }
+    session_write_close();
+    $bs = qget('s'); $bid = qget('id'); $bf = qget('f');
+    if (!preg_match('/^([a-z][a-z0-9-]{0,23}|_bd|_sistema)$/', $bs) || !preg_match('/^\d{8}-\d{6}$/', $bid)
+        || !preg_match('/^(ficheiros\.tar\.gz|sistema\.tar\.gz|bd-[a-z][a-z0-9_]{0,31}\.sql\.gz)$/', $bf)) { http_response_code(400); exit('Pedido inválido.'); }
+    $path = MP_BK . '/' . $bs . '/' . $bid . '/' . $bf;
+    if (!is_file($path) || !is_readable($path)) { http_response_code(404); exit('Ficheiro não encontrado.'); }
+    @set_time_limit(0);
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/gzip');
+    header('Content-Length: ' . (string)filesize($path));
+    header('Content-Disposition: attachment; filename="' . trim($bs, '_') . '-' . $bid . '-' . $bf . '"');
+    header('X-Accel-Buffering: no');
+    readfile($path);
     exit;
 }
 
@@ -1408,6 +1434,68 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             job_submit('service', [$svc, $act], $names[$act] . ' ' . $svc);
             break;
 
+        case 'bk_now':
+            $tg = post('target'); $rm = post('remote');
+            if ($tg !== 'all' && !preg_match('/^([a-z][a-z0-9-]{0,23}|_bd|_sistema)$/', $tg)) { $bad('Pedido inválido.'); break; }
+            $args = $tg === 'all' ? [] : ['--site', $tg];
+            if ($rm !== '' && preg_match('/^[a-z][a-z0-9-]{1,23}$/', $rm)) array_push($args, '--remote', $rm);
+            job_submit('backup-start', $args, 'Iniciar backup');
+            break;
+
+        case 'bk_restore':
+            $bs = post('s'); $bid = post('id'); $what = post('what');
+            if (!preg_match('/^([a-z][a-z0-9-]{0,23}|_bd)$/', $bs) || !preg_match('/^\d{8}-\d{6}$/', $bid) || !in_array($what, ['all', 'files', 'db'], true)) { $bad('Pedido inválido.'); break; }
+            if (post('ok') !== '1') { $bad('Confirma que compreendes que o conteúdo atual vai ser substituído.'); break; }
+            job_submit('bk-restore', [$bs, $bid, '--what', $what], 'Repor backup de ' . ($bs === '_bd' ? 'bases de dados' : $bs));
+            break;
+
+        case 'bk_del':
+            $bs = post('s'); $bid = post('id');
+            if (!preg_match('/^([a-z][a-z0-9-]{0,23}|_bd|_sistema)$/', $bs) || !preg_match('/^\d{8}-\d{6}$/', $bid)) { $bad('Pedido inválido.'); break; }
+            job_submit('bk-delete', [$bs, $bid], 'Apagar backup');
+            break;
+
+        case 'bk_conf':
+            $tm = post('time'); $kd = post('daily'); $kw = post('weekly'); $km = post('monthly'); $rm = post('remote');
+            if (!preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $tm)) { $bad('Hora inválida.'); break; }
+            foreach ([$kd, $kw, $km] as $v) { if (!ctype_digit($v) || (int)$v > 999) { $bad('Os valores de retenção têm de ser números entre 0 e 999.'); break 2; } }
+            if ((int)$kd < 1) { $bad('Guarda pelo menos 1 backup diário.'); break; }
+            if ($rm !== 'none' && !preg_match('/^[a-z][a-z0-9-]{1,23}$/', $rm)) $rm = 'none';
+            job_submit('bk-conf', [post('on') === 'on' ? '--on' : '--off', '--time', $tm, '--daily', $kd, '--weekly', $kw, '--monthly', $km, '--remote', $rm], 'Agendamento dos backups');
+            break;
+
+        case 'bk_remote_add':
+            $rn = post('name'); $rt = post('type');
+            if (!preg_match('/^[a-z][a-z0-9-]{1,23}$/', $rn) || !in_array($rt, ['sftp', 's3', 'rclone'], true)) { $bad('Nome ou tipo inválido.'); break; }
+            $args = [$rn, $rt];
+            if ($rt === 'sftp') {
+                $port = post('port') !== '' ? post('port') : '22';
+                if (!ctype_digit($port)) { $bad('Porta inválida.'); break; }
+                array_push($args, '--host', post('host'), '--port', $port, '--user', post('user'), '--path', post('path_sftp'));
+                if (post_raw('pass') !== '') array_push($args, '--pass', post_raw('pass'));
+                if (trim(post_raw('key')) !== '') array_push($args, '--key', str_replace(["\r\n", "\r", "\n"], '\n', trim(post_raw('key'))));
+            } elseif ($rt === 's3') {
+                array_push($args, '--provider', post('provider'), '--endpoint', post('endpoint'), '--region', post('region'), '--access', post('access'), '--secret', post_raw('secret'), '--bucket', post('bucket'), '--path', post('path_s3'));
+            } else {
+                $cfg = str_replace(["\r\n", "\r"], "\n", trim(post_raw('config')));
+                array_push($args, '--config', str_replace("\n", '\n', $cfg), '--path', post('path_rc'));
+            }
+            job_submit('bk-remote-add', $args, 'Adicionar destino ' . $rn);
+            break;
+
+        case 'bk_remote_test':
+        case 'bk_remote_del':
+            $rn = post('name');
+            if (!preg_match('/^[a-z][a-z0-9-]{1,23}$/', $rn)) { $bad('Destino inválido.'); break; }
+            job_submit($a === 'bk_remote_test' ? 'bk-remote-test' : 'bk-remote-del', [$rn], ($a === 'bk_remote_test' ? 'Testar ' : 'Remover ') . $rn, );
+            break;
+
+        case 'db_link':
+            $ls = post('site');
+            if (!preg_match(RX_DB, $db) || ($ls !== 'none' && !valid_site($ls))) { $bad('Pedido inválido.'); break; }
+            job_submit('db-link', [$db, $ls], 'Associar ' . $db);
+            break;
+
         case 'cron_save':
             $cid = post('id'); $when = trim(preg_replace('/\s+/', ' ', post('when')) ?? ''); $cmdc = trim(str_replace(["\r", "\n"], ' ', post_raw('cmd')));
             $desc = substr(trim(str_replace(["\r", "\n", '|'], ' ', post_raw('desc'))), 0, 80);
@@ -1464,7 +1552,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $pw = post('pw');
             if (!preg_match(RX_DB, $db)) { $bad('Nome inválido: usa minúsculas, números e "_", a começar por letra (máx. 32).'); $back = ['novo' => 'bd']; break; }
             if ($pw !== '' && !preg_match(RX_PASS, $pw)) { $bad('Password inválida: 8 a 64 caracteres (letras, números e . _ @ % + = : , ! # * -).'); $back = ['novo' => 'bd']; break; }
-            job_submit('db-add', $pw !== '' ? [$db, $pw] : [$db], 'Criar a base de dados ' . $db);
+            $dsite = post('site');
+            $dargs = $pw !== '' ? [$db, $pw] : [$db];
+            if ($dsite !== '' && valid_site($dsite)) array_push($dargs, '--site', $dsite);
+            job_submit('db-add', $dargs, 'Criar a base de dados ' . $db);
             break;
 
         case 'db_del':
@@ -1770,8 +1861,9 @@ $titles = [
     'ficheiros'=> 'Ficheiros de cada site, geridos com o utilizador do próprio site.',
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
     'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
+    'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'conta']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'conta']];
 $section = 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -1817,6 +1909,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
         <?php elseif ($page === 'cron' && $sites): ?>
           <button class="chip prim" type="button" data-cron-new aria-label="Nova tarefa"><?= ic('plus') ?><span class="lbl">Nova tarefa</span></button>
+        <?php elseif ($page === 'backups'): ?>
+          <button class="chip prim" type="button" data-open="dlg-bk-now" aria-label="Fazer backup agora"><?= ic('archive') ?><span class="lbl">Fazer backup</span></button>
         <?php elseif ($page === 'ligacoes'): ?>
           <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
         <?php endif; ?>
@@ -2110,18 +2204,20 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <div class="empty"><b>Ainda não há bases de dados</b>Cada base de dados é criada com um utilizador próprio.<br><button class="btn" type="button" data-open="dlg-db-new"><?= ic('plus') ?>Nova base de dados</button></div>
         <?php else: ?>
         <table class="list cards">
-          <thead><tr><th>Base de dados</th><th>Utilizador</th><th class="r">Tamanho</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <thead><tr><th>Base de dados</th><th>Utilizador</th><th>Site</th><th class="r">Tamanho</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>
           <?php foreach ($dbs as $d): $n = (string)($d['name'] ?? ''); ?>
             <tr>
               <td class="first" data-label="Base de dados"><div class="who"><span class="av t-blue"><?= ic('db') ?></span><div class="nm mono"><?= h($n) ?></div></div></td>
               <td class="mono" data-label="Utilizador"><?= h($n) ?>@localhost</td>
+              <td data-label="Site"><?= ($d['site'] ?? '') !== '' ? '<span class="pill p-me">' . h($d['site']) . '</span>' : '<span class="mu">—</span>' ?></td>
               <td class="r" data-label="Tamanho"><?= h(number_format((float)($d['size_mb'] ?? 0), 2, ',', ' ')) ?> MB</td>
               <td class="act r">
                 <details class="dd">
                   <summary class="iconbtn" aria-label="Ações de <?= h($n) ?>"><?= ic('dots') ?></summary>
                   <div class="dd-menu">
                     <?php if ($pmaOn): ?><a href="/phpmyadmin/index.php?route=/database/structure&amp;db=<?= h(rawurlencode($n)) ?>" target="_blank" rel="noopener"><?= ic('table') ?>Abrir no phpMyAdmin</a><?php endif; ?>
+                    <button type="button" data-open="dlg-dblink-<?= h($n) ?>"><?= ic('world') ?>Associar a um site</button>
                     <button type="button" data-open="dlg-dbpw-<?= h($n) ?>"><?= ic('key') ?>Mudar password</button>
                     <hr>
                     <button type="button" class="dan" data-open="dlg-dbdel-<?= h($n) ?>"><?= ic('trash') ?>Apagar</button>
@@ -2421,6 +2517,204 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </form>
       </dialog>
 
+<?php elseif ($page === 'backups'):
+    $bk = jload(MP_STATS . '/backup.json') ?? [];
+    $bkRun = jload(MP_STATS . '/backup-run.json');
+    $bkConf = is_array($bk['conf'] ?? null) ? $bk['conf'] : ['enabled' => true, 'time' => '03:00', 'keep_daily' => 7, 'keep_weekly' => 4, 'keep_monthly' => 3, 'remote' => ''];
+    $bkSets = is_array($bk['sets'] ?? null) ? $bk['sets'] : [];
+    $bkRem = is_array($bk['remotes'] ?? null) ? $bk['remotes'] : [];
+    $bkLast = is_array($bk['last'] ?? null) ? $bk['last'] : null;
+    $tzb = tz_off(live_stats());
+    $fSet = qget('set');
+    if ($fSet !== '') $bkSets = array_values(array_filter($bkSets, function ($x) use ($fSet) { return ($x['site'] ?? '') === $fSet; }));
+    $setName = function (string $s): string { return $s === '_bd' ? 'Bases de dados sem site' : ($s === '_sistema' ? 'Configuração do sistema' : $s); };
+    $typeName = ['auto' => ['Automático', 'p-off'], 'manual' => ['Manual', 'p-me'], 'pre-restauro' => ['Antes de repor', 'p-err']];
+    $next = '';
+    if (!empty($bkConf['enabled'])) {
+        [$hh, $mm] = array_map('intval', explode(':', (string)$bkConf['time'] . ':0'));
+        $loc = time() + $tzb; $today = intdiv($loc, 86400) * 86400 + $hh * 3600 + $mm * 60;
+        $next = gmdate('d/m H:i', $today > $loc ? $today : $today + 86400);
+    }
+?>
+      <?php if ($bkRun): ?>
+        <div class="card bk-run" data-bk-running><div class="row-list"><div class="item"><span class="spin"></span><div class="grow"><div class="nm">Backup em curso</div><div class="mu"><?= h($bkRun['step'] ?? '') ?> · desde há <?= max(1, (int)ceil((time() - (int)($bkRun['since'] ?? time())) / 60)) ?> min</div></div><span class="mu">A página atualiza sozinha.</span></div></div></div>
+      <?php endif; ?>
+      <section class="stats">
+        <div class="stat"><span class="tile <?= $bkLast && empty($bkLast['ok']) ? 't-warn' : 't-acc' ?>"><?= ic('archive') ?></span><div><div class="k">Último backup</div><div class="v"><?= $bkLast ? (empty($bkLast['ok']) ? 'Com erros' : 'Sucesso') : '—' ?> <small><?= $bkLast ? h(ago((int)$bkLast['ts'], time())) : 'ainda não houve' ?></small></div></div></div>
+        <div class="stat"><span class="tile t-blue"><?= ic('clock') ?></span><div><div class="k">Próximo automático</div><div class="v"><?= $next !== '' ? h($next) : 'Desativado' ?></div></div></div>
+        <div class="stat"><span class="tile t-vio"><?= ic('db') ?></span><div><div class="k">Espaço ocupado (local)</div><div class="v"><?= h(fmt_bytes((float)($bk['total'] ?? 0))) ?> <small><?= count($bk['sets'] ?? []) ?> backups</small></div></div></div>
+        <div class="stat"><span class="tile t-warn"><?= ic('upload') ?></span><div><div class="k">Cópia remota</div><div class="v"><?= ($bkConf['remote'] ?? '') !== '' ? h($bkConf['remote']) : 'Só local' ?></div></div></div>
+      </section>
+      <?php if ($bkLast && empty($bkLast['ok'])): ?><div class="card"><div class="card-b" style="color:var(--err)"><?= h($bkLast['msg'] ?? '') ?></div></div><?php endif; ?>
+
+      <section class="card">
+        <div class="card-h">
+          <div><h2>Backups guardados</h2><p>Cada backup de um site inclui os ficheiros, as bases de dados associadas e as tarefas agendadas.</p></div>
+          <form method="get" style="margin:0"><input type="hidden" name="p" value="backups">
+            <select class="in" name="set" onchange="this.form.submit()" aria-label="Filtrar" style="height:40px;min-width:200px">
+              <option value="">Todos</option>
+              <?php foreach ($sites as $s): $sn = (string)$s['name']; ?><option value="<?= h($sn) ?>"<?= $sn === $fSet ? ' selected' : '' ?>><?= h($sn) ?></option><?php endforeach; ?>
+              <option value="_bd"<?= $fSet === '_bd' ? ' selected' : '' ?>>Bases de dados sem site</option>
+              <option value="_sistema"<?= $fSet === '_sistema' ? ' selected' : '' ?>>Configuração do sistema</option>
+            </select>
+          </form>
+        </div>
+        <?php if (!$bkSets): ?>
+          <div class="empty"><b>Ainda não há backups<?= $fSet !== '' ? ' deste conjunto' : '' ?></b>Faz o primeiro agora ou espera pelo backup automático.<br><button class="btn" type="button" data-open="dlg-bk-now"><?= ic('archive') ?>Fazer backup agora</button></div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Conjunto</th><th>Data</th><th>Tipo</th><th>Conteúdo</th><th class="r">Tamanho</th><th>Remoto</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($bkSets as $i => $b): $bs = (string)($b['site'] ?? ''); $bid = (string)($b['id'] ?? ''); $tn = $typeName[$b['type'] ?? 'manual'] ?? ['Manual', 'p-me'];
+                $dbl = is_array($b['dbs'] ?? null) ? $b['dbs'] : []; $did = 'bk' . $i; ?>
+            <tr>
+              <td class="first" data-label="Conjunto"><div class="who"><span class="av <?= $bs[0] === '_' ? 't-vio' : tone($bs) ?>"><?= $bs[0] === '_' ? ic($bs === '_bd' ? 'db' : 'server') : h(substr($bs, 0, 1)) ?></span><div class="nm"><?= h($setName($bs)) ?></div></div></td>
+              <td data-label="Data"><?= h(gmdate('d/m/Y H:i', (int)($b['created'] ?? 0) + $tzb)) ?></td>
+              <td data-label="Tipo"><span class="pill <?= $tn[1] ?>"><?= $tn[0] ?></span></td>
+              <td data-label="Conteúdo" class="mu"><?= h(implode(' + ', array_filter([!empty($b['files']) ? ($bs === '_sistema' ? 'Configuração' : 'Ficheiros') : '', $dbl ? count($dbl) . ' BD' : '']))) ?: '—' ?></td>
+              <td class="r" data-label="Tamanho"><?= h(fmt_bytes((float)($b['size'] ?? 0))) ?></td>
+              <td data-label="Remoto"><?= ($b['remote'] ?? '') !== '' ? '<span class="pill p-ok">' . h($b['remote']) . '</span>' : '<span class="mu">—</span>' ?></td>
+              <td class="act r">
+                <details class="dd">
+                  <summary class="iconbtn" aria-label="Ações do backup"><?= ic('dots') ?></summary>
+                  <div class="dd-menu">
+                    <?php if ($bs !== '_sistema'): ?><button type="button" data-open="dlg-rs-<?= $did ?>"><?= ic('reload') ?>Repor…</button><?php endif; ?>
+                    <?php if (!empty($b['files'])): $ff = $bs === '_sistema' ? 'sistema.tar.gz' : 'ficheiros.tar.gz'; ?><a href="?bk=dl&amp;s=<?= h(rawurlencode($bs)) ?>&amp;id=<?= h($bid) ?>&amp;f=<?= $ff ?>"><?= ic('download') ?>Descarregar <?= $bs === '_sistema' ? 'configuração' : 'ficheiros' ?></a><?php endif; ?>
+                    <?php foreach ($dbl as $d): ?><a href="?bk=dl&amp;s=<?= h(rawurlencode($bs)) ?>&amp;id=<?= h($bid) ?>&amp;f=bd-<?= h(rawurlencode((string)$d)) ?>.sql.gz"><?= ic('download') ?>Descarregar BD <?= h($d) ?></a><?php endforeach; ?>
+                    <hr>
+                    <form method="post" data-confirm="Apagar este backup (cópia local)?"><?= act_fields('bk_del', ['s' => $bs, 'id' => $bid]) ?><button type="submit" class="dan"><?= ic('trash') ?>Apagar</button></form>
+                  </div>
+                </details>
+                <?php if ($bs !== '_sistema'): ?>
+                <dialog id="dlg-rs-<?= $did ?>">
+                  <form method="post">
+                    <?= act_fields('bk_restore', ['s' => $bs, 'id' => $bid]) ?>
+                    <div class="dlg-h"><h3>Repor <?= h($setName($bs)) ?></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+                    <div class="dlg-b">
+                      <p class="mu" style="margin:0">Backup de <?= h(gmdate('d/m/Y H:i', (int)($b['created'] ?? 0) + $tzb)) ?>.</p>
+                      <?php if ($bs !== '_bd'): ?>
+                      <label class="chk"><input type="radio" name="what" value="all" checked> Tudo: ficheiros, bases de dados e tarefas agendadas</label>
+                      <label class="chk"><input type="radio" name="what" value="files"> Só os ficheiros (public_html)</label>
+                      <?php if ($dbl): ?><label class="chk"><input type="radio" name="what" value="db"> Só as bases de dados (<?= h(implode(', ', $dbl)) ?>)</label><?php endif; ?>
+                      <?php else: ?><input type="hidden" name="what" value="db"><p style="margin:0">Repõe as bases de dados: <?= h(implode(', ', $dbl)) ?>.</p><?php endif; ?>
+                      <div class="warnbox">O conteúdo atual é substituído. Antes de repor é feito automaticamente um backup do estado atual ("Antes de repor"), para poderes voltar atrás.</div>
+                      <label class="chk"><input type="checkbox" name="ok" value="1" required> Compreendo que o conteúdo atual vai ser substituído</label>
+                    </div>
+                    <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Repor backup</button></div>
+                  </form>
+                </dialog>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+        <div class="card-f mu">Local: /var/backups/minipainel. As bases de dados só entram no backup de um site se estiverem associadas a ele (página Bases de dados); as restantes vão para "Bases de dados sem site".</div>
+      </section>
+
+      <div class="grid2e">
+        <section class="card">
+          <div class="card-h"><div><h2>Agendamento e retenção</h2><p>Backup automático diário de todos os sites e bases de dados.</p></div><span class="pill <?= !empty($bkConf['enabled']) ? 'p-ok' : 'p-off' ?>"><?= !empty($bkConf['enabled']) ? 'Ativo' : 'Desativado' ?></span></div>
+          <form method="post" class="card-b">
+            <?= act_fields('bk_conf') ?>
+            <div class="fgrid">
+              <label class="fld">Estado<select class="in" name="on"><option value="on"<?= !empty($bkConf['enabled']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($bkConf['enabled']) ? ' selected' : '' ?>>Desativado</option></select></label>
+              <label class="fld">Hora<input class="in" type="time" name="time" required value="<?= h($bkConf['time'] ?? '03:00') ?>"></label>
+            </div>
+            <div class="fgrid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-top:14px">
+              <label class="fld">Diários<input class="in" name="daily" inputmode="numeric" pattern="[0-9]{1,3}" required value="<?= (int)$bkConf['keep_daily'] ?>"></label>
+              <label class="fld">Semanais<input class="in" name="weekly" inputmode="numeric" pattern="[0-9]{1,3}" required value="<?= (int)$bkConf['keep_weekly'] ?>"></label>
+              <label class="fld">Mensais<input class="in" name="monthly" inputmode="numeric" pattern="[0-9]{1,3}" required value="<?= (int)$bkConf['keep_monthly'] ?>"></label>
+            </div>
+            <label class="fld" style="margin-top:14px">Cópia remota<select class="in" name="remote"><option value="none">Só local</option><?php foreach ($bkRem as $r): ?><option value="<?= h($r['name']) ?>"<?= ($bkConf['remote'] ?? '') === $r['name'] ? ' selected' : '' ?>><?= h($r['name']) ?> (<?= h($r['type']) ?>)</option><?php endforeach; ?></select></label>
+            <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+          </form>
+          <div class="card-f mu">A retenção aplica-se ao local e ao remoto: por exemplo, 7 diários, 4 semanais e 3 mensais cobrem cerca de 3 meses. Os backups manuais ficam até os apagares. Se o disco passar de 90%, o backup é cancelado e o erro aparece aqui.</div>
+        </section>
+
+        <section class="card">
+          <div class="card-h"><div><h2>Destinos remotos</h2><p>SFTP, S3 (Backblaze, Wasabi, MinIO, AWS…) ou qualquer destino do rclone.</p></div><button class="chip sm soft" type="button" data-open="dlg-bk-remote">Adicionar destino</button></div>
+          <?php if (!$bkRem): ?>
+            <div class="empty">Sem destinos remotos. Os backups ficam só neste servidor.</div>
+          <?php else: ?>
+          <div class="row-list">
+            <?php foreach ($bkRem as $r): ?>
+              <div class="item">
+                <span class="av t-blue"><?= ic('upload') ?></span>
+                <div class="grow"><div class="nm"><?= h($r['name']) ?> <span class="pill p-off"><?= h(strtoupper((string)$r['type'])) ?></span></div><div class="mu mono"><?= h($r['root']) ?>/<?= h($sys['hostname'] ?? 'servidor') ?>/…</div></div>
+                <div class="svc-acts">
+                  <form method="post"><?= act_fields('bk_remote_test', ['name' => (string)$r['name']]) ?><button class="btn sm sec" type="submit">Testar</button></form>
+                  <form method="post" data-confirm="Remover o destino <?= h($r['name']) ?>? Os backups já enviados não são apagados."><?= act_fields('bk_remote_del', ['name' => (string)$r['name']]) ?><button class="btn sm sec" type="submit">Remover</button></form>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+          <?php endif; ?>
+        </section>
+      </div>
+
+      <dialog id="dlg-bk-now">
+        <form method="post">
+          <?= act_fields('bk_now') ?>
+          <div class="dlg-h"><h3>Fazer backup agora</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+          <div class="dlg-b">
+            <label class="fld">O que guardar<select class="in" name="target">
+              <option value="all">Tudo (todos os sites, bases de dados e configuração)</option>
+              <?php foreach ($sites as $s): $sn = (string)$s['name']; ?><option value="<?= h($sn) ?>">Site <?= h($sn) ?></option><?php endforeach; ?>
+              <option value="_bd">Bases de dados sem site</option>
+              <option value="_sistema">Configuração do sistema</option>
+            </select></label>
+            <?php if ($bkRem): ?>
+            <label class="fld">Enviar também para<select class="in" name="remote"><option value="">Não enviar (só local)</option><?php foreach ($bkRem as $r): ?><option value="<?= h($r['name']) ?>"<?= ($bkConf['remote'] ?? '') === $r['name'] ? ' selected' : '' ?>><?= h($r['name']) ?></option><?php endforeach; ?></select></label>
+            <?php endif; ?>
+            <p class="mu" style="margin:0">Corre em segundo plano; podes continuar a usar o painel. Os backups manuais não são apagados pela retenção.</p>
+          </div>
+          <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Iniciar backup</button></div>
+        </form>
+      </dialog>
+
+      <dialog class="drawer" id="dlg-bk-remote">
+        <form method="post" autocomplete="off">
+          <?= act_fields('bk_remote_add') ?>
+          <div class="dlg-h"><div><h3>Adicionar destino remoto</h3><p>As credenciais ficam só neste servidor (/etc/minipainel, acesso root).</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+          <div class="dlg-b">
+            <div class="fgrid">
+              <label class="fld">Nome<input class="in" name="name" required pattern="[a-z][a-z0-9\-]{1,23}" placeholder="ex.: storagebox"></label>
+              <label class="fld">Tipo<select class="in" name="type" id="rm-type"><option value="sftp">SFTP</option><option value="s3">S3 compatível</option><option value="rclone">Outro (configuração rclone)</option></select></label>
+            </div>
+            <div data-rm="sftp" class="rm-grp">
+              <div class="fgrid">
+                <label class="fld">Servidor<input class="in" name="host" placeholder="backup.exemplo.pt"></label>
+                <label class="fld">Porta<input class="in" name="port" value="22" inputmode="numeric"></label>
+                <label class="fld">Utilizador<input class="in" name="user"></label>
+                <label class="fld">Password<input class="in" type="password" name="pass" autocomplete="new-password"><small>Ou usa uma chave privada abaixo</small></label>
+              </div>
+              <label class="fld">Chave privada (opcional)<textarea class="in mono cron-ta" name="key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+              <label class="fld">Pasta no servidor<input class="in mono" name="path_sftp" value="backups"></label>
+            </div>
+            <div data-rm="s3" class="rm-grp" hidden>
+              <div class="fgrid">
+                <label class="fld">Fornecedor<select class="in" name="provider"><option value="Other">Outro / MinIO / Backblaze B2 (S3)</option><option value="Wasabi">Wasabi</option><option value="AWS">Amazon S3</option><option value="Cloudflare">Cloudflare R2</option><option value="DigitalOcean">DigitalOcean Spaces</option></select></label>
+                <label class="fld">Região<input class="in" name="region" placeholder="eu-central-1"></label>
+              </div>
+              <label class="fld">Endpoint<input class="in mono" name="endpoint" placeholder="s3.eu-central-003.backblazeb2.com"><small>Vazio para Amazon S3</small></label>
+              <div class="fgrid">
+                <label class="fld">Chave de acesso<input class="in mono" name="access"></label>
+                <label class="fld">Chave secreta<input class="in mono" type="password" name="secret" autocomplete="new-password"></label>
+                <label class="fld">Bucket<input class="in mono" name="bucket"></label>
+                <label class="fld">Prefixo (opcional)<input class="in mono" name="path_s3" placeholder="servidores"></label>
+              </div>
+            </div>
+            <div data-rm="rclone" class="rm-grp" hidden>
+              <label class="fld">Configuração rclone<textarea class="in mono cron-ta" name="config" rows="7" placeholder="[nome]&#10;type = drive&#10;scope = drive&#10;token = {...}"></textarea><small>Para Google Drive, OneDrive, Dropbox…: corre "rclone config" no teu PC e cola aqui a secção gerada. O nome entre [ ] tem de ser igual ao nome acima.</small></label>
+              <label class="fld">Pasta no destino<input class="in mono" name="path_rc" value="iddigital-hosting"></label>
+            </div>
+          </div>
+          <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
+        </form>
+      </dialog>
+
 <?php elseif ($page === 'servicos'): ?>
       <section class="card">
         <?php if (!$svcs): ?>
@@ -2488,6 +2782,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     <div class="dlg-b">
       <label class="fld">Nome<input class="in mono" name="db" required maxlength="32" pattern="[a-z][a-z0-9_]{0,31}" placeholder="loja_db" autocomplete="off"><small>Minúsculas, números e "_", a começar por letra</small></label>
       <label class="fld">Password<input class="in" name="pw" type="password" maxlength="64" autocomplete="new-password"><small>Vazio = gerada automaticamente e mostrada no fim</small></label>
+      <label class="fld">Site associado<select class="in" name="site"><option value="">Nenhum</option><?php foreach ($sites as $ss): $ssn = (string)$ss['name']; ?><option value="<?= h($ssn) ?>"><?= h($ssn) ?></option><?php endforeach; ?></select><small>Entra nos backups do site e é reposta com ele</small></label>
     </div>
     <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Criar base de dados</button></div>
   </form>
@@ -2527,6 +2822,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php endforeach; ?>
 
 <?php foreach ($dbs as $d): $n = (string)($d['name'] ?? ''); if (!preg_match(RX_DB, $n)) continue; ?>
+<dialog id="dlg-dblink-<?= h($n) ?>">
+  <form method="post">
+    <?= act_fields('db_link', ['db' => $n]) ?>
+    <div class="dlg-h"><h3>Associar <?= h($n) ?> a um site</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+    <div class="dlg-b"><label class="fld">Site<select class="in" name="site"><option value="none">Nenhum</option><?php foreach ($sites as $ss): $ssn = (string)$ss['name']; ?><option value="<?= h($ssn) ?>"<?= ($d['site'] ?? '') === $ssn ? ' selected' : '' ?>><?= h($ssn) ?></option><?php endforeach; ?></select><small>A base de dados passa a entrar nos backups do site e é reposta com ele.</small></label></div>
+    <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+  </form>
+</dialog>
 <dialog id="dlg-dbpw-<?= h($n) ?>">
   <form method="post">
     <?= act_fields('db_pass', ['db' => $n]) ?>
@@ -2602,6 +2905,19 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
 })();
 </script>
+<?php if ($page === 'backups'): ?>
+<script>
+(function () {
+  var t = document.getElementById('rm-type');
+  if (t) {
+    var sw = function () { document.querySelectorAll('.rm-grp').forEach(function (g) { g.hidden = g.getAttribute('data-rm') !== t.value; }); };
+    t.addEventListener('change', sw); sw();
+  }
+  function tick() { if (document.querySelector("dialog[open]")) setTimeout(tick, 5000); else location.reload(); }
+  if (document.querySelector("[data-bk-running]")) setTimeout(tick, 5000);
+})();
+</script>
+<?php endif; ?>
 <?php if ($page === 'cron'): ?>
 <script>
 (function () {
@@ -3133,7 +3449,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v1.7.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v1.8.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -3529,11 +3845,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v1.7.0
+#  mpanel — IDDigital Hosting CLI v1.8.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.7.0"
+MP_VERSION="1.8.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -3938,6 +4254,7 @@ cmd_site_del(){
   if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" || warn "Verifica o PHP-FPM $PANEL_PHP."; fi
   rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
   rm -rf "/etc/cron.d/minipainel-$n" "${CRON_DIR:?}/$n" "$CRON_DIR/$n.json"; touch /etc/cron.d 2>/dev/null
+  if [ -s "$DBMAP" ]; then jq --arg s "$n" 'with_entries(select(.value != $s))' "$DBMAP" > "$DBMAP.tmp" && mv -f "$DBMAP.tmp" "$DBMAP"; fi
   sleep 1
   pkill -u "mp_$n" >/dev/null 2>&1
   userdel "mp_$n" >/dev/null 2>&1 || warn "Não foi possível remover o utilizador mp_$n."
@@ -4103,7 +4420,15 @@ cmd_db_list(){
 }
 
 cmd_db_add(){
-  local n="${1:-}" pw="${2:-}"
+  local n="${1:-}" pw="" dsite=""
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --site) dsite="${2:-}"; shift 2 || shift ;;
+      *) pw="$1"; shift ;;
+    esac
+  done
+  if [ -n "$dsite" ]; then valid_site "$dsite" && site_exists "$dsite" || die "O site '$dsite' não existe."; fi
   valid_db "$n" || die "Nome inválido. Usa minúsculas, números e '_', a começar por letra (máx. 32)."
   db_reserved "$n" && die "Nome reservado: $n"
   db_exists "$n" && die "A base de dados '$n' já existe."
@@ -4118,7 +4443,9 @@ FLUSH PRIVILEGES;"; then
     db_exec "DROP DATABASE IF EXISTS \`$n\`; DROP USER IF EXISTS '$n'@'localhost';" >/dev/null 2>&1
     die "Falha ao criar a base de dados '$n'."
   fi
+  [ -n "$dsite" ] && dbmap_set "$n" "$dsite"
   printf 'Base de dados criada.\nServidor:      localhost (porta 3306)\nBase de dados: %s\nUtilizador:    %s\nPassword:      %s\n' "$n" "$n" "$pw"
+  [ -n "$dsite" ] && echo "Associada ao site $dsite."
   return 0
 }
 
@@ -4128,6 +4455,7 @@ cmd_db_del(){
   db_reserved "$n" && die "Nome reservado: $n"
   db_exists "$n" || die "A base de dados '$n' não existe."
   db_exec "DROP DATABASE \`$n\`; DROP USER IF EXISTS '$n'@'localhost'; FLUSH PRIVILEGES;" || die "Falha ao apagar '$n'."
+  dbmap_set "$n" ""
   echo "Base de dados '$n' e utilizador '$n' apagados."
   return 0
 }
@@ -4781,6 +5109,379 @@ cron_state_json(){ # todas as tarefas, para o painel
   for n in $(site_names); do cron_load "$n" | jq -c --arg n "$n" '.[] | . + {site:$n}'; done | jq -cs '.'
 }
 
+# ---------- associação de bases de dados a sites ----------
+DBMAP=/etc/minipainel/dbmap.json
+dbmap_load(){ if [ -s "$DBMAP" ]; then cat "$DBMAP"; else echo '{}'; fi; }
+dbmap_set(){ # db site|""
+  local j; j=$(dbmap_load | jq --arg d "$1" --arg s "$2" 'if $s == "" then del(.[$d]) else .[$d] = $s end')
+  printf '%s\n' "$j" > "$DBMAP.tmp" && chmod 600 "$DBMAP.tmp" && mv -f "$DBMAP.tmp" "$DBMAP"
+}
+dbs_of_site(){ dbmap_load | jq -r --arg s "$1" 'to_entries[] | select(.value == $s) | .key'; }
+cmd_db_link(){
+  local d="${1:-}" s="${2:-}"
+  valid_db "$d" && db_exists "$d" || die "A base de dados '$d' não existe."
+  if [ "$s" = none ] || [ -z "$s" ]; then dbmap_set "$d" ""; echo "Base de dados $d já não está associada a nenhum site."; return 0; fi
+  valid_site "$s" && site_exists "$s" || die "O site '$s' não existe."
+  dbmap_set "$d" "$s"
+  echo "Base de dados $d associada ao site $s (entra nos backups do site)."
+  return 0
+}
+
+# ---------- backups (local + destinos remotos via rclone) ----------
+BK_DIR=/var/backups/minipainel
+BK_CONF=/etc/minipainel/backup.conf
+BK_RCLONE=/etc/minipainel/rclone.conf
+BK_REMOTES=/etc/minipainel/backup-remotes.json   # [{name,type,root}]
+BK_STATE=$DATA/stats/backup.json
+BK_LOCK=/run/minipainel-backup.lock
+bk_conf(){ local v; v=$(grep -m1 "^$1=" "$BK_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+bk_remotes(){ if [ -s "$BK_REMOTES" ]; then cat "$BK_REMOTES"; else echo '[]'; fi; }
+bk_rc(){ rclone --config "$BK_RCLONE" "$@"; }
+bk_remote_root(){ bk_remotes | jq -r --arg n "$1" '.[] | select(.name == $n) | .root'; }
+bk_host(){ hostname -s 2>/dev/null || echo servidor; }
+bk_gz(){ if command -v pigz >/dev/null 2>&1; then echo "pigz -6"; else echo "gzip -6"; fi; }
+bk_status(){ # running: texto do passo ou vazio
+  local f=$DATA/stats/backup-run.json
+  if [ -n "${1:-}" ]; then jq -n --arg s "$1" --arg t "$EPOCHSECONDS" '{step:$s, since:($t|tonumber)}' > "$f.tmp" && chown root:"$PANEL_SYSUSER" "$f.tmp" && chmod 640 "$f.tmp" && mv -f "$f.tmp" "$f"
+  else rm -f "$f"; fi
+}
+bk_write_state(){
+  local sets total
+  sets=$(find "$BK_DIR" -mindepth 3 -maxdepth 3 -name manifest.json 2>/dev/null | while read -r m; do jq -c '.' "$m" 2>/dev/null; done | jq -cs 'sort_by(-.created)')
+  total=$(du -sb "$BK_DIR" 2>/dev/null | awk '{print $1}')
+  jq -n --argjson sets "${sets:-[]}" --argjson rem "$(bk_remotes)" --arg total "${total:-0}" \
+     --arg en "$(bk_conf ENABLED 1)" --arg time "$(bk_conf TIME 03:00)" --arg kd "$(bk_conf KEEP_DAILY 7)" --arg kw "$(bk_conf KEEP_WEEKLY 4)" \
+     --arg km "$(bk_conf KEEP_MONTHLY 3)" --arg r "$(bk_conf REMOTE '')" --argjson last "$(cat "$DATA/stats/backup-last.json" 2>/dev/null || echo null)" \
+     '{conf:{enabled:($en=="1"), time:$time, keep_daily:($kd|tonumber), keep_weekly:($kw|tonumber), keep_monthly:($km|tonumber), remote:$r},
+       remotes:$rem, sets:$sets, total:($total|tonumber), last:$last}' > "$BK_STATE.tmp" \
+    && chown root:"$PANEL_SYSUSER" "$BK_STATE.tmp" && chmod 640 "$BK_STATE.tmp" && mv -f "$BK_STATE.tmp" "$BK_STATE"
+  return 0
+}
+bk_cron_apply(){
+  local t h m
+  t=$(bk_conf TIME 03:00); h=$((10#${t%%:*})); m=$((10#${t##*:}))
+  if [ "$(bk_conf ENABLED 1)" = 1 ]; then
+    printf '# IDDigital Hosting — backups automáticos (gerado pelo painel)\nSHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nMAILTO=""\n%d %d * * * root /usr/local/sbin/mpanel backup-run --auto >/dev/null 2>&1\n' "$m" "$h" > /etc/cron.d/minipainel-backup
+    chmod 644 /etc/cron.d/minipainel-backup
+  else
+    rm -f /etc/cron.d/minipainel-backup
+  fi
+  touch /etc/cron.d 2>/dev/null
+  return 0
+}
+
+# Cria um conjunto: $1 = site | _bd | _sistema ; $2 = auto|manual|pre-restauro ; imprime o id
+bk_make(){
+  local s=$1 type=$2 id dir gz d u files=false dbs="[]" size rc
+  id=$(date '+%Y%m%d-%H%M%S'); dir="$BK_DIR/$s/$id"
+  [ -e "$dir" ] && { sleep 1; id=$(date '+%Y%m%d-%H%M%S'); dir="$BK_DIR/$s/$id"; }
+  install -d -o root -g "$PANEL_SYSUSER" -m 750 "$BK_DIR" "$BK_DIR/$s"
+  install -d -m 700 "$dir.part"
+  gz=$(bk_gz)
+  if [ "$s" = _sistema ]; then
+    bk_status "Configuração do sistema"
+    tar -C / -czf "$dir.part/sistema.tar.gz" --ignore-failed-read etc/minipainel etc/nginx/minipainel etc/cron.d var/lib/minipainel/auth.json 2>/dev/null
+    files=true
+  elif [ "$s" != _bd ]; then
+    bk_status "Ficheiros de $s"
+    tar -C "$WWW_ROOT" --exclude="$s/tmp" -I "$gz" -cpf "$dir.part/ficheiros.tar.gz" "$s"; rc=$?
+    [ "$rc" -le 1 ] || { rm -rf "$dir.part"; echo "ERRO: falhou a cópia dos ficheiros de $s (tar $rc)." >&2; return 1; }
+    install -d -m 700 "$dir.part/config"
+    cp -p "$SITES_DIR/$s.conf" "$dir.part/config/site.conf" 2>/dev/null
+    cp -p "$CRON_DIR/$s.json" "$dir.part/config/cron.json" 2>/dev/null
+    files=true
+  fi
+  local list=""
+  if [ "$s" = _bd ]; then
+    list=$(db_sizes | awk '{print $1}' | while read -r d; do [ -n "$d" ] && [ "$d" != "$DB_ADMIN" ] && [ -z "$(dbmap_load | jq -r --arg d "$d" '.[$d] // empty')" ] && echo "$d"; done)
+  elif [ "$s" != _sistema ]; then
+    list=$(dbs_of_site "$s")
+  fi
+  for d in $list; do
+    db_exists "$d" || continue
+    bk_status "Base de dados $d"
+    mysqldump -uroot --single-transaction --quick --routines --triggers --events --default-character-set=utf8mb4 "$d" 2>"$dir.part/.err" | $gz > "$dir.part/bd-$d.sql.gz"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then echo "ERRO: falhou a cópia da base de dados $d: $(head -c 300 "$dir.part/.err")" >&2; rm -rf "$dir.part"; return 1; fi
+    u=$(db_q "SELECT COUNT(*) FROM mysql.user WHERE User='$d' AND Host='localhost'" 2>/dev/null)
+    if [ "$u" = 1 ]; then
+      { db_q "SHOW CREATE USER '$d'@'localhost'" 2>/dev/null | sed 's/$/;/'; db_q "SHOW GRANTS FOR '$d'@'localhost'" 2>/dev/null | sed 's/$/;/'; } > "$dir.part/bd-$d.user.sql"
+    fi
+    dbs=$(jq -c --arg d "$d" '. + [$d]' <<<"$dbs")
+  done
+  rm -f "$dir.part/.err"
+  size=$(du -sb "$dir.part" | awk '{print $1}')
+  jq -n --arg s "$s" --arg id "$id" --arg t "$type" --arg c "$EPOCHSECONDS" --arg sz "$size" --argjson f "$files" --argjson dbs "$dbs" \
+        --arg v "$MP_VERSION" --arg php "$( [ -f "$SITES_DIR/$s.conf" ] && site_get "$s" PHP)" \
+        '{site:$s, id:$id, type:$t, created:($c|tonumber), size:($sz|tonumber), files:$f, dbs:$dbs, version:$v, php:$php, remote:""}' > "$dir.part/manifest.json"
+  chown -R root:"$PANEL_SYSUSER" "$dir.part"; find "$dir.part" -type f -exec chmod 640 {} +; chmod 750 "$dir.part"; [ -d "$dir.part/config" ] && chmod 750 "$dir.part/config"
+  mv "$dir.part" "$dir"
+  echo "$id"
+}
+bk_upload(){ # site id remote
+  local s=$1 id=$2 r=$3 root
+  root=$(bk_remote_root "$r"); [ -n "$root" ] || { echo "Destino remoto '$r' não existe." >&2; return 1; }
+  bk_status "Envio de $s para $r"
+  bk_rc copy "$BK_DIR/$s/$id" "$r:$root/$(bk_host)/$s/$id" --transfers 2 2>&1 | tail -n 3 >&2
+  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
+  jq --arg r "$r" '.remote = $r' "$BK_DIR/$s/$id/manifest.json" > "$BK_DIR/$s/$id/manifest.tmp" && mv -f "$BK_DIR/$s/$id/manifest.tmp" "$BK_DIR/$s/$id/manifest.json"
+  chown root:"$PANEL_SYSUSER" "$BK_DIR/$s/$id/manifest.json"; chmod 640 "$BK_DIR/$s/$id/manifest.json"
+}
+# Retenção avô-pai-filho: lê ids (AAAAMMDD-HHMMSS) no stdin e imprime os que devem ser apagados
+bk_gfs(){
+  local kd kw km
+  kd=$(bk_conf KEEP_DAILY 7); kw=$(bk_conf KEEP_WEEKLY 4); km=$(bk_conf KEEP_MONTHLY 3)
+  sort -r | while read -r id; do
+    [ -n "$id" ] || continue
+    echo "$id $(date -d "${id:0:8}" '+%G%V' 2>/dev/null || echo 0)"
+  done | awk -v kd="$kd" -v kw="$kw" -v km="$km" '
+    { id = $1; day = substr(id, 1, 8); wk = $2; mo = substr(id, 1, 6); keep = 0
+      if (!(day in D) && nd < kd) { D[day] = 1; nd++; keep = 1 }
+      if (!(wk in W) && nw < kw) { W[wk] = 1; nw++; keep = 1 }
+      if (!(mo in M) && nm < km) { M[mo] = 1; nm++; keep = 1 }
+      if (!keep) print id }'
+}
+bk_prune_local(){ # site
+  local s=$1 id
+  [ -d "$BK_DIR/$s" ] || return 0
+  for id in $(for m in "$BK_DIR/$s"/*/manifest.json; do [ -f "$m" ] && jq -r 'select(.type == "auto") | .id' "$m"; done | bk_gfs); do
+    rm -rf "${BK_DIR:?}/$s/$id"
+  done
+  find "$BK_DIR/$s" -maxdepth 1 -name '*.part' -mmin +720 -exec rm -rf {} + 2>/dev/null
+}
+bk_prune_remote(){ # site remote
+  local s=$1 r=$2 root id
+  root=$(bk_remote_root "$r"); [ -n "$root" ] || return 0
+  for id in $(bk_rc lsf --dirs-only "$r:$root/$(bk_host)/$s" 2>/dev/null | tr -d '/' | grep -E '^[0-9]{8}-[0-9]{6}$' | bk_gfs); do
+    bk_rc purge "$r:$root/$(bk_host)/$s/$id" >/dev/null 2>&1
+  done
+}
+
+cmd_backup_run(){
+  local auto=0 only="" remote="" s id ok=0 fail=0 msgs="" t0 used r
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --auto) auto=1; shift ;;
+      --site) only="${2:-}"; shift 2 || shift ;;
+      --remote) remote="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  exec 8>"$BK_LOCK"; flock -n 8 || die "Já está a decorrer um backup."
+  used=$(df -P "$(dirname "$BK_DIR")" | awk 'NR==2{gsub("%","",$5); print $5}')
+  if [ "${used:-0}" -ge 90 ]; then
+    jq -n --arg t "$EPOCHSECONDS" '{ts:($t|tonumber), ok:false, msg:"Backup cancelado: o disco está acima de 90% de ocupação.", duration:0}' > "$DATA/stats/backup-last.json"
+    bk_write_state; die "Backup cancelado: o disco está acima de 90% de ocupação."
+  fi
+  [ "$auto" = 1 ] && remote=$(bk_conf REMOTE '')
+  t0=$EPOCHSECONDS
+  local targets
+  if [ -n "$only" ]; then
+    case "$only" in _bd|_sistema) ;; *) valid_site "$only" && site_exists "$only" || die "O site '$only' não existe." ;; esac
+    targets=$only
+  else
+    targets="$(site_names) _bd _sistema"
+  fi
+  local errf; errf=$(mktemp)
+  for s in $targets; do
+    : > "$errf"
+    if id=$(bk_make "$s" "$([ "$auto" = 1 ] && echo auto || echo manual)" 2>"$errf"); then
+      ok=$((ok + 1))
+      if [ -n "$remote" ]; then
+        bk_upload "$s" "$id" "$remote" 2>>"$errf" || { fail=$((fail + 1)); msgs+="$s: falhou o envio para $remote ($(tail -n 1 "$errf" | head -c 200)). "; }
+      fi
+      if [ "$auto" = 1 ]; then bk_prune_local "$s"; [ -n "$remote" ] && bk_prune_remote "$s" "$remote"; fi
+    else
+      fail=$((fail + 1)); msgs+="$s: $(tr '\n' ' ' < "$errf" | head -c 300) "
+    fi
+  done
+  rm -f "$errf"
+  bk_status ""
+  jq -n --arg t "$EPOCHSECONDS" --arg d "$(( EPOCHSECONDS - t0 ))" --argjson ok "$([ "$fail" = 0 ] && echo true || echo false)" \
+        --arg m "$( [ "$fail" = 0 ] && echo "$ok conjunto(s) guardado(s)${remote:+ e enviados para $remote}." || echo "$ok guardado(s), $fail com erro. $msgs")" \
+        '{ts:($t|tonumber), ok:$ok, msg:$m, duration:($d|tonumber)}' > "$DATA/stats/backup-last.json"
+  chown root:"$PANEL_SYSUSER" "$DATA/stats/backup-last.json"; chmod 640 "$DATA/stats/backup-last.json"
+  bk_write_state
+  if [ "$fail" = 0 ]; then echo "Backup concluído: $ok conjunto(s) em $(( EPOCHSECONDS - t0 ))s${remote:+, enviados para $remote}."; return 0; fi
+  echo "Backup com erros: $msgs" >&2; return 1
+}
+cmd_backup_start(){ # lança em segundo plano (usado pelo painel)
+  [ -n "$(flock -n "$BK_LOCK" true 2>&1 || echo busy)" ] && die "Já está a decorrer um backup."
+  setsid /usr/local/sbin/mpanel backup-run "$@" >/dev/null 2>&1 < /dev/null &
+  echo "Backup iniciado em segundo plano. O progresso aparece na página Backups."
+  return 0
+}
+bk_need_set(){ # site id -> garante cópia local (vai buscar ao destino remoto se for preciso)
+  local s=$1 id=$2 re='^[0-9]{8}-[0-9]{6}$' r root
+  [[ "$id" =~ $re ]] || die "Identificador de backup inválido: $id"
+  case "$s" in _bd|_sistema) ;; *) valid_site "$s" || die "Site inválido: $s" ;; esac
+  [ -f "$BK_DIR/$s/$id/manifest.json" ] && return 0
+  r=$(bk_conf REMOTE ''); [ -n "$r" ] || die "O backup $id de $s não existe localmente."
+  root=$(bk_remote_root "$r")
+  bk_rc copy "$r:$root/$(bk_host)/$s/$id" "$BK_DIR/$s/$id" >/dev/null 2>&1 && [ -f "$BK_DIR/$s/$id/manifest.json" ] || die "O backup $id de $s não existe localmente nem em $r."
+  chown -R root:"$PANEL_SYSUSER" "$BK_DIR/$s/$id"
+}
+cmd_bk_restore(){
+  local s="${1:-}" id="${2:-}" what=all dir m d f uexists tmp pre="" created=0 port php
+  [ $# -ge 2 ] && shift 2
+  [ "${1:-}" = "--what" ] && what="${2:-all}"
+  case "$what" in all|files|db) ;; *) die "Use --what all|files|db" ;; esac
+  [ "$s" = _sistema ] && die "A configuração do sistema não é reposta pelo painel; extrai sistema.tar.gz manualmente se precisares."
+  bk_need_set "$s" "$id"
+  dir="$BK_DIR/$s/$id"; m="$dir/manifest.json"
+  if [ "$s" != _bd ]; then
+    if ! site_exists "$s"; then
+      [ "$what" = db ] && die "O site $s não existe; repõe tudo (--what all) para o recriar."
+      port=$(grep -m1 '^PORT=' "$dir/config/site.conf" 2>/dev/null | cut -d= -f2); php=$(jq -r '.php' "$m")
+      php_is_installed "$php" || php=$DEFAULT_PHP
+      if port_owner "$port" >/dev/null || port_listening "$port"; then port=""; fi
+      ( cmd_site_add "$s" ${port:+--port "$port"} --php "$php" ) >/dev/null || die "Não foi possível recriar o site $s."
+      created=1
+      grep -E '^(MEM|UPLOAD|EXEC|INPUT_TIME|INPUT_VARS|DISPLAY_ERRORS)=' "$dir/config/site.conf" 2>/dev/null | while IFS='=' read -r k v; do site_set "$s" "$k" "$v"; done
+      write_pool "$s" "$(site_get "$s" PHP)"; write_nginx "$s" "$(site_get "$s" PORT)" "$(site_get "$s" PHP)" "$(ngx_file "$s")"
+      apply_php "$(site_get "$s" PHP)" >/dev/null 2>&1; apply_nginx >/dev/null 2>&1
+    else
+      pre=$(bk_make "$s" pre-restauro 2>/dev/null) || die "Não foi possível criar a cópia de segurança antes de repor; nada foi alterado."
+    fi
+  else
+    pre=$(bk_make _bd pre-restauro 2>/dev/null) || die "Não foi possível criar a cópia de segurança antes de repor; nada foi alterado."
+  fi
+  if [ "$what" != db ] && [ "$s" != _bd ]; then
+    tmp="$WWW_ROOT/.restauro-$s-$$"; mkdir -p "$tmp"
+    tar -C "$tmp" -xzpf "$dir/ficheiros.tar.gz" "$s/public_html" || { rm -rf "$tmp"; die "Falhou a extração dos ficheiros."; }
+    [ -d "$tmp/$s/public_html" ] || { rm -rf "$tmp"; die "O backup não contém public_html."; }
+    mv "$WWW_ROOT/$s/public_html" "$WWW_ROOT/$s/.public_html.antes-$id" && mv "$tmp/$s/public_html" "$WWW_ROOT/$s/public_html" || {
+      [ -d "$WWW_ROOT/$s/.public_html.antes-$id" ] && mv "$WWW_ROOT/$s/.public_html.antes-$id" "$WWW_ROOT/$s/public_html"; rm -rf "$tmp"; die "Falhou a substituição dos ficheiros; nada foi alterado."; }
+    chown -R "mp_$s:mp_$s" "$WWW_ROOT/$s/public_html"; chmod 2750 "$WWW_ROOT/$s/public_html"
+    se_restore "$WWW_ROOT/$s/public_html"
+    rm -rf "$tmp" "$WWW_ROOT/$s/.public_html.antes-$id"
+    if [ "$what" = all ] && [ -f "$dir/config/cron.json" ]; then cp "$dir/config/cron.json" "$CRON_DIR/$s.json"; chmod 600 "$CRON_DIR/$s.json"; cron_write_site "$s"; fi
+  fi
+  if [ "$what" != files ]; then
+    for f in "$dir"/bd-*.sql.gz; do
+      [ -f "$f" ] || continue
+      d=${f##*/bd-}; d=${d%.sql.gz}; valid_db "$d" || continue
+      db_exec "DROP DATABASE IF EXISTS \`$d\`; CREATE DATABASE \`$d\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || die "Falhou a recriação da base de dados $d."
+      gzip -dc "$f" | mysql -uroot "$d" || die "Falhou a importação de $d${pre:+ (o estado anterior está no backup $pre)}."
+      uexists=$(db_q "SELECT COUNT(*) FROM mysql.user WHERE User='$d' AND Host='localhost'" 2>/dev/null)
+      if [ "$uexists" = 0 ] && [ -f "$dir/bd-$d.user.sql" ]; then mysql -uroot < "$dir/bd-$d.user.sql" 2>/dev/null; db_exec "FLUSH PRIVILEGES;"; fi
+      [ "$s" != _bd ] && dbmap_set "$d" "$s"
+    done
+  fi
+  bk_write_state
+  echo "Backup $id de $s reposto ($what).${pre:+ O estado anterior ficou guardado no backup $pre.}$([ "$created" = 1 ] && echo " O site foi recriado.")"
+  return 0
+}
+cmd_bk_delete(){
+  local s="${1:-}" id="${2:-}" re='^[0-9]{8}-[0-9]{6}$'
+  [[ "$id" =~ $re ]] || die "Identificador inválido."
+  case "$s" in _bd|_sistema) ;; *) valid_site "$s" || die "Site inválido." ;; esac
+  [ -d "$BK_DIR/$s/$id" ] || die "O backup $id de $s não existe."
+  rm -rf "${BK_DIR:?}/$s/$id"; bk_write_state
+  echo "Backup $id de $s apagado (cópia local)."
+  return 0
+}
+cmd_bk_conf(){
+  local en tm kd kw km r re_t='^([01][0-9]|2[0-3]):[0-5][0-9]$' re_n='^[0-9]{1,3}$'
+  en=$(bk_conf ENABLED 1); tm=$(bk_conf TIME 03:00); kd=$(bk_conf KEEP_DAILY 7); kw=$(bk_conf KEEP_WEEKLY 4); km=$(bk_conf KEEP_MONTHLY 3); r=$(bk_conf REMOTE '')
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --on) en=1; shift ;; --off) en=0; shift ;;
+      --time) tm="${2:-}"; shift 2 || shift ;;
+      --daily) kd="${2:-}"; shift 2 || shift ;;
+      --weekly) kw="${2:-}"; shift 2 || shift ;;
+      --monthly) km="${2:-}"; shift 2 || shift ;;
+      --remote) r="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [[ "$tm" =~ $re_t ]] || die "Hora inválida: $tm (HH:MM)."
+  for v in "$kd" "$kw" "$km"; do [[ "$v" =~ $re_n ]] || die "Retenção inválida: $v"; done
+  [ "$kd" -ge 1 ] || die "Guarda pelo menos 1 backup diário."
+  [ "$r" = none ] && r=""
+  [ -z "$r" ] || [ -n "$(bk_remote_root "$r")" ] || die "O destino remoto '$r' não existe."
+  printf 'ENABLED=%s\nTIME=%s\nKEEP_DAILY=%s\nKEEP_WEEKLY=%s\nKEEP_MONTHLY=%s\nREMOTE=%s\n' "$en" "$tm" "$kd" "$kw" "$km" "$r" > "$BK_CONF"; chmod 600 "$BK_CONF"
+  bk_cron_apply; bk_write_state
+  if [ "$en" = 1 ]; then echo "Backups automáticos todos os dias às $tm (guarda $kd diários, $kw semanais e $km mensais)${r:+, com cópia em $r}."
+  else echo "Backups automáticos desativados."; fi
+  return 0
+}
+cmd_bk_remote_add(){ # nome tipo opções...
+  local n="${1:-}" t="${2:-}" root="" host="" port=22 user="" pass="" key="" prov=Other ep="" reg="" ak="" sk="" bucket="" raw="" re='^[a-z][a-z0-9-]{1,23}$'
+  [ $# -ge 2 ] && shift 2
+  [[ "$n" =~ $re ]] || die "Nome inválido (minúsculas, números e '-', 2 a 24 caracteres)."
+  command -v rclone >/dev/null 2>&1 || die "O rclone não está instalado."
+  [ -z "$(bk_remote_root "$n")" ] || die "Já existe um destino chamado $n."
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host) host="${2:-}"; shift 2 || shift ;; --port) port="${2:-}"; shift 2 || shift ;;
+      --user) user="${2:-}"; shift 2 || shift ;; --pass) pass="${2:-}"; shift 2 || shift ;;
+      --key) key="${2:-}"; shift 2 || shift ;; --path) root="${2:-}"; shift 2 || shift ;;
+      --provider) prov="${2:-}"; shift 2 || shift ;; --endpoint) ep="${2:-}"; shift 2 || shift ;;
+      --region) reg="${2:-}"; shift 2 || shift ;; --access) ak="${2:-}"; shift 2 || shift ;;
+      --secret) sk="${2:-}"; shift 2 || shift ;; --bucket) bucket="${2:-}"; shift 2 || shift ;;
+      --config) raw="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  touch "$BK_RCLONE"; chmod 600 "$BK_RCLONE"
+  case "$t" in
+    sftp)
+      [ -n "$host" ] && [ -n "$user" ] || die "Indica o servidor e o utilizador."
+      [ -n "$pass" ] || [ -n "$key" ] || die "Indica a password ou a chave privada."
+      local args=(host="$host" port="$port" user="$user" shell_type=unix)
+      [ -n "$pass" ] && args+=(pass="$(rclone obscure "$pass")")
+      if [ -n "$key" ]; then install -d -m 700 /etc/minipainel/rclone-keys; printf '%s\n' "$key" | sed 's/\\n/\n/g' > "/etc/minipainel/rclone-keys/$n.key"; chmod 600 "/etc/minipainel/rclone-keys/$n.key"; args+=(key_file="/etc/minipainel/rclone-keys/$n.key"); fi
+      bk_rc config create "$n" sftp "${args[@]}" --non-interactive >/dev/null || die "O rclone recusou a configuração."
+      root=${root:-backups} ;;
+    s3)
+      [ -n "$ak" ] && [ -n "$sk" ] && [ -n "$bucket" ] || die "Indica a chave de acesso, a chave secreta e o bucket."
+      local args=(provider="$prov" access_key_id="$ak" secret_access_key="$sk" no_check_bucket=true)
+      [ -n "$ep" ] && args+=(endpoint="$ep"); [ -n "$reg" ] && args+=(region="$reg")
+      bk_rc config create "$n" s3 "${args[@]}" --non-interactive >/dev/null || die "O rclone recusou a configuração."
+      root="$bucket${root:+/$root}" ;;
+    rclone)
+      [ -n "$raw" ] || die "Cola a secção de configuração do rclone."
+      raw=$(printf '%s' "$raw" | sed 's/\\n/\n/g')
+      printf '%s\n' "$raw" | grep -q "^\[$n\]$" || die "A configuração tem de começar por [$n]."
+      grep -q "^\[$n\]$" "$BK_RCLONE" && die "Já existe [$n] na configuração do rclone."
+      printf '\n%s\n' "$raw" >> "$BK_RCLONE"
+      root=${root:-iddigital-hosting} ;;
+    *) die "Tipo inválido: usa sftp, s3 ou rclone." ;;
+  esac
+  jq --arg n "$n" --arg t "$t" --arg r "$root" '. + [{name:$n, type:$t, root:$r}]' <<<"$(bk_remotes)" > "$BK_REMOTES.tmp" && chmod 600 "$BK_REMOTES.tmp" && mv -f "$BK_REMOTES.tmp" "$BK_REMOTES"
+  bk_write_state
+  echo "Destino $n ($t) adicionado. Usa 'Testar' para confirmar o acesso."
+  return 0
+}
+cmd_bk_remote_test(){
+  local n="${1:-}" root f
+  root=$(bk_remote_root "$n"); [ -n "$root" ] || die "O destino $n não existe."
+  local errf; errf=$(mktemp)
+  f="teste-$(bk_host)-$EPOCHSECONDS.txt"
+  echo "IDDigital Hosting: teste de escrita" | bk_rc rcat "$n:$root/$f" 2>"$errf" || { head -c 400 "$errf" >&2; rm -f "$errf"; die "Não foi possível escrever em $n:$root."; }
+  bk_rc deletefile "$n:$root/$f" >/dev/null 2>&1; rm -f "$errf"
+  echo "Destino $n acessível: escrita e remoção em $root funcionaram."
+  return 0
+}
+cmd_bk_remote_del(){
+  local n="${1:-}"
+  [ -n "$(bk_remote_root "$n")" ] || die "O destino $n não existe."
+  bk_rc config delete "$n" >/dev/null 2>&1; rm -f "/etc/minipainel/rclone-keys/$n.key"
+  jq --arg n "$n" 'map(select(.name != $n))' <<<"$(bk_remotes)" > "$BK_REMOTES.tmp" && mv -f "$BK_REMOTES.tmp" "$BK_REMOTES"
+  [ "$(bk_conf REMOTE '')" = "$n" ] && sed -i 's/^REMOTE=.*/REMOTE=/' "$BK_CONF"
+  bk_write_state
+  echo "Destino $n removido (os backups já enviados para lá não foram apagados)."
+  return 0
+}
+cmd_bk_init(){ install -d -o root -g "$PANEL_SYSUSER" -m 750 "$BK_DIR"; bk_cron_apply; bk_write_state; echo "Backups configurados."; return 0; }
+cmd_bk_list(){
+  local s="${1:-}"
+  printf '%-12s %-16s %-13s %-10s %-8s %s\n' SITE ID TIPO TAMANHO REMOTO "BASES DE DADOS"
+  find "$BK_DIR" -mindepth 3 -maxdepth 3 -name manifest.json 2>/dev/null | while read -r m; do jq -r '[.site, .id, .type, (.size|tostring), (if .remote == "" then "-" else .remote end), (.dbs | join(","))] | @tsv' "$m"; done |
+    sort -k2,2r | while IFS=$'\t' read -r a b c d e f; do [ -z "$s" ] || [ "$s" = "$a" ] || continue; printf '%-12s %-16s %-13s %-10s %-8s %s\n' "$a" "$b" "$c" "$(numfmt --to=iec "$d" 2>/dev/null || echo "$d")" "$e" "$f"; done
+  return 0
+}
+
 write_auth(){
   local u=$1 hsh=$2
   jq -n --arg u "$u" --arg h "$hsh" '{user:$u,hash:$h}' > "$AUTH.tmp" || return 1
@@ -4858,7 +5559,7 @@ write_state(){
   load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
   cpus=$(nproc 2>/dev/null)
   dbs=$(db_sizes | while IFS=$'\t' read -r n v; do
-      [ -n "$n" ] && jq -cn --arg n "$n" --arg s "$v" '{name:$n, size_mb:($s|tonumber)}'
+      [ -n "$n" ] && jq -cn --arg n "$n" --arg s "$v" --arg site "$(dbmap_load | jq -r --arg d "$n" '.[$d] // ""')" '{name:$n, size_mb:($s|tonumber), site:$site}'
     done | jq -cs '.')
   jq -n --argjson sites "${sites:-[]}" --argjson php "${phps:-[]}" --argjson dbs "${dbs:-[]}" --argjson svcs "${svcs:-[]}" \
     --arg host "$host" --arg ip "$ip" --arg os "$os" --arg up "${up:-0}" --arg disk "${disk:-0}" --arg ram "${ram:-0}" \
@@ -4900,7 +5601,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -4918,7 +5619,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v1.7.0 (mpanel)
+IDDigital Hosting — CLI v1.8.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -4951,6 +5652,18 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Backups (local em /var/backups/minipainel + destinos remotos via rclone)
+  backup-run [--site <site>|_bd|_sistema] [--remote <destino>]   faz backup agora
+  bk-list [site]
+  bk-restore <site>|_bd <id> [--what all|files|db]   repõe (faz antes um backup do estado atual)
+  bk-delete <site> <id>
+  bk-conf [--on|--off] [--time 03:00] [--daily 7] [--weekly 4] [--monthly 3] [--remote <destino>|none]
+  bk-remote-add <nome> sftp --host H --user U --pass P [--port 22] [--path pasta]
+  bk-remote-add <nome> s3 --access A --secret S --bucket B [--endpoint E] [--region R] [--provider Other]
+  bk-remote-add <nome> rclone --config "[nome]\ntype = drive\n..."
+  bk-remote-test <nome> | bk-remote-del <nome>
+  db-link <base-de-dados> <site>|none   associa uma base de dados a um site (entra nos backups dele)
 
 Tarefas agendadas (cron; correm como o utilizador do site)
   cron-list [site]
@@ -5018,6 +5731,16 @@ dispatch(){
     cron-off)          cmd_cron_toggle "${1:-}" "${2:-}" false ;;
     cron-run)          cmd_cron_run "$@" ;;
     cron-sync)         cmd_cron_sync ;;
+    db-link)           cmd_db_link "$@" ;;
+    backup-start)      cmd_backup_start "$@" ;;
+    bk-list)           cmd_bk_list "$@" ;;
+    bk-restore)        cmd_bk_restore "$@" ;;
+    bk-delete)         cmd_bk_delete "$@" ;;
+    bk-conf)           cmd_bk_conf "$@" ;;
+    bk-init)           cmd_bk_init ;;
+    bk-remote-add)     cmd_bk_remote_add "$@" ;;
+    bk-remote-test)    cmd_bk_remote_test "$@" ;;
+    bk-remote-del)     cmd_bk_remote_del "$@" ;;
     fm-sync)           cmd_fm_sync ;;
     status)            cmd_status ;;
     passwd)            cmd_passwd "$@" ;;
@@ -5034,6 +5757,8 @@ case "$cmd" in
   version|-v|--version) echo "IDDigital Hosting $MP_VERSION (MiniPainel)"; exit 0 ;;
 esac
 [ "$(id -u)" -eq 0 ] || die "Tem de ser executado como root."
+# o backup usa o seu próprio bloqueio, para não impedir as outras operações do painel
+if [ "$cmd" = backup-run ]; then shift; cmd_backup_run "$@"; exit $?; fi
 exec 9>"$LOCK"
 flock -w 300 9 || die "Outra operação do painel está em curso."
 
@@ -5084,7 +5809,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.7.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.8.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -5397,7 +6122,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v1.7.0
+#  mpanel-cron — IDDigital Hosting v1.8.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -5435,6 +6160,13 @@ exit "$rc"
 MPCRON
 chown root:root /usr/local/sbin/mpanel-cron
 chmod 755 /usr/local/sbin/mpanel-cron
+
+say "A configurar os backups..."
+install -d -o root -g minipainel -m 750 /var/backups/minipainel
+if [ ! -f /etc/minipainel/backup.conf ]; then
+  printf 'ENABLED=1\nTIME=03:00\nKEEP_DAILY=7\nKEEP_WEEKLY=4\nKEEP_MONTHLY=3\nREMOTE=\n' > /etc/minipainel/backup.conf
+  chmod 600 /etc/minipainel/backup.conf
+fi
 
 say "A configurar a firewall de ligações (nftables)..."
 [ -f /etc/minipainel/firewall.conf ] || printf 'AUTO=0\nLIMIT=150\nDURATION=3600\n' > /etc/minipainel/firewall.conf
@@ -5495,6 +6227,8 @@ if selinux_on; then
   se_fc httpd_sys_rw_content_t "/var/lib/minipainel(/.*)?"
   se_fc cert_t                 "/etc/minipainel/ssl(/.*)?"
   se_fc httpd_sys_rw_content_t "/var/lib/minipainel-pma(/.*)?"
+  se_fc httpd_sys_content_t    "/var/backups/minipainel(/.*)?"
+  install -d -o root -g minipainel -m 750 /var/backups/minipainel
   restorecon -R /srv/www /opt/minipainel /var/lib/minipainel /var/lib/minipainel-pma /etc/minipainel/ssl || true
   semanage port -a -t http_port_t -p tcp "$PANEL_PORT" 2>/dev/null \
     || semanage port -m -t http_port_t -p tcp "$PANEL_PORT" 2>/dev/null || true
@@ -5539,6 +6273,7 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel fm-sync || warn "Não foi possível configurar o gestor de ficheiros (mpanel fm-sync)."
 /usr/local/sbin/mpanel fw-restore >/dev/null || warn "Não foi possível ativar a firewall de ligações (mpanel fw-restore)."
 /usr/local/sbin/mpanel cron-sync >/dev/null || warn "Não foi possível sincronizar as tarefas agendadas (mpanel cron-sync)."
+/usr/local/sbin/mpanel bk-init >/dev/null || warn "Não foi possível configurar os backups (mpanel bk-init)."
 /usr/local/sbin/mpanel state || warn "Não foi possível gerar o estado inicial (mpanel state)."
 
 # ----------------------------------------------------------------------------
@@ -5588,5 +6323,6 @@ echo " PHP:         $ALL_PHP(predefinido $DEFAULT_PHP)"
 echo " Sites:       /srv/www/<site>/public_html  ->  http://$SRV_IP:<porta>"
 echo " Ficheiros:   no painel, página Ficheiros (envios grandes por partes)"
 echo " Recursos:    no painel, página Recursos (systemctl status minipainel-stats)"
+echo " Backups:     todos os dias às 03:00 em /var/backups/minipainel (página Backups)"
 echo " CLI:         mpanel help"
 echo "=============================================================="
