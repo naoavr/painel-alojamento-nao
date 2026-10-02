@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.2.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.3.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.2.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.3.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.2.0"
+MP_VERSION="2.3.0"
 PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -522,7 +522,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.2.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.3.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -530,7 +530,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.2.0';
+const MP_VERSION = '2.3.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1716,6 +1716,29 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             job_submit('reboot', [], 'Reiniciar o servidor');
             break;
 
+        case 'site_ftp':
+            if (!valid_site($site)) { $bad('Site inválido.'); break; }
+            if (post('off') === '1') { job_submit('site-ftp', [$site, '--off'], 'Desativar o acesso FTP/SFTP de ' . $site); break; }
+            $pw = post_raw('pw');
+            if ($pw !== '' && strlen($pw) < 10) { $bad('A password tem de ter pelo menos 10 caracteres.'); break; }
+            $args = [$site];
+            if ($pw !== '') array_push($args, '--hash', crypt($pw, '$6$' . substr(strtr(base64_encode(random_bytes(12)), '+', '.'), 0, 16) . '$'));
+            job_submit('site-ftp', $args, 'Acesso FTP/SFTP de ' . $site);
+            break;
+
+        case 'ftp_settings':
+            $pi = post('pasv_ip');
+            if ($pi !== '' && !filter_var($pi, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $bad('IP inválido.'); break; }
+            job_submit('ftp-settings', ['--plain', post('plain') === '1' ? 'on' : 'off', '--pasv-ip', $pi === '' ? 'none' : $pi], 'Definições do FTP');
+            break;
+
+        case 'pma_settings':
+            foreach (['session' => [5, 1440], 'exec' => [30, 7200], 'upload' => [8, 4096]] as $k => $lim) {
+                $v = post($k); if (!ctype_digit($v) || (int)$v < $lim[0] || (int)$v > $lim[1]) { $bad('Valor fora dos limites (' . $lim[0] . ' a ' . $lim[1] . ').'); break 2; }
+            }
+            job_submit('pma-settings', ['--session', post('session'), '--exec', post('exec'), '--upload', post('upload')], 'Tempos e limites do phpMyAdmin');
+            break;
+
         case 'mail_list':
             $ll = post('l'); $lo = post('op'); $lv = strtolower(trim(post('v')));
             if (!in_array($ll, ['allow', 'deny'], true) || !in_array($lo, ['add', 'del'], true)) { $bad('Pedido inválido.'); break; }
@@ -2252,7 +2275,7 @@ $titles = [
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
     'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
-    'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados no painel, Let\'s Encrypt e domínio do painel.',
+    'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
@@ -2433,6 +2456,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
                     <a href="?p=ficheiros&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('folder') ?>Ficheiros</a>
                     <a href="?p=cron&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('clock') ?>Tarefas agendadas</a>
                     <button type="button" data-open="dlg-dom-<?= h($n) ?>"><?= ic('world') ?>Domínios e SSL</button>
+                    <button type="button" data-open="dlg-ftp-<?= h($n) ?>"><?= ic('upload') ?>Acesso FTP/SFTP<?= !empty($s['ftp']) ? ' <span class="pill p-ok" style="margin-left:auto">Ativo</span>' : '' ?></button>
                     <button type="button" data-open="dlg-lim-<?= h($n) ?>"><?= ic('sliders') ?>Limites</button>
                     <button type="button" data-open="dlg-php-<?= h($n) ?>"><?= ic('code') ?>Mudar versão de PHP</button>
                     <form method="post"><?= act_fields('site_perm', ['site' => $n]) ?><button type="submit"><?= ic('lock') ?>Corrigir permissões</button></form>
@@ -3190,6 +3214,31 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
       </div>
 
+      <div class="grid2e">
+      <section class="card">
+        <div class="card-h"><div><h2>phpMyAdmin</h2><p>Tempos e limites. Aumenta-os para importar ou exportar bases de dados grandes.</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('pma_settings') ?>
+          <?php $ps = is_array($state['pma_settings'] ?? null) ? $state['pma_settings'] : ['session' => 120, 'exec' => 600, 'upload' => 512]; ?>
+          <div class="fgrid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+            <label class="fld">Sessão (minutos)<input class="in" name="session" inputmode="numeric" pattern="[0-9]{1,4}" value="<?= (int)$ps['session'] ?>"><small>Sem atividade até pedir login (5 a 1440)</small></label>
+            <label class="fld">Tempo por operação (s)<input class="in" name="exec" inputmode="numeric" pattern="[0-9]{1,4}" value="<?= (int)$ps['exec'] ?>"><small>Importações e consultas longas (30 a 7200)</small></label>
+            <label class="fld">Importação máxima (MB)<input class="in" name="upload" inputmode="numeric" pattern="[0-9]{1,4}" value="<?= (int)$ps['upload'] ?>"><small>Tamanho do ficheiro (8 a 4096)</small></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>FTP</h2><p>Acesso por FTPS (porta 21) e SFTP (porta 22). As contas ativam-se em Sites → ⋮ → Acesso FTP/SFTP.</p></div><span class="pill <?= !empty($state['ftp']['installed']) ? 'p-ok' : 'p-off' ?>"><?= !empty($state['ftp']['installed']) ? 'Instalado' : 'Ainda não usado' ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('ftp_settings') ?>
+          <label class="fld">IP público para o modo passivo<input class="in mono" name="pasv_ip" value="<?= h($state['ftp']['pasv_ip'] ?? '') ?>" placeholder="vazio = o próprio servidor"><small>Preenche se o servidor estiver atrás de um router com NAT (reencaminha a porta 21 e as portas 30000-30100)</small></label>
+          <label class="chk" style="margin-top:12px"><input type="checkbox" name="plain" value="1"<?= !empty($state['ftp']['plain']) ? ' checked' : '' ?>> Permitir também FTP sem cifra (não recomendado: a password circula em claro)</label>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+      </section>
+      </div>
+
       <section class="card">
         <div class="card-h"><div><h2>Domínio do painel</h2><p>Acesso ao painel por um nome, por exemplo hosting.iddigital.pt, com certificado válido.</p></div>
           <?php if (($srv['panel_domain'] ?? '') !== ''): ?><span class="pill p-ok"><?= h($srv['panel_domain']) ?></span><?php endif; ?></div>
@@ -3769,6 +3818,25 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 </dialog>
 
 <?php foreach ($sites as $s): $n = (string)($s['name'] ?? ''); if (!valid_site($n)) continue; $L = site_limits($s); ?>
+<dialog class="drawer" id="dlg-ftp-<?= h($n) ?>">
+  <form method="post" autocomplete="off">
+    <?= act_fields('site_ftp', ['site' => $n]) ?>
+    <div class="dlg-h"><div><h3>Acesso FTP/SFTP de <?= h($n) ?></h3><p>Uma conta com acesso à pasta do site; a mesma password serve para FTPS e SFTP.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+    <div class="dlg-b">
+      <div class="kv"><span>Estado</span><b><?= !empty($s['ftp']) ? '<span class="pill p-ok">Ativo</span>' : '<span class="pill p-off">Desativado</span>' ?></b></div>
+      <div class="kv"><span>Servidor</span><b class="mono"><?= h($host) ?></b></div>
+      <div class="kv"><span>FTPS (porta 21, TLS explícito)</span><b class="mono"><?= h($n) ?></b></div>
+      <div class="kv"><span>SFTP (porta 22)</span><b class="mono">mp_<?= h($n) ?></b></div>
+      <label class="fld" style="margin-top:6px"><?= !empty($s['ftp']) ? 'Nova password' : 'Password' ?><input class="in" type="password" name="pw" minlength="10" autocomplete="new-password"><small>Vazio = gerada e mostrada no fim</small></label>
+      <p class="mu" style="margin:0">Ao entrar, a conta fica limitada à pasta <span class="mono">/srv/www/<?= h($n) ?></span> (public_html, logs, tmp). Os ficheiros enviados ficam com o dono do site. Ao fim de várias passwords erradas, o IP é bloqueado.</p>
+    </div>
+    <div class="dlg-f">
+      <?php if (!empty($s['ftp'])): ?><button class="btn sec dan" type="submit" form="ftp-off-<?= h($n) ?>" style="margin-right:auto">Desativar</button><?php endif; ?>
+      <button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit"><?= !empty($s['ftp']) ? 'Mudar password' : 'Ativar acesso' ?></button>
+    </div>
+  </form>
+</dialog>
+<form method="post" id="ftp-off-<?= h($n) ?>" data-confirm="Desativar o acesso FTP/SFTP de <?= h($n) ?>?" style="display:none"><?= act_fields('site_ftp', ['site' => $n, 'off' => '1']) ?></form>
 <dialog class="drawer" id="dlg-dom-<?= h($n) ?>">
   <form method="post">
     <?= act_fields('site_domains', ['site' => $n]) ?>
@@ -6768,7 +6836,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.2.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.3.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7175,11 +7243,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.2.0
+#  mpanel — IDDigital Hosting CLI v2.3.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.2.0"
+MP_VERSION="2.3.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -7589,6 +7657,7 @@ cmd_site_del(){
   local v p se fw
   v=$(site_get "$n" PHP); p=$(site_get "$n" PORT); se=$(site_get "$n" SE_PORT); fw=$(site_get "$n" FW_PORT)
 
+  [ "$(site_get "$n" FTP)" = 1 ] && cmd_site_ftp "$n" --off >/dev/null 2>&1
   rm -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled" "$NGX_INC/mp-$n.inc"
   le_delete "mp-$n"
   ngx_default_sync
@@ -7962,9 +8031,7 @@ EOF
 pma_fix_config(){
   [ -d "$PMA_DIR" ] || return 0
   pma_write_config
-  cp -p "$PMA_CONF" "$PMA_DIR/config.inc.php"
-  chown root:"$PMA_USER" "$PMA_DIR/config.inc.php"
-  chmod 640 "$PMA_DIR/config.inc.php"
+  pma_settings_apply
   se_restore "$PMA_DIR/config.inc.php"
 }
 
@@ -9892,10 +9959,14 @@ mail_state_json(){
   done
   local dk; dk=$(jq -r '.domains | keys[]' <<<"$j" | while read -r d; do printf '%s\t%s\n' "$d" "$(mail_dkim_value "$d")"; done | jq -R 'split("\t") | {(.[0]): (.[1] // "")}' | jq -cs 'add // {}')
   used=$(jq -r '.boxes | keys[]' <<<"$j" | while read -r e; do printf '%s\t%s\n' "$e" "$(du -sm "$VMAIL/${e#*@}/${e%@*}" 2>/dev/null | awk '{print $1}')"; done | jq -R 'split("\t") | {(.[0]): ((.[1] // "0") | tonumber? // 0)}' | jq -cs 'add // {}')
-  jq -n --argjson j "$j" --argjson dns "$dns" --argjson q "${q:-[]}" --argjson sites "$sites" --argjson used "$used" --argjson dk "${dk:-null}" \
+  local lists hist
+  lists=$(mail_lists_json 2>/dev/null); hist=$(mail_history_json 2>/dev/null)
+  dns=$(jv mail.dns "$dns" '{}'); q=$(jv mail.queue "$q" '[]'); sites=$(jv mail.sites "$sites" '[]'); used=$(jv mail.used "$used" '{}'); dk=$(jv mail.dkim "$dk" '{}')
+  lists=$(jv mail.lists "$lists" '[]'); hist=$(jv mail.history "$hist" '[]')
+  jq -n --argjson j "$j" --argjson dns "$dns" --argjson q "$q" --argjson sites "$sites" --argjson used "$used" --argjson dk "$dk" \
     --arg h "$(mail_get HOST)" --arg dnsbl "$(mail_get DNSBL)" --arg sl "$(mail_get SITE_LIMIT 100)" --arg bl "$(mail_get BOX_LIMIT 200)" \
     --arg af "$(mail_get AUTH_FAILS 10)" --arg av "$(mail_get CLAMAV 0)" --arg exp "$(cert_expiry mp-mail)" \
-    --arg wmp "$WM_PORT" --argjson lists "$(mail_lists_json)" --argjson hist "$(mail_history_json)" \
+    --arg wmp "$WM_PORT" --argjson lists "$lists" --argjson hist "$hist" \
     --arg st "$(for x in postfix dovecot rspamd; do systemctl is-active "$x" 2>/dev/null; done | grep -c '^active$')" \
     '{enabled:true, host:$h, dnsbl:$dnsbl, site_limit:($sl|tonumber), box_limit:($bl|tonumber), auth_fails:($af|tonumber), clamav:($av=="1"),
       cert_exp:(if $exp == "" then null else ($exp|tonumber) end), services_ok:($st == "3"),
@@ -10150,7 +10221,9 @@ mail_lists_json(){
   done; done | jq -R 'split(" ") | {list:.[0], type:.[1], value:(if .[1] == "domain" then "@" + .[2] else .[2] end)}' | jq -cs '.'
 }
 mail_history_json(){ # últimas mensagens rejeitadas ou marcadas como spam (histórico do Rspamd)
-  curl -s -m 5 http://127.0.0.1:11334/history 2>/dev/null | jq -c '[(.rows // [])[] | select(.action == "reject" or .action == "add header" or .action == "rewrite subject") |
+  local r; r=$(curl -s -m 5 http://127.0.0.1:11334/history 2>/dev/null)
+  jq -e . >/dev/null 2>&1 <<<"$r" || { echo '[]'; return 0; }
+  printf '%s' "$r" | jq -c '[(.rows // [])[] | select(.action == "reject" or .action == "add header" or .action == "rewrite subject") |
     {t:.unix_time, action:.action, score:((.score // 0) * 10 | floor / 10), from:(.sender_mime // .sender_smtp // ""), to:((.rcpt_mime // .rcpt_smtp // []) | if type == "array" then join(", ") else . end),
      subject:(.subject // ""), ip:(.ip // ""), symbols:([(.symbols // {}) | to_entries[] | select((.value.score // 0) >= 1) | .key] | .[0:8])}] | .[0:150]' 2>/dev/null || echo '[]'
 }
@@ -10399,6 +10472,210 @@ cmd_panel_hash(){
   return 0
 }
 
+# Valida um valor JSON do estado; se for inválido usa o valor por omissão e regista qual foi (para diagnóstico).
+jv(){ # nome valor omissão
+  if [ -n "$2" ] && jq . >/dev/null 2>&1 <<<"$2"; then printf '%s' "$2"; return 0; fi
+  printf '%s %s: valor inválido: %s\n' "$(date '+%F %T')" "$1" "$(printf '%s' "$2" | head -c 300 | tr '\n' ' ')" >> "$DATA/logs/state-errors.log" 2>/dev/null
+  echo "AVISO: estado do painel: o campo '$1' estava inválido e foi ignorado (detalhes em $DATA/logs/state-errors.log)." >&2
+  printf '%s' "$3"
+}
+# ============================ FTP / FTPS / SFTP ==============================
+FTP_CONF=/etc/minipainel/ftp.conf          # PLAIN=0|1, PASV_IP=, PASV=30000:30100
+PF_PASSWD=/etc/pure-ftpd/pureftpd.passwd
+PF_PDB=/etc/pure-ftpd/pureftpd.pdb
+SFTP_ROOT=/srv/sftp
+ftp_get(){ local v; v=$(grep -m1 "^$1=" "$FTP_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
+ftp_set(){ touch "$FTP_CONF"; chmod 644 "$FTP_CONF"; if grep -q "^$1=" "$FTP_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$FTP_CONF"; else echo "$1=$2" >> "$FTP_CONF"; fi; }
+ftp_svc(){ systemctl list-unit-files pure-ftpd.service >/dev/null 2>&1 && echo pure-ftpd || echo pure-ftpd; }
+ssh_svc(){ if systemctl list-unit-files ssh.service 2>/dev/null | grep -q '^ssh.service'; then echo ssh; else echo sshd; fi; }
+ftp_installed(){ command -v pure-pw >/dev/null 2>&1; }
+pf_set(){ # opção valor (Debian: um ficheiro por opção; EL: pure-ftpd.conf)
+  if [ -d /etc/pure-ftpd/conf ]; then printf '%s\n' "$2" > "/etc/pure-ftpd/conf/$1"
+  else
+    local f=/etc/pure-ftpd/pure-ftpd.conf
+    if grep -qE "^#?\s*$1\s" "$f"; then sed -i -E "s|^#?\s*$1\s.*|$1 $2|" "$f"; else echo "$1 $2" >> "$f"; fi
+  fi
+}
+ftp_cert(){ # certificado para o FTPS (o do servidor de correio, do domínio do painel ou o autoassinado)
+  local c pem
+  c=$(cert_files mp-mail 2>/dev/null || cert_files mp-painel 2>/dev/null || echo "/etc/minipainel/ssl/panel.crt /etc/minipainel/ssl/panel.key")
+  if [ -d /etc/pure-ftpd/conf ]; then pem=/etc/ssl/private/pure-ftpd.pem; else pem=/etc/pki/pure-ftpd/pure-ftpd.pem; install -d -m 700 /etc/pki/pure-ftpd; fi
+  cat "${c##* }" "${c%% *}" > "$pem.tmp" && chmod 600 "$pem.tmp" && mv -f "$pem.tmp" "$pem"
+}
+ftp_fw(){
+  local r; r=$(ftp_get PASV 30000:30100)
+  fw_open 21 >/dev/null 2>&1
+  if systemctl is-active --quiet firewalld 2>/dev/null; then firewall-cmd -q --permanent --add-port="${r/:/-}/tcp" >/dev/null 2>&1; firewall-cmd -q --add-port="${r/:/-}/tcp" >/dev/null 2>&1
+  elif command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null)" == *"Status: active"* ]]; then ufw allow "$r/tcp" >/dev/null 2>&1; fi
+  return 0
+}
+ftp_config(){ # (re)aplica a configuração do Pure-FTPd e do SFTP
+  local r ip
+  r=$(ftp_get PASV 30000:30100); ip=$(ftp_get PASV_IP)
+  pf_set ChrootEveryone yes; pf_set NoAnonymous yes; pf_set PureDB "$PF_PDB"; pf_set MinUID 100
+  pf_set PassivePortRange "${r/:/ }"; pf_set DontResolve yes; pf_set MaxClientsPerIP 8; pf_set MaxClientsNumber 50
+  if [ -d /etc/pure-ftpd/conf ]; then pf_set Umask "137 027"; else pf_set Umask "137:027"; fi
+  pf_set ProhibitDotFilesWrite no; pf_set ProhibitDotFilesRead no
+  pf_set TLS "$([ "$(ftp_get PLAIN 0)" = 1 ] && echo 1 || echo 2)"
+  if [ -n "$ip" ]; then pf_set ForcePassiveIP "$ip"; else
+    if [ -d /etc/pure-ftpd/conf ]; then rm -f /etc/pure-ftpd/conf/ForcePassiveIP; else sed -i -E 's|^ForcePassiveIP .*|# ForcePassiveIP|' /etc/pure-ftpd/pure-ftpd.conf; fi
+  fi
+  if [ -d /etc/pure-ftpd/auth ]; then
+    rm -f /etc/pure-ftpd/auth/*unix /etc/pure-ftpd/auth/*pam /etc/pure-ftpd/auth/*PAM /etc/pure-ftpd/auth/*Unix 2>/dev/null
+    ln -sfn ../conf/PureDB /etc/pure-ftpd/auth/50pure
+    pf_set UnixAuthentication no; pf_set PAMAuthentication no
+  else
+    sed -i -E 's|^#?\s*PAMAuthentication\s.*|PAMAuthentication no|; s|^#?\s*UnixAuthentication\s.*|UnixAuthentication no|' /etc/pure-ftpd/pure-ftpd.conf
+  fi
+  ftp_cert
+  touch "$PF_PASSWD"; chmod 600 "$PF_PASSWD"; pure-pw mkdb "$PF_PDB" -f "$PF_PASSWD" >/dev/null 2>&1
+  # SFTP: utilizadores do grupo mp-sftp ficam fechados na pasta do site e só podem transferir ficheiros
+  getent group mp-sftp >/dev/null 2>&1 || groupadd -r mp-sftp
+  install -d -o root -g root -m 755 "$SFTP_ROOT"
+  install -d -m 755 /etc/ssh/sshd_config.d
+  if ! grep -qE '^\s*Include\s+/etc/ssh/sshd_config.d/\*\.conf' /etc/ssh/sshd_config; then
+    sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+  fi
+  cat > /etc/ssh/sshd_config.d/10-minipainel-sftp.conf <<'EOF'
+# IDDigital Hosting — SFTP dos sites (gerado pelo painel; não editar à mão)
+Match Group mp-sftp
+    ChrootDirectory /srv/sftp/%u
+    ForceCommand internal-sftp -d /site -u 0027
+    PasswordAuthentication yes
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+Match all
+EOF
+  chmod 644 /etc/ssh/sshd_config.d/10-minipainel-sftp.conf
+  if sshd -t 2>/dev/null; then systemctl reload "$(ssh_svc)" >/dev/null 2>&1
+  else rm -f /etc/ssh/sshd_config.d/10-minipainel-sftp.conf; warn "A configuração do SSH ficou inválida; o SFTP não foi ativado."; fi
+  systemctl enable "$(ftp_svc)" >/dev/null 2>&1; systemctl restart "$(ftp_svc)" >/dev/null 2>&1
+  ftp_fw
+}
+ftp_install(){
+  ftp_installed && return 0
+  echo "A instalar o Pure-FTPd..."
+  if [ "$OS_FAMILY" = debian ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y -q pure-ftpd >/dev/null 2>&1
+  else dnf install -y -q pure-ftpd >/dev/null 2>&1; fi
+  ftp_installed || die "Falhou a instalação do Pure-FTPd."
+  [ -f "$FTP_CONF" ] || printf 'PLAIN=0\nPASV=30000:30100\nPASV_IP=\n' > "$FTP_CONF"
+  ftp_config
+}
+ftp_bind(){ # site on|off — a pasta do site aparece dentro da prisão do SFTP
+  local n=$1 u="mp_$1" d="$SFTP_ROOT/mp_$1"
+  if [ "$2" = on ]; then
+    install -d -o root -g root -m 755 "$d" "$d/site"
+    grep -q " $d/site " /etc/fstab || echo "$WWW_ROOT/$n $d/site none bind,nofail 0 0 # minipainel-sftp" >> /etc/fstab
+    mountpoint -q "$d/site" || mount --bind "$WWW_ROOT/$n" "$d/site"
+    usermod -aG mp-sftp "$u" >/dev/null 2>&1
+  else
+    gpasswd -d "$u" mp-sftp >/dev/null 2>&1
+    mountpoint -q "$d/site" && umount "$d/site"
+    sed -i "\\| $d/site |d" /etc/fstab
+    [ -d "$d/site" ] && rmdir "$d/site" 2>/dev/null; [ -d "$d" ] && rmdir "$d" 2>/dev/null
+  fi
+  return 0
+}
+cmd_site_ftp(){ # site --hash H | --password P | --off
+  local n="${1:-}" h="" pw="" off=0 u uid gid
+  [ $# -gt 0 ] && shift
+  valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --hash) h="${2:-}"; shift 2 || shift ;;
+      --password) pw="${2:-}"; shift 2 || shift ;;
+      --off) off=1; shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  u="mp_$n"
+  if [ "$off" = 1 ]; then
+    [ -f "$PF_PASSWD" ] && { grep -v "^$n:" "$PF_PASSWD" > "$PF_PASSWD.tmp"; mv -f "$PF_PASSWD.tmp" "$PF_PASSWD"; chmod 600 "$PF_PASSWD"; pure-pw mkdb "$PF_PDB" -f "$PF_PASSWD" >/dev/null 2>&1; }
+    ftp_bind "$n" off
+    usermod -p '!' "$u" >/dev/null 2>&1
+    site_set "$n" FTP 0
+    echo "Acesso FTP/SFTP do site $n desativado."
+    return 0
+  fi
+  if [ -n "$pw" ]; then [ ${#pw} -ge 10 ] || die "A password tem de ter pelo menos 10 caracteres."; h=$(printf '%s' "$pw" | mail_hash_stdin); fi
+  local gen=""
+  if [ -z "$h" ]; then gen=$(gen_pass 16); h=$(printf '%s' "$gen" | mail_hash_stdin); fi
+  valid_mailhash "$h" || die "Hash de password inválido."
+  ftp_install
+  uid=$(id -u "$u"); gid=$(id -g "$u")
+  touch "$PF_PASSWD"
+  { grep -v "^$n:" "$PF_PASSWD"; printf '%s:%s:%s:%s::%s/./::::::::::::\n' "$n" "$h" "$uid" "$gid" "$WWW_ROOT/$n"; } > "$PF_PASSWD.tmp"
+  mv -f "$PF_PASSWD.tmp" "$PF_PASSWD"; chmod 600 "$PF_PASSWD"
+  pure-pw mkdb "$PF_PDB" -f "$PF_PASSWD" >/dev/null 2>&1 || die "Não foi possível atualizar a base de utilizadores do FTP."
+  printf '%s:%s\n' "$u" "$h" | chpasswd -e >/dev/null 2>&1 || die "Não foi possível definir a password do SFTP."
+  ftp_bind "$n" on
+  site_set "$n" FTP 1
+  local host; host=$(hostname -I 2>/dev/null | awk '{print $1}')
+  echo "Acesso ao site $n ativo."
+  echo "FTPS: servidor $host, porta 21, utilizador $n (FTP com TLS explícito$([ "$(ftp_get PLAIN 0)" = 1 ] && echo '; FTP simples também permitido'))."
+  echo "SFTP: servidor $host, porta 22, utilizador $u."
+  [ -n "$gen" ] && echo "Password: $gen"
+  return 0
+}
+cmd_ftp_settings(){
+  local re_ip='^[0-9.]+$'
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --plain) case "${2:-}" in on) ftp_set PLAIN 1 ;; off) ftp_set PLAIN 0 ;; *) die "--plain on|off" ;; esac; shift 2 || shift ;;
+      --pasv-ip) [ "${2:-}" = none ] && ftp_set PASV_IP "" || { [[ "${2:-}" =~ $re_ip ]] && fw_ip_valid "$2" || die "IP inválido."; ftp_set PASV_IP "$2"; }; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  ftp_installed && ftp_config
+  echo "Definições do FTP guardadas."
+  return 0
+}
+
+# ============================ phpMyAdmin: tempos e limites ===================
+PMA_SET=/etc/minipainel/pma.conf
+pma_get(){ local v; v=$(grep -m1 "^$1=" "$PMA_SET" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+pma_settings_apply(){ # aplica pma.conf ao config.inc.php, ao pool PHP e ao nginx
+  local s e u pool
+  s=$(pma_get SESSION 120); e=$(pma_get EXEC 600); u=$(pma_get UPLOAD 512)
+  if [ -d "$PMA_DIR" ] && [ -f "$PMA_CONF" ]; then
+    { cat "$PMA_CONF"; printf "\n// IDDigital Hosting — Definições → phpMyAdmin\n\$cfg['LoginCookieValidity'] = %d;\n\$cfg['ExecTimeLimit'] = %d;\n" $(( s * 60 )) "$e"; } > "$PMA_DIR/config.inc.php"
+    chown root:"$PMA_USER" "$PMA_DIR/config.inc.php"; chmod 640 "$PMA_DIR/config.inc.php"
+  fi
+  pool=$(php_pool_dir "$PANEL_PHP")/minipainel-pma.conf
+  if [ -f "$pool" ]; then
+    sed -i -E "s|^php_admin_value\[upload_max_filesize\] = .*|php_admin_value[upload_max_filesize] = ${u}M|; s|^php_admin_value\[post_max_size\] = .*|php_admin_value[post_max_size] = ${u}M|;
+               s|^php_admin_value\[max_execution_time\] = .*|php_admin_value[max_execution_time] = $e|; s|^php_admin_value\[max_input_time\] = .*|php_admin_value[max_input_time] = $e|;
+               s|^php_admin_value\[session.gc_maxlifetime\] = .*|php_admin_value[session.gc_maxlifetime] = $(( s * 60 ))|; s|^request_terminate_timeout = .*|request_terminate_timeout = $(( e + 60 ))s|" "$pool"
+    apply_php "$PANEL_PHP" >/dev/null 2>&1
+  fi
+  if [ -f /etc/nginx/minipainel/panel.inc ]; then
+    sed -i -E "/location \^~ \/phpmyadmin\//,/^    \}/{s|client_max_body_size [0-9]+M;|client_max_body_size ${u}M;|; s|fastcgi_read_timeout [0-9]+s;|fastcgi_read_timeout $(( e + 60 ))s;|}" /etc/nginx/minipainel/panel.inc
+    apply_nginx >/dev/null 2>&1
+  fi
+}
+cmd_pma_settings(){
+  local s e u re='^[0-9]{1,5}$'
+  s=$(pma_get SESSION 120); e=$(pma_get EXEC 600); u=$(pma_get UPLOAD 512)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session) s="${2:-}"; shift 2 || shift ;;
+      --exec) e="${2:-}"; shift 2 || shift ;;
+      --upload) u="${2:-}"; shift 2 || shift ;;
+      --apply) shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [[ "$s" =~ $re ]] && [ "$s" -ge 5 ] && [ "$s" -le 1440 ] || die "Sessão: entre 5 e 1440 minutos."
+  [[ "$e" =~ $re ]] && [ "$e" -ge 30 ] && [ "$e" -le 7200 ] || die "Tempo por operação: entre 30 e 7200 segundos."
+  [[ "$u" =~ $re ]] && [ "$u" -ge 8 ] && [ "$u" -le 4096 ] || die "Importação: entre 8 e 4096 MB."
+  printf 'SESSION=%s\nEXEC=%s\nUPLOAD=%s\n' "$s" "$e" "$u" > "$PMA_SET"; chmod 644 "$PMA_SET"
+  pma_settings_apply
+  echo "phpMyAdmin: sessão de $s min, operações até $e s, importações até $u MB."
+  return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -10407,12 +10684,12 @@ write_state(){
         --arg mem "$(lim_get "$n" MEM)" --arg up "$(lim_get "$n" UPLOAD)" --arg ex "$(lim_get "$n" EXEC)" \
         --arg it "$(lim_get "$n" INPUT_TIME)" --arg iv "$(lim_get "$n" INPUT_VARS)" --arg de "$(lim_get "$n" DISPLAY_ERRORS)" \
         --arg doms "$(site_get "$n" DOMAINS)" --arg ssl "$(site_get "$n" SSL)" --arg hs "$(site_get "$n" HTTPS)" --arg www "$(site_get "$n" WWW)" \
-        --arg sexp "$(cert_expiry "mp-$n")" --arg cok "$( [ -n "$(site_get "$n" DOMAINS)" ] && [ "$(site_get "$n" SSL)" != none ] && cert_files "mp-$n" >/dev/null && echo 1)" \
+        --arg ftp "$(site_get "$n" FTP)" --arg sexp "$(cert_expiry "mp-$n")" --arg cok "$( [ -n "$(site_get "$n" DOMAINS)" ] && [ "$(site_get "$n" SSL)" != none ] && cert_files "mp-$n" >/dev/null && echo 1)" \
         '{name:$name, port:($port|tonumber), php:$php, enabled:($en=="1"), root:$root,
           limits:{memory:($mem|tonumber), upload:($up|tonumber), exec:($ex|tonumber),
                   input_time:($it|tonumber), input_vars:($iv|tonumber), display_errors:($de=="1")},
           domains:$doms, ssl:(if $ssl == "" then "none" else $ssl end), https:(if $hs == "" then "1" else $hs end), www:(if $www == "" then "keep" else $www end),
-          ssl_exp:(if $sexp == "" then null else ($sexp|tonumber) end), https_ok:($cok == "1")}'
+          ssl_exp:(if $sexp == "" then null else ($sexp|tonumber) end), https_ok:($cok == "1"), ftp:($ftp == "1")}'
     done | jq -cs '.')
   pkg_cache_load
   phps=$(for v in $(php_installed); do
@@ -10457,12 +10734,18 @@ write_state(){
   dbs=$(db_sizes | while IFS=$'\t' read -r n v; do
       [ -n "$n" ] && jq -cn --arg n "$n" --arg s "$v" --arg site "$(dbmap_load | jq -r --arg d "$n" '.[$d] // ""')" '{name:$n, size_mb:($s|tonumber), site:$site}'
     done | jq -cs '.')
+  local j_crons j_mail j_snaps
+  j_crons=$(cron_state_json 2>/dev/null); j_mail=$(mail_state_json 2>/dev/null); j_snaps=$(upd_snaps_json 2>/dev/null)
+  sites=$(jv sites "$sites" '[]'); phps=$(jv php "$phps" '[]'); dbs=$(jv databases "$dbs" '[]'); svcs=$(jv services "$svcs" '[]')
+  dbadm=$(jv db_admin "$dbadm" 'false'); j_crons=$(jv crons "$j_crons" '[]'); j_mail=$(jv mail "$j_mail" '{"enabled":false}'); j_snaps=$(jv snaps "$j_snaps" '[]')
   jq -n --argjson sites "${sites:-[]}" --argjson php "${phps:-[]}" --argjson dbs "${dbs:-[]}" --argjson svcs "${svcs:-[]}" \
     --arg host "$host" --arg ip "$ip" --arg os "$os" --arg up "${up:-0}" --arg disk "${disk:-0}" --arg ram "${ram:-0}" \
     --arg load "${load:-0}" --arg cpus "${cpus:-1}" --arg pport "$PANEL_PORT" --arg pphp "$PANEL_PHP" \
-    --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$(cron_state_json)" \
-    --argjson mail "$(mail_state_json 2>/dev/null || echo '{"enabled":false}')" \
-    --argjson usnaps "$(upd_snaps_json 2>/dev/null || echo '[]')" \
+    --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$j_crons" \
+    --argjson mail "$j_mail" \
+    --argjson usnaps "$j_snaps" \
+    --argjson fti "$(ftp_installed && echo true || echo false)" --arg ftpl "$(ftp_get PLAIN 0)" --arg ftip "$(ftp_get PASV_IP)" \
+    --arg pss "$(pma_get SESSION 120)" --arg pse "$(pma_get EXEC 600)" --arg psu "$(pma_get UPLOAD 512)" \
     --arg spa "$(srv_get PORTS_ACCESS all)" --arg spal "$(srv_get PANEL_ALLOW '')" \
     --arg smode "$(srv_get MODE lan)" --arg semail "$(srv_get EMAIL '')" --arg spd "$(srv_get PANEL_DOMAIN '')" --arg spssl "$(srv_get PANEL_SSL le)" --arg spexp "$( [ -n "$(srv_get PANEL_DOMAIN '')" ] && cert_expiry mp-painel)" \
     --arg defphp "$DEFAULT_PHP" --arg gen "$(date '+%Y-%m-%d %H:%M:%S')" --arg ver "$MP_VERSION" \
@@ -10472,6 +10755,8 @@ write_state(){
       pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm}, crons:$crons,
       mail:$mail,
       updates:{snaps:$usnaps},
+      ftp:{installed:$fti, plain:($ftpl == "1"), pasv_ip:$ftip},
+      pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
@@ -10504,7 +10789,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -10522,7 +10807,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.2.0 (mpanel)
+IDDigital Hosting — CLI v2.3.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -10555,6 +10840,12 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+FTP / SFTP (uma conta por site; a mesma password nos dois)
+  site-ftp <site> [--password P]       ativa ou muda a password (FTPS: utilizador <site>; SFTP: mp_<site>)
+  site-ftp <site> --off                desativa
+  ftp-settings [--plain on|off] [--pasv-ip IP|none]   FTP sem cifra; IP público para o modo passivo (NAT)
+  pma-settings [--session MIN] [--exec S] [--upload MB]   tempos e limites do phpMyAdmin
 
 Atualizações
   update-check                         procura uma versão nova do painel (version.json no GitHub)
@@ -10695,6 +10986,9 @@ dispatch(){
     mail-site)         cmd_mail_site "$@" ;;
     mail-queue)        cmd_mail_queue "$@" ;;
     mail-list)         cmd_mail_list "$@" ;;
+    site-ftp)          cmd_site_ftp "$@" ;;
+    ftp-settings)      cmd_ftp_settings "$@" ;;
+    pma-settings)      cmd_pma_settings "$@" ;;
     update-check)      cmd_update_check ;;
     update-start)      cmd_update_start "$@" ;;
     update-rollback)   cmd_update_rollback "$@" ;;
@@ -10786,7 +11080,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.2.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.3.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -11011,10 +11305,13 @@ mail_spool_kick(){
   ( setsid /usr/local/sbin/mpanel mail-spool >/dev/null 2>&1 & )
 }
 mail_authfail(){
-  mail_enabled || return 0
+  mail_enabled || [ -s /etc/pure-ftpd/pureftpd.passwd ] || return 0
   local lim f=$DIR/mail-authfail.txt now=$EPOCHSECONDS
   lim=$(grep -m1 '^AUTH_FAILS=' /etc/minipainel/mail.conf | cut -d= -f2); lim=${lim:-10}
   touch "$f"
+  journalctl -q --since "-65s" -o cat -t sshd -t pure-ftpd 2>/dev/null \
+    | sed -nE 's/.*Failed password for (invalid user )?mp_[a-z0-9-]+ from ([0-9a-fA-F:.]+) .*/\2/p; s/^\(\?@([0-9a-fA-F:.]+)\) \[WARNING\] Authentication failed.*/\1/p' \
+    | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
   journalctl -q --since "-65s" -o cat -t postfix/submission/smtpd -t postfix/smtps/smtpd -t postfix/smtpd -t dovecot 2>/dev/null \
     | grep -E 'SASL [A-Z0-9-]+ authentication failed|auth failed' \
     | sed -nE 's/.*rip=([0-9a-fA-F:.]+).*/\1/p; s/.*SASL [A-Z0-9-]+ authentication failed.*/&/; s/^[^[]*\[([0-9a-fA-F:.]+)\]: SASL.*/\1/p' \
@@ -11131,7 +11428,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.2.0
+#  mp-sendmail — IDDigital Hosting v2.3.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -11169,7 +11466,7 @@ fi
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.2.0
+#  mpanel-cron — IDDigital Hosting v2.3.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -11337,6 +11634,8 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel cron-sync >/dev/null || warn "Não foi possível sincronizar as tarefas agendadas (mpanel cron-sync)."
 /usr/local/sbin/mpanel bk-init >/dev/null || warn "Não foi possível configurar os backups (mpanel bk-init)."
 /usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
+/usr/local/sbin/mpanel pma-settings --apply >/dev/null 2>&1 || true
+command -v pure-pw >/dev/null 2>&1 && { /usr/local/sbin/mpanel ftp-settings >/dev/null 2>&1 || warn "Não foi possível reaplicar a configuração do FTP."; }
 
 # --- migrações numeradas: cada passo corre uma vez, por ordem, só se a versão anterior for mais antiga ---
 mig_2_2_0(){
