@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v1.8.0 — instalador (MiniPainel)
+#  IDDigital Hosting v1.9.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.8.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v1.9.0.sh [--php "7.4 8.1 8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -16,7 +16,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.8.0"
+MP_VERSION="1.9.0"
 PHP_VERSIONS="7.4 8.1 8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -146,7 +146,7 @@ selinux_on(){ command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/nu
 say "A instalar pacotes base ($OS_ID $OS_VER)..."
 if [ "$OS_FAMILY" = debian ]; then
   apt-get update -q
-  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables cron pigz rclone nginx mariadb-server mariadb-client
+  pkg_install ca-certificates curl gnupg jq openssl iproute2 procps logrotate nftables cron pigz rclone certbot nginx mariadb-server mariadb-client
   if [ "$OS_ID" = ubuntu ]; then
     pkg_install software-properties-common
     add-apt-repository -y ppa:ondrej/php
@@ -164,7 +164,7 @@ else
   dnf config-manager --set-enabled crb >/dev/null 2>&1 || true
   rpm -q remi-release >/dev/null 2>&1 || dnf install -y -q "https://rpms.remirepo.net/enterprise/remi-release-${EL_MAJOR}.rpm"
   pkg_install nginx mariadb-server mariadb jq openssl curl iproute procps-ng logrotate nftables cronie pigz policycoreutils-python-utils
-  pkg_install_soft rclone
+  pkg_install_soft rclone certbot
 fi
 ok "Pacotes base instalados."
 
@@ -295,6 +295,7 @@ http {
     gzip_types text/plain text/css text/xml application/javascript application/json application/xml image/svg+xml;
 
     include /etc/nginx/minipainel/panel.conf;
+    include /etc/nginx/minipainel/conf.d/*.conf;
     include /etc/nginx/minipainel/sites/*.conf;
 }
 EOF
@@ -304,19 +305,9 @@ PMA_SOCK="$(php_run_dir "$PANEL_PHP")/minipainel-pma.sock"
 PANEL_RUN="$(php_run_dir "$PANEL_PHP")"
 L6=""
 [ "$IPV6" = 1 ] && L6="    listen [::]:$PANEL_PORT ssl;"
-cat > /etc/nginx/minipainel/panel.conf <<EOF
-# MiniPainel — painel de administração
-server {
-    listen $PANEL_PORT ssl;
-$L6
-    server_name _;
-
-    ssl_certificate     /etc/minipainel/ssl/panel.crt;
-    ssl_certificate_key /etc/minipainel/ssl/panel.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_session_cache shared:MPSSL:1m;
-    error_page 497 =301 https://\$host:\$server_port\$request_uri;
-
+install -d -m 755 /etc/nginx/minipainel/conf.d /etc/nginx/minipainel/inc /var/www/minipainel-acme
+cat > /etc/nginx/minipainel/panel.inc <<EOF
+# IDDigital Hosting — conteúdo do painel (porta própria e domínio do painel)
     root /opt/minipainel/public;
     access_log /var/log/nginx/minipainel.access.log;
     error_log  /var/log/nginx/minipainel.error.log;
@@ -387,6 +378,21 @@ $L6
         fastcgi_pass unix:$PANEL_SOCK;
         fastcgi_read_timeout 900s;
     }
+EOF
+cat > /etc/nginx/minipainel/panel.conf <<EOF
+# MiniPainel — painel de administração
+server {
+    listen $PANEL_PORT ssl;
+$L6
+    server_name _;
+
+    ssl_certificate     /etc/minipainel/ssl/panel.crt;
+    ssl_certificate_key /etc/minipainel/ssl/panel.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:MPSSL:1m;
+    error_page 497 =301 https://\$host:\$server_port\$request_uri;
+
+    include /etc/nginx/minipainel/panel.inc;
 }
 EOF
 
@@ -495,7 +501,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v1.8.0 — painel web (MiniPainel)
+ * IDDigital Hosting v1.9.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -503,7 +509,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.8.0';
+const MP_VERSION = '1.9.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1110,6 +1116,17 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .cron-out{margin:0;padding:18px 26px;max-height:60vh;overflow:auto;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--hover)}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
+.links.dom{margin-bottom:4px}
+.links.dom a{font-weight:600}
+svg.i.lock{width:14px;height:14px;color:#2ea36a;margin-right:4px;vertical-align:-2px}
+.mode-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.mode{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;gap:4px 14px;align-items:center;padding:18px;border:2px solid var(--line);border-radius:18px;cursor:pointer;color:var(--ink);font-weight:400}
+.mode input{position:absolute;opacity:0;pointer-events:none}
+.mode .tile{grid-row:1 / 3}
+.mode b{font-size:16px}
+.mode .mu{grid-column:2;font-size:13px}
+.mode.on,.mode:has(input:checked){border-color:var(--acc);background:var(--acc-bg)}
+@media (max-width:900px){.mode-grid{grid-template-columns:1fr}}
 dialog{text-align:left}
 .rm-grp{display:grid;gap:14px}
 .rm-grp[hidden]{display:none}
@@ -1249,6 +1266,7 @@ $pages = [
     'servicos' => ['Serviços', 'pulse'],
     'ligacoes' => ['Ligações', 'ban'],
     'backups'  => ['Backups', 'archive'],
+    'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
 $pg   = qget('p');
@@ -1379,6 +1397,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 array_push($args, $L[4], (string)(int)$v);
             }
             array_push($args, '--display-errors', post('display_errors') === '1' ? '1' : '0');
+            $dl = strtolower(trim(preg_replace('/[\s,;]+/', ' ', post_raw('domains')) ?? ''));
+            if ($dl !== '') {
+                foreach (explode(' ', $dl) as $dd) { if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $dd)) { $bad('Domínio inválido: ' . $dd); $back = ['novo' => 'site']; break 2; } }
+                array_push($args, '--domains', $dl, '--ssl', in_array(post('ssl'), ['none', 'le', 'self'], true) ? post('ssl') : 'none');
+            }
             job_submit('site-add', $args, 'Criar o site ' . $site);
             break;
 
@@ -1432,6 +1455,27 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!preg_match(RX_SVC, $svc) || !in_array($act, ['reload', 'restart', 'start', 'stop'], true)) { $bad('Pedido inválido.'); break; }
             $names = ['reload' => 'Recarregar', 'restart' => 'Reiniciar', 'start' => 'Iniciar', 'stop' => 'Parar'];
             job_submit('service', [$svc, $act], $names[$act] . ' ' . $svc);
+            break;
+
+        case 'site_domains':
+            if (!valid_site($site)) { $bad('Site inválido.'); break; }
+            $dl = strtolower(trim(preg_replace('/[\s,;]+/', ' ', post_raw('domains')) ?? ''));
+            foreach (array_filter(explode(' ', $dl)) as $dd) { if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $dd)) { $bad('Domínio inválido: ' . $dd); break 2; } }
+            $ssl = in_array(post('ssl'), ['none', 'le', 'self'], true) ? post('ssl') : 'none';
+            $www = in_array(post('www'), ['keep', 'www', 'root'], true) ? post('www') : 'keep';
+            job_submit('site-domains', [$site, '--set', $dl, '--ssl', $ssl, '--https', post('https') === '1' ? '1' : '0', '--www', $www], 'Domínios de ' . $site);
+            break;
+
+        case 'srv_mode':
+            $md = post('mode') === 'internet' ? 'internet' : 'lan'; $em = post('email');
+            if ($em !== '' && !filter_var($em, FILTER_VALIDATE_EMAIL)) { $bad('Email inválido.'); break; }
+            job_submit('server-mode', [$md, '--email', $em === '' ? 'none' : $em], 'Modo do servidor');
+            break;
+
+        case 'panel_domain':
+            $pd = strtolower(post('domain'));
+            if ($pd !== '' && !preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $pd)) { $bad('Domínio inválido.'); break; }
+            job_submit('panel-domain', [$pd === '' ? 'none' : $pd, '--ssl', post('ssl') === 'self' ? 'self' : 'le'], 'Domínio do painel');
             break;
 
         case 'bk_now':
@@ -1603,6 +1647,14 @@ $sys     = is_array($state['system'] ?? null) ? $state['system'] : [];
 $pma     = is_array($state['pma'] ?? null) ? $state['pma'] : [];
 $dbAdmin = is_array($state['db_admin'] ?? null) ? $state['db_admin'] : [];
 $pmaOn   = !empty($pma['installed']);
+$srv     = is_array($state['server'] ?? null) ? $state['server'] : ['mode' => 'lan'];
+$isNet   = ($srv['mode'] ?? 'lan') === 'internet';
+function site_main_url(array $s): string {
+    $doms = trim((string)($s['domains'] ?? ''));
+    if ($doms === '') return '';
+    $d = explode(' ', $doms)[0];
+    return (!empty($s['https_ok']) ? 'https://' : 'http://') . $d . '/';
+}
 $defPhp  = (string)($state['default_php'] ?? '');
 $host    = host_only();
 $flashes = is_array($_SESSION['flash'] ?? null) ? $_SESSION['flash'] : [];
@@ -1862,8 +1914,9 @@ $titles = [
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
     'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
+    'definicoes' => 'Modo do servidor (LAN ou Internet), Let\'s Encrypt e domínio do painel.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'conta']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'definicoes', 'conta']];
 $section = 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -1976,11 +2029,11 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <div class="row-list bars">
             <?php foreach (array_slice($sorted, 0, 8) as $s): $n = (string)$s['name']; $port = (int)$s['port']; $on = !empty($s['enabled']); $rq = (int)($tr['per'][$n][0] ?? 0); ?>
               <div class="item">
-                <div class="who"><span class="av <?= tone($n) ?>"><?= h(substr($n, 0, 1)) ?></span><div style="min-width:0"><div class="nm"><?= h($n) ?></div><div class="mu"><span class="mono">:<?= $port ?></span> · PHP <?= h($s['php'] ?? '') ?></div></div></div>
+                <div class="who"><span class="av <?= tone($n) ?>"><?= h(substr($n, 0, 1)) ?></span><div style="min-width:0"><div class="nm"><?= h($n) ?></div><div class="mu"><?php $mu = site_main_url($s); ?><?= $mu !== '' ? h(preg_replace('#^https?://|/$#', '', $mu)) . ' · ' : '' ?><span class="mono">:<?= $port ?></span> · PHP <?= h($s['php'] ?? '') ?></div></div></div>
                 <div class="bar"><i style="width:<?= round($rq * 100 / $reqMax, 1) ?>%"></i></div>
                 <b class="num"><?= h(fmt_int($rq)) ?></b>
                 <span class="pill <?= $on ? 'p-ok' : 'p-off' ?>"><?= $on ? 'Ativo' : 'Desativado' ?></span>
-                <?php if ($on): ?><a class="iconbtn" href="<?= h(site_url($host, $port)) ?>" target="_blank" rel="noopener" title="Abrir" aria-label="Abrir <?= h($n) ?>"><?= ic('ext') ?></a><?php else: ?><span></span><?php endif; ?>
+                <?php if ($on): ?><a class="iconbtn" href="<?= h(site_main_url($s) !== '' ? site_main_url($s) : site_url($host, $port)) ?>" target="_blank" rel="noopener" title="Abrir" aria-label="Abrir <?= h($n) ?>"><?= ic('ext') ?></a><?php else: ?><span></span><?php endif; ?>
               </div>
             <?php endforeach; ?>
           </div>
@@ -2020,6 +2073,10 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <tr>
               <td class="first" data-label="Site"><div class="who"><span class="av <?= tone($n) ?>"><?= h(substr($n, 0, 1)) ?></span><div style="min-width:0"><div class="nm"><?= h($n) ?></div><div class="mu mono"><?= h($s['root'] ?? '') ?></div></div></div></td>
               <td data-label="Endereço">
+                <?php $mu = site_main_url($s); $nd = count(array_filter(explode(' ', (string)($s['domains'] ?? '')))); ?>
+                <?php if ($mu !== ''): ?>
+                <div class="links dom"><?= !empty($s['https_ok']) ? ic('lock', 'lock') : '' ?><?php if ($on): ?><a href="<?= h($mu) ?>" target="_blank" rel="noopener"><?= h(preg_replace('#^https?://|/$#', '', $mu)) ?><?= ic('ext') ?></a><?php else: ?><span><?= h(preg_replace('#^https?://|/$#', '', $mu)) ?></span><?php endif; ?><?= $nd > 1 ? ' <span class="mu">+' . ($nd - 1) . '</span>' : '' ?></div>
+                <?php endif; ?>
                 <div class="links"><span class="port">:<?= $port ?></span>
                 <?php if ($on): ?> <a href="<?= h($url) ?>" target="_blank" rel="noopener"><?= h(preg_replace('#^http://|/$#', '', $url)) ?><?= ic('ext') ?></a><?php endif; ?></div>
               </td>
@@ -2033,6 +2090,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
                     <?php if ($on): ?><a href="<?= h($url) ?>" target="_blank" rel="noopener"><?= ic('ext') ?>Abrir site</a><?php endif; ?>
                     <a href="?p=ficheiros&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('folder') ?>Ficheiros</a>
                     <a href="?p=cron&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('clock') ?>Tarefas agendadas</a>
+                    <button type="button" data-open="dlg-dom-<?= h($n) ?>"><?= ic('world') ?>Domínios e SSL</button>
                     <button type="button" data-open="dlg-lim-<?= h($n) ?>"><?= ic('sliders') ?>Limites</button>
                     <button type="button" data-open="dlg-php-<?= h($n) ?>"><?= ic('code') ?>Mudar versão de PHP</button>
                     <form method="post"><?= act_fields('site_perm', ['site' => $n]) ?><button type="submit"><?= ic('lock') ?>Corrigir permissões</button></form>
@@ -2715,6 +2773,43 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </form>
       </dialog>
 
+<?php elseif ($page === 'definicoes'):
+    $srvMode = (string)($srv['mode'] ?? 'lan');
+?>
+      <section class="card">
+        <div class="card-h"><div><h2>Modo do servidor</h2><p>Define como o painel apresenta os sites e o que propõe por omissão. Mudar de modo não altera os sites que já existem.</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('srv_mode') ?>
+          <div class="mode-grid">
+            <label class="mode<?= $srvMode === 'lan' ? ' on' : '' ?>"><input type="radio" name="mode" value="lan"<?= $srvMode === 'lan' ? ' checked' : '' ?>>
+              <span class="tile t-blue"><?= ic('server') ?></span>
+              <b>LAN</b><span class="mu">Sites acessíveis por IP e porta (http://IP:8001). Ideal para redes internas, testes e desenvolvimento. Os domínios são opcionais e o SSL é autoassinado.</span></label>
+            <label class="mode<?= $srvMode === 'internet' ? ' on' : '' ?>"><input type="radio" name="mode" value="internet"<?= $srvMode === 'internet' ? ' checked' : '' ?>>
+              <span class="tile t-acc"><?= ic('world') ?></span>
+              <b>Internet</b><span class="mu">Sites com domínio próprio nas portas 80/443 e certificado Let's Encrypt automático. Cada site continua também acessível pela porta.</span></label>
+          </div>
+          <div class="fgrid" style="margin-top:18px">
+            <label class="fld">Email para o Let's Encrypt<input class="in" type="email" name="email" value="<?= h($srv['email'] ?? '') ?>" placeholder="ssl@iddigital.pt"><small>Recebe os avisos de expiração dos certificados (opcional)</small></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">No modo Internet, cada domínio tem de ter um registo DNS (A ou AAAA) a apontar para o IP público deste servidor, e as portas 80 e 443 têm de chegar a ele (se houver router ou firewall à frente, reencaminha essas portas).</div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Domínio do painel</h2><p>Acesso ao painel por um nome, por exemplo hosting.iddigital.pt, com certificado válido.</p></div>
+          <?php if (($srv['panel_domain'] ?? '') !== ''): ?><span class="pill p-ok"><?= h($srv['panel_domain']) ?></span><?php endif; ?></div>
+        <form method="post" class="card-b">
+          <?= act_fields('panel_domain') ?>
+          <div class="fgrid">
+            <label class="fld">Domínio<input class="in mono" name="domain" value="<?= h($srv['panel_domain'] ?? '') ?>" placeholder="hosting.iddigital.pt" autocomplete="off"><small>Vazio = sem domínio (o painel fica só na porta <?= (int)($sys['panel_port'] ?? 2443) ?>)</small></label>
+            <label class="fld">Certificado<select class="in" name="ssl"><option value="le"<?= ($srv['panel_ssl'] ?? 'le') === 'le' ? ' selected' : '' ?>>Let's Encrypt</option><option value="self"<?= ($srv['panel_ssl'] ?? '') === 'self' ? ' selected' : '' ?>>Autoassinado (LAN)</option></select></label>
+          </div>
+          <?php if (!empty($srv['panel_ssl_exp'])): ?><p class="mu" style="margin:12px 0 0">Certificado válido até <?= h(gmdate('d/m/Y', (int)$srv['panel_ssl_exp'] + tz_off(live_stats()))) ?>; é renovado automaticamente.</p><?php endif; ?>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+      </section>
+
 <?php elseif ($page === 'servicos'): ?>
       <section class="card">
         <?php if (!$svcs): ?>
@@ -2767,6 +2862,11 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <label class="fld">Porta<input class="in" name="port" inputmode="numeric" pattern="[0-9]{1,5}" placeholder="automática" autocomplete="off"><small>Vazio = próxima livre a partir de 8001</small></label>
         <label class="fld">Versão de PHP<select class="in" name="php"><?= php_options($phps, $defPhp) ?></select></label>
       </div>
+      <div class="fsec">Domínio<?= $isNet ? '' : ' (opcional)' ?></div>
+      <div class="fgrid">
+        <label class="fld">Domínios<input class="in mono" name="domains" placeholder="loja.pt www.loja.pt" autocomplete="off"><small>Separados por espaço; vazio = só por porta</small></label>
+        <label class="fld">Certificado SSL<select class="in" name="ssl"><option value="le"<?= $isNet ? ' selected' : '' ?>>Let's Encrypt</option><option value="self">Autoassinado</option><option value="none"<?= $isNet ? '' : ' selected' ?>>Sem SSL</option></select></label>
+      </div>
       <div class="fsec">Limites do PHP</div>
       <?= limit_fields(LIMIT_DEFAULTS + ['display_errors' => false]) ?>
     </div>
@@ -2789,6 +2889,23 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 </dialog>
 
 <?php foreach ($sites as $s): $n = (string)($s['name'] ?? ''); if (!valid_site($n)) continue; $L = site_limits($s); ?>
+<dialog class="drawer" id="dlg-dom-<?= h($n) ?>">
+  <form method="post">
+    <?= act_fields('site_domains', ['site' => $n]) ?>
+    <div class="dlg-h"><div><h3>Domínios e SSL de <?= h($n) ?></h3><p>O site continua acessível pela porta <?= (int)($s['port'] ?? 0) ?>.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+    <div class="dlg-b">
+      <label class="fld">Domínios<textarea class="in mono cron-ta" name="domains" rows="4" placeholder="loja.pt&#10;www.loja.pt" spellcheck="false"><?= h(str_replace(' ', "\n", (string)($s['domains'] ?? ''))) ?></textarea><small>Um por linha. Cada domínio tem de apontar (DNS) para este servidor.</small></label>
+      <div class="fgrid">
+        <label class="fld">Certificado SSL<select class="in" name="ssl"><?php $cs = (string)($s['ssl'] ?? 'none'); ?><option value="le"<?= $cs === 'le' ? ' selected' : '' ?>>Let's Encrypt</option><option value="self"<?= $cs === 'self' ? ' selected' : '' ?>>Autoassinado (LAN)</option><option value="none"<?= $cs === 'none' ? ' selected' : '' ?>>Sem SSL</option></select></label>
+        <label class="fld">Endereço principal<select class="in" name="www"><?php $cw = (string)($s['www'] ?? 'keep'); ?><option value="keep"<?= $cw === 'keep' ? ' selected' : '' ?>>Aceitar todos como estão</option><option value="root"<?= $cw === 'root' ? ' selected' : '' ?>>Redirecionar para sem www</option><option value="www"<?= $cw === 'www' ? ' selected' : '' ?>>Redirecionar para com www</option></select></label>
+      </div>
+      <label class="chk"><input type="checkbox" name="https" value="1"<?= ($s['https'] ?? '1') !== '0' ? ' checked' : '' ?>> Redirecionar HTTP para HTTPS (quando houver certificado)</label>
+      <?php if (!empty($s['ssl_exp'])): ?><div class="mu">Certificado <?= ($s['ssl'] ?? '') === 'le' ? "Let's Encrypt" : 'autoassinado' ?> válido até <?= h(gmdate('d/m/Y', (int)$s['ssl_exp'])) ?><?= ($s['ssl'] ?? '') === 'le' ? '; é renovado automaticamente.' : '.' ?></div><?php endif; ?>
+      <div class="warnbox">Lojas como PrestaShop, WooCommerce e OpenCart guardam o endereço na própria base de dados: depois de associares um domínio, atualiza-o também nas definições da loja.</div>
+    </div>
+    <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+  </form>
+</dialog>
 <dialog class="drawer" id="dlg-lim-<?= h($n) ?>">
   <form method="post">
     <?= act_fields('site_limits', ['site' => $n]) ?>
@@ -3449,7 +3566,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v1.8.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v1.9.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -3845,11 +3962,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v1.8.0
+#  mpanel — IDDigital Hosting CLI v1.9.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.8.0"
+MP_VERSION="1.9.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -4018,16 +4135,15 @@ EOF
 }
 
 write_nginx(){
-  local n=$1 p=$2 v=$3 dest=$4 l6="" up rt
-  if [ "${IPV6:-0}" = 1 ]; then l6="    listen [::]:$p;"; fi
+  local n=$1 p=$2 v=$3 dest=$4 l6="" up rt inc dflt=""
+  inc="$NGX_INC/mp-$n.inc"
+  install -d -m 755 "$NGX_INC"
+  [ "$p" = 80 ] && dflt=" default_server"
+  if [ "${IPV6:-0}" = 1 ]; then l6="    listen [::]:$p$dflt;"; fi
   up=$(lim_get "$n" UPLOAD)
   rt=$(( $(lim_get "$n" EXEC) + 30 )); [ "$rt" -lt 300 ] && rt=300
-  cat > "$dest" <<EOF
-# MiniPainel — site $n (gerido pelo mpanel; não editar à mão)
-server {
-    listen $p;
-$l6
-    server_name _;
+  cat > "$inc" <<EOF
+# IDDigital Hosting — conteúdo do site $n (gerido pelo mpanel; não editar à mão)
     root $WWW_ROOT/$n/public_html;
     index index.php index.html index.htm;
     client_max_body_size ${up}M;
@@ -4051,8 +4167,12 @@ $l6
         fastcgi_param PATH_INFO \$fastcgi_path_info;
         fastcgi_read_timeout ${rt}s;
     }
-}
 EOF
+  chmod 644 "$inc"
+  {
+    printf '# IDDigital Hosting — site %s (gerido pelo mpanel; não editar à mão)\n# acesso por porta (LAN)\nserver {\n    listen %s%s;\n%s\n    server_name _;\n    include %s;\n}\n' "$n" "$p" "$dflt" "$l6" "$inc"
+    domain_servers "mp-$n" "$inc" "$(site_get "$n" DOMAINS)" "$(site_get "$n" SSL)" "$(site_get "$n" HTTPS)" "$(site_get "$n" WWW)"
+  } > "$dest"
   chmod 644 "$dest"
 }
 
@@ -4161,13 +4281,15 @@ cmd_site_list(){
 }
 
 cmd_site_add(){
-  local n="${1:-}" port="" v="$DEFAULT_PHP" key val lo hi re='^[0-9]{1,6}$'
+  local n="${1:-}" port="" v="$DEFAULT_PHP" key val lo hi re='^[0-9]{1,6}$' adoms="" assl=none
   local -A lims=()
   [ $# -gt 0 ] && shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) port="${2:-}"; shift 2 || shift ;;
       --php)  v="${2:-}";    shift 2 || shift ;;
+      --domains) adoms="${2:-}"; shift 2 || shift ;;
+      --ssl) assl="${2:-}"; shift 2 || shift ;;
       --memory|--upload|--exec|--input-time|--input-vars|--display-errors)
         key=$(lim_opt_key "$1"); val="${2:-}"; shift 2 || shift
         [[ "$val" =~ $re ]] || die "Valor inválido para $key: '$val'"
@@ -4236,6 +4358,7 @@ EOF
 
   echo "Site '$n' criado na porta $port com PHP $v."
   echo "Pasta: $d/public_html"
+  if [ -n "$adoms" ]; then ( cmd_site_domains "$n" --set "$adoms" --ssl "$assl" ) 2>&1 || true; fi
   return 0
 }
 
@@ -4247,7 +4370,9 @@ cmd_site_del(){
   local v p se fw
   v=$(site_get "$n" PHP); p=$(site_get "$n" PORT); se=$(site_get "$n" SE_PORT); fw=$(site_get "$n" FW_PORT)
 
-  rm -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled"
+  rm -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled" "$NGX_INC/mp-$n.inc"
+  le_delete "mp-$n"
+  ngx_default_sync
   apply_nginx || warn "Verifica o nginx (nginx -t)."
   rm -f "$(php_pool_dir "$v")/mp-$n.conf" "$(fm_pool_file "$n")"
   apply_php "$v" || warn "Verifica o PHP-FPM $v."
@@ -4308,6 +4433,7 @@ cmd_site_toggle(){
     [ "$cur" = 1 ] && die "O site '$n' já está ativo."
     port_listening "$p" && die "A porta $p está agora ocupada por outro serviço."
     mv -f "$NGX_SITES/$n.conf.disabled" "$NGX_SITES/$n.conf" || die "Configuração nginx do site em falta."
+    site_set "$n" ENABLED 1; ngx_default_sync
     if ! apply_nginx || ! wait_listen "$p"; then
       mv -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled"; apply_nginx >/dev/null 2>&1
       die "O nginx não conseguiu servir na porta $p; o site continua desativado."
@@ -4317,6 +4443,7 @@ cmd_site_toggle(){
   else
     [ "$cur" = 0 ] && die "O site '$n' já está desativado."
     mv -f "$NGX_SITES/$n.conf" "$NGX_SITES/$n.conf.disabled" || die "Configuração nginx do site em falta."
+    site_set "$n" ENABLED 0; ngx_default_sync
     if ! apply_nginx; then
       mv -f "$NGX_SITES/$n.conf.disabled" "$NGX_SITES/$n.conf"; apply_nginx >/dev/null 2>&1
       die "Falha ao desativar; o site continua ativo."
@@ -5482,6 +5609,235 @@ cmd_bk_list(){
   return 0
 }
 
+# ---------- modo do servidor, domínios e SSL ----------
+SRV_CONF=/etc/minipainel/server.conf     # MODE=lan|internet, EMAIL, PANEL_DOMAIN, PANEL_SSL
+ACME_ROOT=/var/www/minipainel-acme
+NGX_INC=/etc/nginx/minipainel/inc
+NGX_CONFD=/etc/nginx/minipainel/conf.d
+SELF_SSL=/etc/minipainel/ssl/sites
+srv_get(){ local v; v=$(grep -m1 "^$1=" "$SRV_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+srv_set(){
+  touch "$SRV_CONF"; chmod 644 "$SRV_CONF"
+  if grep -q "^$1=" "$SRV_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$SRV_CONF"; else echo "$1=$2" >> "$SRV_CONF"; fi
+}
+valid_domain(){ local re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$'; [ ${#1} -le 253 ] && [[ "$1" =~ $re ]]; }
+domain_owner(){ # imprime o site (ou "painel") que usa o domínio
+  local d=$1 n
+  [ "$(srv_get PANEL_DOMAIN '')" = "$d" ] && { echo painel; return 0; }
+  for n in $(site_names); do [[ " $(site_get "$n" DOMAINS) " == *" $d "* ]] && { echo "$n"; return 0; }; done
+  return 1
+}
+cert_files(){ # nome -> "crt key" se existir certificado
+  local n=$1
+  if [ -s "/etc/letsencrypt/live/$n/fullchain.pem" ]; then echo "/etc/letsencrypt/live/$n/fullchain.pem /etc/letsencrypt/live/$n/privkey.pem"; return 0; fi
+  if [ -s "$SELF_SSL/$n.crt" ]; then echo "$SELF_SSL/$n.crt $SELF_SSL/$n.key"; return 0; fi
+  return 1
+}
+cert_expiry(){ local c; c=$(cert_files "$1") || return 0; openssl x509 -enddate -noout -in "${c%% *}" 2>/dev/null | cut -d= -f2 | xargs -I{} date -d {} +%s 2>/dev/null; }
+self_issue(){ # nome domínios...
+  local n=$1 san="" d; shift
+  for d in "$@"; do san+="${san:+,}DNS:$d"; done
+  install -d -m 700 "$SELF_SSL"
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$SELF_SSL/$n.key" -out "$SELF_SSL/$n.crt" \
+    -subj "/CN=$1" -addext "subjectAltName=$san" >/dev/null 2>&1 || return 1
+  chmod 600 "$SELF_SSL/$n.key"
+}
+le_issue(){ # nome domínios... (valida primeiro no ambiente de testes do Let's Encrypt)
+  local n=$1 d out em; shift
+  command -v certbot >/dev/null 2>&1 || { echo "O certbot não está instalado." >&2; return 1; }
+  local args=(certonly --webroot -w "$ACME_ROOT" --cert-name "$n" --non-interactive --agree-tos --keep-until-expiring --expand --deploy-hook "systemctl reload nginx")
+  em=$(srv_get EMAIL ''); if [ -n "$em" ]; then args+=(-m "$em"); else args+=(--register-unsafely-without-email); fi
+  [ -n "${MP_ACME_SERVER:-}" ] && args+=(--server "$MP_ACME_SERVER")
+  for d in "$@"; do args+=(-d "$d"); done
+  install -d -m 755 "$ACME_ROOT"
+  if [ -z "${MP_ACME_SERVER:-}" ]; then
+    out=$(certbot "${args[@]}" --dry-run 2>&1) || { echo "O Let's Encrypt não conseguiu validar os domínios:"; echo "$out" | grep -E 'Domain:|Type:|Detail:|Hint:|Error' | head -n 8; return 1; } >&2
+  fi
+  out=$(certbot "${args[@]}" 2>&1) || { echo "Falhou o pedido do certificado:"; echo "$out" | grep -E 'Domain:|Type:|Detail:|Hint:|Error|too many' | head -n 8; return 1; } >&2
+  return 0
+}
+le_delete(){ command -v certbot >/dev/null 2>&1 && certbot delete --cert-name "$1" --non-interactive >/dev/null 2>&1; rm -f "$SELF_SSL/$1.crt" "$SELF_SSL/$1.key"; return 0; }
+acme_loc(){ printf '    location ^~ /.well-known/acme-challenge/ { root %s; default_type text/plain; }\n' "$ACME_ROOT"; }
+canon_redirect(){ # domínios www -> linha de redirecionamento ou vazio
+  local doms=$1 mode=$2 first canon d
+  [ "$mode" = keep ] || [ -z "$doms" ] && return 0
+  first=${doms%% *}; first=${first#www.}
+  if [ "$mode" = www ]; then canon="www.$first"; else canon="$first"; fi
+  for d in $doms; do [ "$d" = "$canon" ] && { printf '    if ($host != "%s") { return 301 $scheme://%s$request_uri; }\n' "$canon" "$canon"; return 0; }; done
+  return 0
+}
+# Servidores HTTP/HTTPS de um conjunto de domínios: nome include domínios ssl(none|le|self) https www
+domain_servers(){
+  local n=$1 inc=$2 doms=$3 ssl=$4 https=$5 www=$6 l6="" l6s="" crt key cf
+  [ -n "$doms" ] || return 0
+  [ "${IPV6:-0}" = 1 ] && { l6="    listen [::]:80;"; l6s="    listen [::]:443 ssl http2;"; }
+  cf=""; [ "$ssl" != none ] && cf=$(cert_files "$n")
+  printf '\n# domínios: %s\nserver {\n    listen 80;\n%s\n    server_name %s;\n' "$doms" "$l6" "$doms"
+  acme_loc
+  if [ -n "$cf" ] && [ "$https" = 1 ]; then
+    printf '    location / { return 301 https://$host$request_uri; }\n}\n'
+  else
+    canon_redirect "$doms" "$www"
+    printf '    include %s;\n}\n' "$inc"
+  fi
+  if [ -n "$cf" ]; then
+    crt=${cf%% *}; key=${cf##* }
+    printf '\nserver {\n    listen 443 ssl http2;\n%s\n    server_name %s;\n    ssl_certificate     %s;\n    ssl_certificate_key %s;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_cache shared:MPSSL:1m;\n' "$l6s" "$doms" "$crt" "$key"
+    canon_redirect "$doms" "$www"
+    printf '    include %s;\n}\n' "$inc"
+  fi
+}
+# Servidor por omissão nas portas 80/443 quando há domínios (pedidos com nomes desconhecidos são recusados)
+ngx_default_sync(){
+  local any=0 p80=0 n l6="" l6s=""
+  install -d -m 755 "$NGX_CONFD" "$ACME_ROOT"
+  [ -n "$(srv_get PANEL_DOMAIN '')" ] && any=1
+  for n in $(site_names); do
+    [ -n "$(site_get "$n" DOMAINS)" ] && any=1
+    [ "$(site_get "$n" PORT)" = 80 ] && [ "$(site_get "$n" ENABLED)" = 1 ] && p80=1
+  done
+  [ "${IPV6:-0}" = 1 ] && { l6="    listen [::]:80 default_server;"; l6s="    listen [::]:443 ssl http2 default_server;"; }
+  if [ "$any" = 0 ]; then rm -f "$NGX_CONFD/default.conf"; return 0; fi
+  {
+    echo "# IDDigital Hosting — servidor por omissão (gerado pelo painel)"
+    if [ "$p80" = 0 ]; then printf 'server {\n    listen 80 default_server;\n%s\n    server_name _;\n' "$l6"; acme_loc; printf '    location / { return 444; }\n}\n'; fi
+    printf 'server {\n    listen 443 ssl http2 default_server;\n%s\n    server_name _;\n    ssl_certificate     /etc/minipainel/ssl/panel.crt;\n    ssl_certificate_key /etc/minipainel/ssl/panel.key;\n    return 444;\n}\n' "$l6s"
+  } > "$NGX_CONFD/default.conf"
+  chmod 644 "$NGX_CONFD/default.conf"
+}
+ports_web_open(){ local p; for p in 80 443; do fw_open "$p" >/dev/null 2>&1; done; return 0; }
+
+# Domínio do painel (porta 443), com o mesmo conteúdo do painel na porta própria
+panel_domain_write(){
+  local d ssl cf l6="" l6s=""
+  d=$(srv_get PANEL_DOMAIN ''); ssl=$(srv_get PANEL_SSL le)
+  if [ -z "$d" ]; then rm -f "$NGX_CONFD/panel-domain.conf"; return 0; fi
+  [ "${IPV6:-0}" = 1 ] && { l6="    listen [::]:80;"; l6s="    listen [::]:443 ssl http2;"; }
+  cf=$(cert_files mp-painel) || cf="/etc/minipainel/ssl/panel.crt /etc/minipainel/ssl/panel.key"
+  {
+    printf '# IDDigital Hosting — painel em %s (gerado pelo painel)\nserver {\n    listen 80;\n%s\n    server_name %s;\n' "$d" "$l6" "$d"
+    acme_loc
+    printf '    location / { return 301 https://$host$request_uri; }\n}\n'
+    printf 'server {\n    listen 443 ssl http2;\n%s\n    server_name %s;\n    ssl_certificate     %s;\n    ssl_certificate_key %s;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_cache shared:MPSSL:1m;\n    include /etc/nginx/minipainel/panel.inc;\n}\n' "$l6s" "$d" "${cf%% *}" "${cf##* }"
+  } > "$NGX_CONFD/panel-domain.conf"
+  chmod 644 "$NGX_CONFD/panel-domain.conf"
+}
+
+cmd_server_mode(){
+  local m="${1:-}" em=""
+  [ $# -gt 0 ] && shift
+  case "$m" in lan|internet) ;; *) die "Usa: mpanel server-mode lan|internet [--email endereço]" ;; esac
+  while [ $# -gt 0 ]; do case "$1" in --email) em="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
+  local re='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+  if [ -n "$em" ]; then [ "$em" = none ] && em="" || [[ "$em" =~ $re ]] || die "Email inválido: $em"; srv_set EMAIL "$em"; fi
+  srv_set MODE "$m"
+  [ "$m" = internet ] && ports_web_open
+  echo "Modo do servidor: $([ "$m" = lan ] && echo 'LAN (sites por porta)' || echo 'Internet (sites com domínio e SSL)')."
+  return 0
+}
+cmd_site_domains(){
+  local n="${1:-}" doms ssl https www d o old_doms old_ssl old_https old_www f bak msg=""
+  [ $# -gt 0 ] && shift
+  valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
+  old_doms=$(site_get "$n" DOMAINS); old_ssl=$(site_get "$n" SSL); old_https=$(site_get "$n" HTTPS); old_www=$(site_get "$n" WWW)
+  doms=$old_doms; ssl=${old_ssl:-none}; https=${old_https:-1}; www=${old_www:-keep}
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --set) doms="${2:-}"; shift 2 || shift ;;
+      --ssl) ssl="${2:-}"; shift 2 || shift ;;
+      --https) https="${2:-}"; shift 2 || shift ;;
+      --www) www="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  doms=$(printf '%s' "$doms" | tr 'A-Z,;' 'a-z  ' | tr -s ' \n\t' ' ' | sed 's/^ //; s/ $//')
+  case "$ssl" in none|le|self) ;; *) die "SSL inválido: usa none, le ou self." ;; esac
+  case "$https" in 0|1) ;; *) die "--https tem de ser 0 ou 1." ;; esac
+  case "$www" in keep|www|root) ;; *) die "--www tem de ser keep, www ou root." ;; esac
+  local cnt=0 seen=" "
+  for d in $doms; do
+    valid_domain "$d" || die "Domínio inválido: $d"
+    [[ "$seen" == *" $d "* ]] && die "Domínio repetido: $d"; seen+="$d "
+    o=$(domain_owner "$d") && [ "$o" != "$n" ] && die "O domínio $d já está em uso ($o)."
+    cnt=$((cnt + 1))
+  done
+  [ "$cnt" -le 30 ] || die "Máximo de 30 domínios por site."
+  [ -z "$doms" ] && ssl=none
+  f=$(site_conf "$n"); bak="$f.bak"; cp -p "$f" "$bak"
+  site_set "$n" DOMAINS "$doms"; site_set "$n" SSL "$ssl"; site_set "$n" HTTPS "$https"; site_set "$n" WWW "$www"
+  # 1) configuração sem o certificado novo (permite a validação HTTP do Let's Encrypt)
+  write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"
+  ngx_default_sync
+  if ! apply_nginx; then
+    mv -f "$bak" "$f"; write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"; ngx_default_sync; apply_nginx >/dev/null 2>&1
+    die "Configuração do nginx inválida; nada foi alterado."
+  fi
+  rm -f "$bak"
+  [ -n "$doms" ] && ports_web_open
+  # 2) certificado
+  if [ "$ssl" = le ]; then
+    local errf; errf=$(mktemp)
+    # shellcheck disable=SC2086
+    if le_issue "mp-$n" $doms 2>"$errf"; then msg="Certificado Let's Encrypt emitido."
+    else msg="Os domínios ficaram ativos em HTTP, mas o certificado não foi emitido.
+$(cat "$errf")
+Confirma que os domínios apontam para este servidor e que as portas 80 e 443 estão acessíveis da Internet."; fi
+    rm -f "$errf"
+  elif [ "$ssl" = self ]; then
+    # shellcheck disable=SC2086
+    self_issue "mp-$n" $doms && msg="Certificado autoassinado criado (o browser vai mostrar um aviso)."
+  else
+    [ -z "$doms" ] && le_delete "mp-$n"
+  fi
+  # 3) configuração final com HTTPS
+  write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"
+  apply_nginx || warn "Verifica o nginx (nginx -t)."
+  if [ -z "$doms" ]; then echo "Site $n sem domínios (só por porta)."; else echo "Domínios de $n: $doms."; fi
+  [ -n "$msg" ] && echo "$msg"
+  return 0
+}
+cmd_panel_domain(){
+  local d="${1:-}" ssl=le msg=""
+  [ $# -gt 0 ] && shift
+  [ "${1:-}" = "--ssl" ] && ssl="${2:-le}"
+  case "$ssl" in le|self) ;; *) die "--ssl tem de ser le ou self." ;; esac
+  if [ "$d" = none ] || [ -z "$d" ]; then
+    srv_set PANEL_DOMAIN ""; panel_domain_write; ngx_default_sync; apply_nginx || warn "Verifica o nginx."
+    le_delete mp-painel; echo "O painel deixou de ter domínio próprio (continua na porta $PANEL_PORT)."; return 0
+  fi
+  d=$(printf '%s' "$d" | tr 'A-Z' 'a-z')
+  valid_domain "$d" || die "Domínio inválido: $d"
+  local o; o=$(domain_owner "$d") && [ "$o" != painel ] && die "O domínio $d já está em uso pelo site $o."
+  srv_set PANEL_DOMAIN "$d"; srv_set PANEL_SSL "$ssl"
+  panel_domain_write; ngx_default_sync
+  apply_nginx || { srv_set PANEL_DOMAIN ""; panel_domain_write; ngx_default_sync; apply_nginx >/dev/null 2>&1; die "Configuração do nginx inválida; nada foi alterado."; }
+  ports_web_open
+  if [ "$ssl" = le ]; then
+    local errf; errf=$(mktemp)
+    if le_issue mp-painel "$d" 2>"$errf"; then msg="Certificado Let's Encrypt emitido."
+    else msg="O painel ficou em https://$d com um certificado autoassinado, porque o Let's Encrypt falhou:
+$(cat "$errf")"; fi
+    rm -f "$errf"
+  else
+    self_issue mp-painel "$d"; msg="Certificado autoassinado criado."
+  fi
+  panel_domain_write; apply_nginx || warn "Verifica o nginx."
+  echo "Painel disponível em https://$d (e continua em https://IP:$PANEL_PORT)."
+  echo "$msg"
+  return 0
+}
+cmd_ssl_renew(){ command -v certbot >/dev/null 2>&1 || die "O certbot não está instalado."; certbot renew --non-interactive --deploy-hook "systemctl reload nginx" 2>&1 | grep -E 'renew|success|fail|skip|No renewals' | tail -n 6; return 0; }
+
+cmd_ngx_sync(){ # regenera a configuração nginx de todos os sites, do servidor por omissão e do domínio do painel
+  local n
+  install -d -m 755 "$NGX_INC" "$NGX_CONFD" "$ACME_ROOT"
+  for n in $(site_names); do write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"; done
+  ngx_default_sync; panel_domain_write
+  apply_nginx || die "Configuração do nginx inválida depois de regenerar (nginx -t)."
+  echo "Configuração nginx regenerada."
+  return 0
+}
+
 write_auth(){
   local u=$1 hsh=$2
   jq -n --arg u "$u" --arg h "$hsh" '{user:$u,hash:$h}' > "$AUTH.tmp" || return 1
@@ -5523,9 +5879,13 @@ write_state(){
         --arg en "$(site_get "$n" ENABLED)" --arg root "$WWW_ROOT/$n/public_html" \
         --arg mem "$(lim_get "$n" MEM)" --arg up "$(lim_get "$n" UPLOAD)" --arg ex "$(lim_get "$n" EXEC)" \
         --arg it "$(lim_get "$n" INPUT_TIME)" --arg iv "$(lim_get "$n" INPUT_VARS)" --arg de "$(lim_get "$n" DISPLAY_ERRORS)" \
+        --arg doms "$(site_get "$n" DOMAINS)" --arg ssl "$(site_get "$n" SSL)" --arg hs "$(site_get "$n" HTTPS)" --arg www "$(site_get "$n" WWW)" \
+        --arg sexp "$(cert_expiry "mp-$n")" --arg cok "$( [ -n "$(site_get "$n" DOMAINS)" ] && [ "$(site_get "$n" SSL)" != none ] && cert_files "mp-$n" >/dev/null && echo 1)" \
         '{name:$name, port:($port|tonumber), php:$php, enabled:($en=="1"), root:$root,
           limits:{memory:($mem|tonumber), upload:($up|tonumber), exec:($ex|tonumber),
-                  input_time:($it|tonumber), input_vars:($iv|tonumber), display_errors:($de=="1")}}'
+                  input_time:($it|tonumber), input_vars:($iv|tonumber), display_errors:($de=="1")},
+          domains:$doms, ssl:(if $ssl == "" then "none" else $ssl end), https:(if $hs == "" then "1" else $hs end), www:(if $www == "" then "keep" else $www end),
+          ssl_exp:(if $sexp == "" then null else ($sexp|tonumber) end), https_ok:($cok == "1")}'
     done | jq -cs '.')
   pkg_cache_load
   phps=$(for v in $(php_installed); do
@@ -5565,11 +5925,13 @@ write_state(){
     --arg host "$host" --arg ip "$ip" --arg os "$os" --arg up "${up:-0}" --arg disk "${disk:-0}" --arg ram "${ram:-0}" \
     --arg load "${load:-0}" --arg cpus "${cpus:-1}" --arg pport "$PANEL_PORT" --arg pphp "$PANEL_PHP" \
     --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$(cron_state_json)" \
+    --arg smode "$(srv_get MODE lan)" --arg semail "$(srv_get EMAIL '')" --arg spd "$(srv_get PANEL_DOMAIN '')" --arg spssl "$(srv_get PANEL_SSL le)" --arg spexp "$( [ -n "$(srv_get PANEL_DOMAIN '')" ] && cert_expiry mp-painel)" \
     --arg defphp "$DEFAULT_PHP" --arg gen "$(date '+%Y-%m-%d %H:%M:%S')" --arg ver "$MP_VERSION" \
     --arg ng "$(systemctl is-active nginx 2>/dev/null)" --arg db "$(systemctl is-active mariadb 2>/dev/null)" \
     '{version:$ver, generated:$gen, default_php:$defphp, php:$php, sites:$sites, databases:$dbs,
       services:{nginx:($ng=="active"), mariadb:($db=="active")}, service_list:$svcs,
       pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm}, crons:$crons,
+      server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end)},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
   chown root:"$PANEL_SYSUSER" "$STATE.tmp"; chmod 640 "$STATE.tmp"
@@ -5601,7 +5963,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -5619,7 +5981,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v1.8.0 (mpanel)
+IDDigital Hosting — CLI v1.9.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -5652,6 +6014,13 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Modo do servidor, domínios e SSL
+  server-mode lan|internet [--email endereço]
+  site-domains <site> --set "loja.pt www.loja.pt" [--ssl le|self|none] [--https 1|0] [--www keep|www|root]
+  panel-domain <domínio>|none [--ssl le|self]
+  ssl-renew                            renova os certificados Let's Encrypt (é automático)
+  ngx-sync                             regenera a configuração nginx de todos os sites
 
 Backups (local em /var/backups/minipainel + destinos remotos via rclone)
   backup-run [--site <site>|_bd|_sistema] [--remote <destino>]   faz backup agora
@@ -5732,6 +6101,11 @@ dispatch(){
     cron-run)          cmd_cron_run "$@" ;;
     cron-sync)         cmd_cron_sync ;;
     db-link)           cmd_db_link "$@" ;;
+    site-domains)      cmd_site_domains "$@" ;;
+    server-mode)       cmd_server_mode "$@" ;;
+    panel-domain)      cmd_panel_domain "$@" ;;
+    ssl-renew)         cmd_ssl_renew ;;
+    ngx-sync)          cmd_ngx_sync ;;
     backup-start)      cmd_backup_start "$@" ;;
     bk-list)           cmd_bk_list "$@" ;;
     bk-restore)        cmd_bk_restore "$@" ;;
@@ -5767,7 +6141,7 @@ if [ "$cmd" = worker ]; then cmd_worker; exit 0; fi
 dispatch "$@"; rc=$?
 if [ "$rc" -eq 0 ]; then
   case "$cmd" in
-    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|state|refresh)
+    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|state|refresh)
       write_state || { echo "ERRO: não foi possível gerar o estado do painel ($STATE)." >&2; rc=1; } ;;
   esac
 fi
@@ -5809,7 +6183,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.8.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.9.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -6122,7 +6496,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v1.8.0
+#  mpanel-cron — IDDigital Hosting v1.9.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -6160,6 +6534,13 @@ exit "$rc"
 MPCRON
 chown root:root /usr/local/sbin/mpanel-cron
 chmod 755 /usr/local/sbin/mpanel-cron
+
+say "A configurar domínios e certificados..."
+[ -f /etc/minipainel/server.conf ] || printf 'MODE=lan\nEMAIL=\nPANEL_DOMAIN=\nPANEL_SSL=le\n' > /etc/minipainel/server.conf
+chmod 644 /etc/minipainel/server.conf
+for t in certbot.timer certbot-renew.timer snap.certbot.renew.timer; do
+  if systemctl list-unit-files "$t" >/dev/null 2>&1 && systemctl list-unit-files "$t" | grep -q "$t"; then systemctl enable --now "$t" >/dev/null 2>&1 || true; fi
+done
 
 say "A configurar os backups..."
 install -d -o root -g minipainel -m 750 /var/backups/minipainel
@@ -6228,6 +6609,10 @@ if selinux_on; then
   se_fc cert_t                 "/etc/minipainel/ssl(/.*)?"
   se_fc httpd_sys_rw_content_t "/var/lib/minipainel-pma(/.*)?"
   se_fc httpd_sys_content_t    "/var/backups/minipainel(/.*)?"
+  se_fc httpd_sys_content_t    "/var/www/minipainel-acme(/.*)?"
+  se_fc cert_t                 "/etc/letsencrypt(/.*)?"
+  install -d -m 755 /var/www/minipainel-acme /etc/letsencrypt
+  restorecon -R /var/www/minipainel-acme /etc/letsencrypt >/dev/null 2>&1 || true
   install -d -o root -g minipainel -m 750 /var/backups/minipainel
   restorecon -R /srv/www /opt/minipainel /var/lib/minipainel /var/lib/minipainel-pma /etc/minipainel/ssl || true
   semanage port -a -t http_port_t -p tcp "$PANEL_PORT" 2>/dev/null \
@@ -6274,6 +6659,7 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel fw-restore >/dev/null || warn "Não foi possível ativar a firewall de ligações (mpanel fw-restore)."
 /usr/local/sbin/mpanel cron-sync >/dev/null || warn "Não foi possível sincronizar as tarefas agendadas (mpanel cron-sync)."
 /usr/local/sbin/mpanel bk-init >/dev/null || warn "Não foi possível configurar os backups (mpanel bk-init)."
+/usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
 /usr/local/sbin/mpanel state || warn "Não foi possível gerar o estado inicial (mpanel state)."
 
 # ----------------------------------------------------------------------------
