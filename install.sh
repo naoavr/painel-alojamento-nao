@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v1.10.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.0.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v1.10.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.0.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="1.10.0"
+MP_VERSION="2.0.0"
 PHP_VERSIONS="8.2 8.3 8.4"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
@@ -506,7 +506,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v1.10.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.0.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -514,7 +514,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '1.10.0';
+const MP_VERSION = '2.0.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -771,6 +771,7 @@ const ICONS = [
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
     'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'mail'   => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
     'archive'=> '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
 ];
 /* Logótipo IDDigital Hosting (SVG em linha; o texto usa Arial ou equivalente métrico) */
@@ -1186,6 +1187,13 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .cron-out{margin:0;padding:18px 26px;max-height:60vh;overflow:auto;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--hover)}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
+.tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tabs .chip{text-decoration:none}
+.bar{height:8px;border-radius:99px;background:var(--hover);overflow:hidden;margin-bottom:4px}
+.bar span{display:block;height:100%;background:var(--acc);border-radius:99px}
+.bar span.hot{background:var(--err)}
+.dnsrec td{vertical-align:top}
+.dnsval{max-width:520px;word-break:break-all;font-size:12px;user-select:all;padding:6px 8px;border-radius:8px;background:var(--hover)}
 .lnk{border:0;background:none;color:var(--ink-2);font:inherit;text-decoration:underline;cursor:pointer;padding:0;display:block;margin:0 auto}
 .tfa{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center}
 .tfa-qr{background:#fff;border-radius:12px;padding:6px;line-height:0;min-width:180px;min-height:180px}
@@ -1351,6 +1359,7 @@ $pages = [
     'sites'    => ['Sites', 'world'],
     'ficheiros'=> ['Ficheiros', 'folder'],
     'cron'     => ['Tarefas agendadas', 'clock'],
+    'email'    => ['Email', 'mail'],
     'bd'       => ['Bases de dados', 'db'],
     'php'      => ['PHP', 'code'],
     'servicos' => ['Serviços', 'pulse'],
@@ -1584,6 +1593,91 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!preg_match(RX_SVC, $svc) || !in_array($act, ['reload', 'restart', 'start', 'stop'], true)) { $bad('Pedido inválido.'); break; }
             $names = ['reload' => 'Recarregar', 'restart' => 'Reiniciar', 'start' => 'Iniciar', 'stop' => 'Parar'];
             job_submit('service', [$svc, $act], $names[$act] . ' ' . $svc);
+            break;
+
+        case 'mail_enable':
+            $mh = strtolower(post('host'));
+            if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $mh)) { $bad('Nome do servidor de correio inválido.'); break; }
+            job_submit('mail-enable', ['--host', $mh], 'Ativar o email em ' . $mh);
+            break;
+
+        case 'mail_dom_add':
+        case 'mail_dom_del':
+        case 'mail_dns_check':
+            $md = strtolower(post('d'));
+            if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $md)) { $bad('Domínio inválido.'); break; }
+            $map = ['mail_dom_add' => ['mail-domain-add', 'Adicionar o domínio de email '], 'mail_dom_del' => ['mail-domain-del', 'Apagar o domínio de email '], 'mail_dns_check' => ['mail-dns-check', 'Verificar o DNS de ']];
+            job_submit($map[$a][0], [$md], $map[$a][1] . $md);
+            break;
+
+        case 'mail_box_add':
+            $mu = strtolower(post('user')); $md = strtolower(post('dom')); $em = $mu . '@' . $md; $pw = post_raw('pw'); $q = post('quota') !== '' ? post('quota') : '1024';
+            if (!preg_match('/^[a-z0-9]([a-z0-9._+-]{0,62}[a-z0-9])?@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $em)) { $bad('Endereço inválido.'); break; }
+            if ($pw !== '' && strlen($pw) < 10) { $bad('A password tem de ter pelo menos 10 caracteres.'); break; }
+            if (!ctype_digit($q) || (int)$q < 10) { $bad('Quota inválida (mínimo 10 MB).'); break; }
+            $args = [$em, '--quota', $q];
+            if ($pw !== '') array_push($args, '--hash', crypt($pw, '$6$' . substr(strtr(base64_encode(random_bytes(12)), '+', '.'), 0, 16) . '$'));
+            job_submit('mail-box-add', $args, 'Criar a caixa de correio ' . $em);
+            break;
+
+        case 'mail_box_set':
+            $em = post('email'); $pw = post_raw('pw'); $q = post('quota');
+            if (!preg_match('/^[a-z0-9._+-]+@[a-z0-9.-]+$/', $em)) { $bad('Endereço inválido.'); break; }
+            $args = [$em];
+            if ($pw !== '') { if (strlen($pw) < 10) { $bad('A password tem de ter pelo menos 10 caracteres.'); break; } array_push($args, '--hash', crypt($pw, '$6$' . substr(strtr(base64_encode(random_bytes(12)), '+', '.'), 0, 16) . '$')); }
+            if ($q !== '') { if (!ctype_digit($q) || (int)$q < 10) { $bad('Quota inválida (mínimo 10 MB).'); break; } array_push($args, '--quota', $q); }
+            if (count($args) === 1) { $bad('Nada para alterar.'); break; }
+            job_submit('mail-box-set', $args, 'Alterar a caixa ' . $em);
+            break;
+
+        case 'mail_box_del':
+            $em = post('email');
+            if (!preg_match('/^[a-z0-9._+-]+@[a-z0-9.-]+$/', $em)) { $bad('Endereço inválido.'); break; }
+            job_submit('mail-box-del', [$em], 'Apagar a caixa ' . $em);
+            break;
+
+        case 'mail_alias_set':
+            $al = strtolower(post('alias')); $ds = strtolower(trim(preg_replace('/[\s,;]+/', ' ', post_raw('dests')) ?? ''));
+            if (!preg_match('/^([a-z0-9._+-]*)@[a-z0-9.-]+$/', $al)) { $bad('Endereço inválido.'); break; }
+            foreach (array_filter(explode(' ', $ds)) as $x) { if (!filter_var($x, FILTER_VALIDATE_EMAIL)) { $bad('Destino inválido: ' . $x); break 2; } }
+            job_submit('mail-alias-set', [$al, $ds], 'Encaminhamento ' . $al);
+            break;
+
+        case 'mail_alias_del':
+            $al = post('alias');
+            if (!preg_match('/^([a-z0-9._+-]*)@[a-z0-9.-]+$/', $al)) { $bad('Endereço inválido.'); break; }
+            job_submit('mail-alias-del', [$al], 'Apagar o encaminhamento ' . $al);
+            break;
+
+        case 'mail_site':
+            $op = post('op');
+            if (!valid_site($site) || !in_array($op, ['limit', 'suspend', 'resume', 'purge'], true)) { $bad('Pedido inválido.'); break; }
+            if ($op === 'limit') { $lm = post('limit'); if (!ctype_digit($lm) || strlen($lm) > 6) { $bad('Limite inválido.'); break; } job_submit('mail-site', [$site, '--limit', $lm], 'Limite de envio de ' . $site . ': ' . $lm . '/hora'); }
+            else job_submit('mail-site', [$site, '--' . $op], ['suspend' => 'Suspender', 'resume' => 'Retomar', 'purge' => 'Apagar retidos do'][$op] . ' envio de email de ' . $site);
+            $back = ['t' => 'envio'];
+            break;
+
+        case 'mail_queue':
+            $op = post('op');
+            if ($op === 'flush') job_submit('mail-queue', ['flush'], 'Reenviar a fila de correio');
+            elseif ($op === 'all') job_submit('mail-queue', ['delete', 'all'], 'Esvaziar a fila de correio');
+            elseif ($op === 'del' && preg_match('/^[0-9A-Za-z]{6,20}$/', post('id'))) job_submit('mail-queue', ['delete', post('id')], 'Apagar mensagem da fila');
+            else $bad('Pedido inválido.');
+            $back = ['t' => 'fila'];
+            break;
+
+        case 'mail_settings':
+            $zs = strtolower(trim(preg_replace('/[\s,;]+/', ' ', post_raw('dnsbl')) ?? ''));
+            foreach (array_filter(explode(' ', $zs)) as $z) { if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $z)) { $bad('Lista negra inválida: ' . $z); break 2; } }
+            foreach (['site_limit', 'box_limit', 'auth_fails'] as $k) { if (!ctype_digit(post($k)) || strlen(post($k)) > 5) { $bad('Valores inválidos.'); break 2; } }
+            if ((int)post('auth_fails') < 3) { $bad('O bloqueio por falhas de login tem de ser 3 ou mais.'); break; }
+            job_submit('mail-settings', ['--dnsbl', $zs === '' ? 'none' : $zs, '--site-limit', post('site_limit'), '--box-limit', post('box_limit'), '--auth-fails', post('auth_fails')], 'Definições do antispam');
+            $back = ['t' => 'antispam'];
+            break;
+
+        case 'mail_av':
+            job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
+            $back = ['t' => 'antispam'];
             break;
 
         case 'panel_allow':
@@ -2093,8 +2187,9 @@ $titles = [
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
     'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados no painel, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
+    'email'    => 'Caixas de correio, envio dos sites e antispam.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'definicoes', 'conta']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'email', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'definicoes', 'conta']];
 $section = 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -3017,6 +3112,248 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
         </form>
       </section>
+
+<?php elseif ($page === 'email'):
+    $ml = is_array($state['mail'] ?? null) ? $state['mail'] : ['enabled' => false];
+    $mOn = !empty($ml['enabled']);
+    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'antispam'], true) ? qget('t') : 'caixas';
+    $mHost = (string)($ml['host'] ?? '');
+    $mDomains = is_array($ml['domains'] ?? null) ? $ml['domains'] : [];
+    $mBoxes = is_array($ml['boxes'] ?? null) ? $ml['boxes'] : [];
+    $mAliases = is_array($ml['aliases'] ?? null) ? $ml['aliases'] : [];
+    $mSites = is_array($ml['sites'] ?? null) ? $ml['sites'] : [];
+    $mQueue = is_array($ml['queue'] ?? null) ? $ml['queue'] : [];
+    $chk = function ($v): string { return $v === null ? '<span class="pill p-off">?</span>' : (!empty($v['ok']) ? '<span class="pill p-ok">OK</span>' : '<span class="pill p-err">Falta</span>'); };
+?>
+<?php if (!$mOn): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Ativar o email</h2><p>Caixas de correio (IMAP/POP3/SMTP), envio do mail() dos sites e antispam.</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('mail_enable') ?>
+          <div class="fgrid">
+            <label class="fld">Nome do servidor de correio<input class="in mono" name="host" required placeholder="mail.iddigital.pt" autocomplete="off"><small>Tem de ter um registo A a apontar para este servidor; é o nome que os clientes de email usam</small></label>
+          </div>
+          <?php if (!$isNet): ?><div class="warnbox" style="margin-top:14px">O servidor está em modo LAN. O email funciona para testes internos, mas para receber e entregar email na internet muda para o modo Internet (Definições).</div><?php endif; ?>
+          <div class="warnbox" style="margin-top:14px">Antes de ativar, confirma com o fornecedor do servidor que a <b>porta 25 de saída</b> está desbloqueada e pede o <b>PTR (DNS inverso)</b> do IP para o nome acima. Sem isto, o email enviado vai para o spam ou é recusado.</div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Instalar e ativar o email</button> <span class="mu">Instala Postfix, Dovecot, Rspamd, Redis e Unbound (alguns minutos).</span></div>
+        </form>
+      </section>
+<?php else: ?>
+      <nav class="tabs" aria-label="Secções do email">
+        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'antispam' => 'Antispam'] as $tk => $tl): ?>
+          <a class="chip<?= $tab === $tk ? ' prim' : '' ?>" href="?p=email&amp;t=<?= $tk ?>"><?= h($tl) ?></a>
+        <?php endforeach; ?>
+        <span class="mu" style="margin-left:auto">Servidor: <b class="mono"><?= h($mHost) ?></b> <?= !empty($ml['services_ok']) ? '<span class="pill p-ok">Serviços OK</span>' : '<span class="pill p-err">Serviço parado</span>' ?></span>
+      </nav>
+
+  <?php if ($tab === 'caixas'): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Domínios de email</h2><p>Cada domínio tem a sua chave DKIM. Cria os registos DNS e usa "Verificar".</p></div><button class="chip sm soft" type="button" data-open="dlg-md-new">Adicionar domínio</button></div>
+        <?php if (!$mDomains): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio para criar caixas de correio.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Domínio</th><th>Caixas</th><th>MX</th><th>SPF</th><th>DKIM</th><th>DMARC</th><th>PTR</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($mDomains as $i => $md): $dn = (string)$md['name']; $dd = is_array($md['dns'] ?? null) ? $md['dns'] : null; ?>
+            <tr>
+              <td class="first" data-label="Domínio"><div class="who"><span class="av <?= tone($dn) ?>"><?= ic('mail') ?></span><div class="nm"><?= h($dn) ?></div></div></td>
+              <td data-label="Caixas"><?= (int)$md['boxes'] ?></td>
+              <td data-label="MX"><?= $chk($dd['mx'] ?? null) ?></td><td data-label="SPF"><?= $chk($dd['spf'] ?? null) ?></td><td data-label="DKIM"><?= $chk($dd['dkim'] ?? null) ?></td>
+              <td data-label="DMARC"><?= $chk($dd['dmarc'] ?? null) ?></td><td data-label="PTR"><?= $chk($dd['ptr'] ?? null) ?></td>
+              <td class="act r">
+                <details class="dd"><summary class="iconbtn" aria-label="Ações de <?= h($dn) ?>"><?= ic('dots') ?></summary>
+                  <div class="dd-menu">
+                    <button type="button" data-open="dlg-md-dns-<?= $i ?>"><?= ic('world') ?>Registos DNS</button>
+                    <form method="post"><?= act_fields('mail_dns_check', ['d' => $dn]) ?><button type="submit"><?= ic('reload') ?>Verificar DNS</button></form>
+                    <hr>
+                    <form method="post" data-confirm="Apagar o domínio <?= h($dn) ?> com TODAS as caixas de correio e mensagens? Não é possível desfazer."><?= act_fields('mail_dom_del', ['d' => $dn]) ?><button type="submit" class="dan"><?= ic('trash') ?>Apagar</button></form>
+                  </div></details>
+                <dialog id="dlg-md-dns-<?= $i ?>" style="width:min(980px,calc(100vw - 24px))">
+                  <div class="dlg-h"><div><h3>Registos DNS de <?= h($dn) ?></h3><p>Cria estes registos na zona DNS do domínio.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+                  <div class="dlg-b">
+                    <?php $ip = (string)($dd['ip'] ?? ''); $recs = [
+                        ['MX', $dn, '10 ' . $mHost, $dd['mx'] ?? null],
+                        ['TXT', $dn, 'v=spf1 mx a:' . $mHost . ' ~all', $dd['spf'] ?? null],
+                        ['TXT', 'mp._domainkey.' . $dn, (string)($md['dkim'] ?? ''), $dd['dkim'] ?? null],
+                        ['TXT', '_dmarc.' . $dn, 'v=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:postmaster@' . $dn, $dd['dmarc'] ?? null],
+                        ['A', $mHost, $ip !== '' ? $ip : 'IP público do servidor', $dd['a'] ?? null],
+                        ['PTR', $ip !== '' ? $ip : 'IP do servidor', $mHost . ' (pedir ao fornecedor)', $dd['ptr'] ?? null]]; ?>
+                    <table class="list dnsrec"><thead><tr><th>Tipo</th><th>Nome</th><th>Valor</th><th>Estado</th></tr></thead><tbody>
+                    <?php foreach ($recs as $r): ?><tr><td class="mono"><?= h($r[0]) ?></td><td class="mono"><?= h($r[1]) ?></td><td><div class="dnsval mono"><?= h($r[2]) ?></div></td><td><?= $chk($r[3]) ?></td></tr><?php endforeach; ?>
+                    </tbody></table>
+                    <?php if ($dd !== null): ?><p class="mu" style="margin:0">Última verificação: <?= h(ago((int)($dd['checked'] ?? 0), time())) ?>. As alterações de DNS podem demorar algumas horas a propagar.</p><?php endif; ?>
+                  </div>
+                  <div class="dlg-f"><form method="post"><?= act_fields('mail_dns_check', ['d' => $dn]) ?><button class="btn" type="submit">Verificar agora</button></form><button class="btn sec" type="button" data-close>Fechar</button></div>
+                </dialog>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Caixas de correio</h2><p>IMAP <span class="mono"><?= h($mHost) ?>:993</span> · POP3 <span class="mono">:995</span> · SMTP <span class="mono">:465</span> (SSL) ou <span class="mono">:587</span> (STARTTLS) · utilizador = endereço completo</p></div><?php if ($mDomains): ?><button class="chip sm soft" type="button" data-open="dlg-mb-new">Nova caixa</button><?php endif; ?></div>
+        <?php if (!$mBoxes): ?><div class="empty">Ainda não há caixas de correio.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Endereço</th><th>Ocupação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($mBoxes as $i => $b): $em = (string)$b['email']; $q = max(1, (int)$b['quota']); $u = (int)$b['used']; $pc = min(100, (int)round($u * 100 / $q)); ?>
+            <tr>
+              <td class="first" data-label="Endereço"><div class="who"><span class="av <?= tone($em) ?>"><?= h(strtoupper(substr($em, 0, 1))) ?></span><div class="nm"><?= h($em) ?></div></div></td>
+              <td data-label="Ocupação" style="min-width:220px"><div class="bar"><span style="width:<?= $pc ?>%"<?= $pc >= 90 ? ' class="hot"' : '' ?>></span></div><div class="mu"><?= $u ?> MB de <?= $q ?> MB</div></td>
+              <td class="act r">
+                <details class="dd"><summary class="iconbtn" aria-label="Ações de <?= h($em) ?>"><?= ic('dots') ?></summary>
+                  <div class="dd-menu">
+                    <button type="button" data-open="dlg-mb-<?= $i ?>"><?= ic('key') ?>Password e quota</button>
+                    <hr>
+                    <form method="post" data-confirm="Apagar a caixa <?= h($em) ?> e todas as mensagens?"><?= act_fields('mail_box_del', ['email' => $em]) ?><button type="submit" class="dan"><?= ic('trash') ?>Apagar</button></form>
+                  </div></details>
+                <dialog id="dlg-mb-<?= $i ?>"><form method="post"><?= act_fields('mail_box_set', ['email' => $em]) ?>
+                  <div class="dlg-h"><h3><?= h($em) ?></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+                  <div class="dlg-b"><div class="fgrid">
+                    <label class="fld">Nova password<input class="in" type="password" name="pw" minlength="10" autocomplete="new-password"><small>Vazio = não altera</small></label>
+                    <label class="fld">Quota (MB)<input class="in" name="quota" inputmode="numeric" pattern="[0-9]{2,7}" value="<?= $q ?>"></label>
+                  </div></div>
+                  <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+                </form></dialog>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Encaminhamentos e aliases</h2><p>Endereços que reencaminham para outras caixas (internas ou externas). Usa <span class="mono">@dominio.pt</span> para receber todos os endereços.</p></div><?php if ($mDomains): ?><button class="chip sm soft" type="button" data-open="dlg-ma-new">Novo encaminhamento</button><?php endif; ?></div>
+        <?php if (!$mAliases): ?><div class="empty">Sem encaminhamentos.</div>
+        <?php else: ?>
+        <div class="row-list">
+          <?php foreach ($mAliases as $a): ?>
+            <div class="item"><span class="av t-vio"><?= ic('mail') ?></span><div class="grow"><div class="nm mono"><?= h($a['alias']) ?></div><div class="mu">→ <?= h(implode(', ', (array)$a['dests'])) ?></div></div>
+              <form method="post" data-confirm="Apagar o encaminhamento <?= h($a['alias']) ?>?"><?= act_fields('mail_alias_del', ['alias' => (string)$a['alias']]) ?><button class="btn sm sec" type="submit">Apagar</button></form></div>
+          <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+      </section>
+
+      <dialog id="dlg-md-new"><form method="post"><?= act_fields('mail_dom_add') ?>
+        <div class="dlg-h"><h3>Adicionar domínio de email</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b"><label class="fld">Domínio<input class="in mono" name="d" required placeholder="iddigital.pt" autocomplete="off"><small>É gerada uma chave DKIM; depois cria os registos DNS indicados</small></label></div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
+      </form></dialog>
+      <dialog class="drawer" id="dlg-mb-new"><form method="post" autocomplete="off"><?= act_fields('mail_box_add') ?>
+        <div class="dlg-h"><div><h3>Nova caixa de correio</h3><p>O utilizador para os clientes de email é o endereço completo.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b">
+          <div class="fgrid">
+            <label class="fld">Nome<input class="in mono" name="user" required pattern="[a-z0-9]([a-z0-9._+\-]{0,62}[a-z0-9])?" placeholder="geral"></label>
+            <label class="fld">Domínio<select class="in" name="dom"><?php foreach ($mDomains as $md): ?><option value="<?= h($md['name']) ?>">@<?= h($md['name']) ?></option><?php endforeach; ?></select></label>
+            <label class="fld">Password<input class="in" type="password" name="pw" minlength="10" autocomplete="new-password"><small>Vazio = gerada e mostrada no fim</small></label>
+            <label class="fld">Quota (MB)<input class="in" name="quota" inputmode="numeric" pattern="[0-9]{2,7}" value="1024"></label>
+          </div>
+        </div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Criar caixa</button></div>
+      </form></dialog>
+      <dialog id="dlg-ma-new"><form method="post"><?= act_fields('mail_alias_set') ?>
+        <div class="dlg-h"><h3>Novo encaminhamento</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b">
+          <label class="fld">Endereço<input class="in mono" name="alias" required placeholder="info@iddigital.pt ou @iddigital.pt"></label>
+          <label class="fld">Encaminhar para<textarea class="in mono cron-ta" name="dests" rows="3" required placeholder="geral@iddigital.pt&#10;outro@gmail.com"></textarea><small>Um por linha (até 20)</small></label>
+        </div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+      </form></dialog>
+
+  <?php elseif ($tab === 'envio'): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Envio de email pelos sites</h2><p>O mail() do PHP de cada site passa por uma fila do painel: limite por hora, análise antispam e DKIM antes de sair. Se um site for comprometido e começar a enviar spam, o envio dele é suspenso automaticamente sem afetar os outros.</p></div></div>
+        <table class="list cards">
+          <thead><tr><th>Site</th><th class="r">Última hora</th><th class="r">24 h</th><th class="r">Limite/hora</th><th class="r">Retidos</th><th class="r">Rejeitados (spam)</th><th>Estado</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($mSites as $i => $ms): $sn = (string)$ms['site']; $lim = $ms['limit'] ?? null; ?>
+            <tr>
+              <td class="first" data-label="Site"><div class="who"><span class="av <?= tone($sn) ?>"><?= h(substr($sn, 0, 1)) ?></span><div class="nm"><?= h($sn) ?></div></div></td>
+              <td class="r" data-label="Última hora"><?= (int)$ms['sent_1h'] ?></td>
+              <td class="r" data-label="24 h"><?= (int)$ms['sent_24h'] ?></td>
+              <td class="r" data-label="Limite/hora"><?= $lim === null ? (int)($ml['site_limit'] ?? 100) . ' <span class="mu">(geral)</span>' : (int)$lim ?></td>
+              <td class="r" data-label="Retidos"><?= (int)$ms['held'] ?></td>
+              <td class="r" data-label="Rejeitados"><?= (int)$ms['rejected'] > 0 ? '<b style="color:var(--err)">' . (int)$ms['rejected'] . '</b>' : '0' ?></td>
+              <td data-label="Estado"><?= !empty($ms['suspended']) ? '<span class="pill p-err">Suspenso</span><div class="mu">' . h($ms['why'] ?? '') . '</div>' : '<span class="pill p-ok">Ativo</span>' ?></td>
+              <td class="act r">
+                <details class="dd"><summary class="iconbtn" aria-label="Ações de <?= h($sn) ?>"><?= ic('dots') ?></summary>
+                  <div class="dd-menu">
+                    <button type="button" data-open="dlg-msl-<?= $i ?>"><?= ic('sliders') ?>Mudar limite</button>
+                    <?php if (!empty($ms['suspended'])): ?><form method="post"><?= act_fields('mail_site', ['site' => $sn, 'op' => 'resume']) ?><button type="submit"><?= ic('play') ?>Retomar envio</button></form>
+                    <?php else: ?><form method="post"><?= act_fields('mail_site', ['site' => $sn, 'op' => 'suspend']) ?><button type="submit"><?= ic('ban') ?>Suspender envio</button></form><?php endif; ?>
+                    <hr>
+                    <form method="post" data-confirm="Apagar as mensagens retidas e rejeitadas de <?= h($sn) ?>?"><?= act_fields('mail_site', ['site' => $sn, 'op' => 'purge']) ?><button type="submit" class="dan"><?= ic('trash') ?>Apagar retidos</button></form>
+                  </div></details>
+                <dialog id="dlg-msl-<?= $i ?>"><form method="post"><?= act_fields('mail_site', ['site' => $sn, 'op' => 'limit']) ?>
+                  <div class="dlg-h"><h3>Limite de envio de <?= h($sn) ?></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+                  <div class="dlg-b"><label class="fld">Emails por hora<input class="in" name="limit" inputmode="numeric" pattern="[0-9]{1,6}" value="<?= (int)($lim ?? ($ml['site_limit'] ?? 100)) ?>"><small>Acima do limite as mensagens ficam retidas e saem na hora seguinte</small></label></div>
+                  <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+                </form></dialog>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <div class="card-f mu">Os sites não podem usar a porta 25 nem o sendmail diretamente (bloqueado na firewall e no Postfix). O remetente só é aceite se for de um domínio do próprio site; caso contrário é usado <span class="mono">&lt;site&gt;@<?= h($mHost) ?></span>. Ao fim de 5 mensagens com spam numa hora, o envio do site é suspenso.</div>
+      </section>
+
+  <?php elseif ($tab === 'fila'): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Fila de correio</h2><p>Mensagens que o Postfix ainda não conseguiu entregar (servidor de destino indisponível, recusa temporária…).</p></div>
+          <div style="display:flex;gap:8px"><form method="post"><?= act_fields('mail_queue', ['op' => 'flush']) ?><button class="btn sm sec" type="submit">Reenviar tudo</button></form>
+          <?php if ($mQueue): ?><form method="post" data-confirm="Apagar todas as mensagens da fila?"><?= act_fields('mail_queue', ['op' => 'all']) ?><button class="btn sm dan" type="submit">Esvaziar</button></form><?php endif; ?></div></div>
+        <?php if (!$mQueue): ?><div class="empty">A fila está vazia.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Remetente</th><th>Destinatário</th><th>Motivo</th><th>Há</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($mQueue as $qm): ?>
+            <tr>
+              <td class="first mono" data-label="Remetente"><?= h($qm['from'] ?? '') ?></td>
+              <td class="mono" data-label="Destinatário"><?= h($qm['to'] ?? '') ?></td>
+              <td data-label="Motivo" class="mu" style="max-width:420px"><?= h($qm['why'] ?? '') ?></td>
+              <td data-label="Há"><?= h(ago((int)($qm['t'] ?? time()), time())) ?></td>
+              <td class="act r"><form method="post"><?= act_fields('mail_queue', ['op' => 'del', 'id' => (string)($qm['id'] ?? '')]) ?><button class="btn sm sec" type="submit">Apagar</button></form></td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+
+  <?php else: ?>
+      <div class="grid2e">
+      <section class="card">
+        <div class="card-h"><div><h2>Antispam</h2><p>Postscreen + Rspamd: SPF, DKIM, DMARC, reputação, greylisting e listas negras.</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('mail_settings') ?>
+          <label class="fld">Listas negras próprias (DNSBL)<textarea class="in mono cron-ta" name="dnsbl" rows="3" placeholder="dnsbl.3rhost.pt"><?= h(str_replace(' ', "\n", (string)($ml['dnsbl'] ?? ''))) ?></textarea><small>Uma zona por linha. Juntam-se à Spamhaus ZEN, Barracuda, SpamCop e PSBL.</small></label>
+          <div class="fgrid" style="margin-top:14px">
+            <label class="fld">Limite por site (emails/hora)<input class="in" name="site_limit" inputmode="numeric" pattern="[0-9]{1,5}" value="<?= (int)($ml['site_limit'] ?? 100) ?>"></label>
+            <label class="fld">Limite por caixa (emails/hora)<input class="in" name="box_limit" inputmode="numeric" pattern="[0-9]{1,5}" value="<?= (int)($ml['box_limit'] ?? 200) ?>"></label>
+            <label class="fld">Bloquear IP após falhas de login (10 min)<input class="in" name="auth_fails" inputmode="numeric" pattern="[0-9]{1,5}" value="<?= (int)($ml['auth_fails'] ?? 10) ?>"><small>O IP fica bloqueado 1 hora em todas as portas</small></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">As listas negras são consultadas através de um resolver DNS próprio (Unbound), porque a Spamhaus não responde a resolvers públicos.</div>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>Antivírus</h2><p>ClamAV analisa os anexos de todo o email que entra e sai.</p></div><span class="pill <?= !empty($ml['clamav']) ? 'p-ok' : 'p-off' ?>"><?= !empty($ml['clamav']) ? 'Ativo' : 'Desativado' ?></span></div>
+        <form method="post" class="card-b"<?= empty($ml['clamav']) ? '' : ' data-confirm="Desativar o antivírus?"' ?>>
+          <?= act_fields('mail_av', ['op' => !empty($ml['clamav']) ? 'off' : 'on']) ?>
+          <button class="btn<?= !empty($ml['clamav']) ? ' sec' : '' ?>" type="submit"><?= !empty($ml['clamav']) ? 'Desativar' : 'Ativar antivírus' ?></button>
+        </form>
+        <div class="card-f mu">Usa cerca de 1,2 GB de RAM. Confirma na página Recursos que o servidor tem memória livre suficiente.</div>
+      </section>
+      </div>
+  <?php endif; ?>
+<?php endif; ?>
 
 <?php elseif ($page === 'auditoria'):
     $alog = [];
@@ -6172,7 +6509,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v1.10.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.0.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -6568,11 +6905,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v1.10.0
+#  mpanel — IDDigital Hosting CLI v2.0.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="1.10.0"
+MP_VERSION="2.0.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -6730,6 +7067,8 @@ php_admin_value[session.gc_divisor] = 100
 php_admin_value[error_log] = $WWW_ROOT/$n/logs/php-error.log
 php_admin_flag[log_errors] = on
 php_admin_flag[expose_php] = off
+php_admin_value[sendmail_path] = /usr/local/sbin/mp-sendmail $n
+php_admin_flag[mail.add_x_header] = on
 php_value[memory_limit] = $(lim_get "$n" MEM)M
 php_value[upload_max_filesize] = $(lim_get "$n" UPLOAD)M
 php_value[post_max_size] = $(lim_get "$n" UPLOAD)M
@@ -6965,6 +7304,7 @@ EOF
 
   echo "Site '$n' criado na porta $port com PHP $v."
   echo "Pasta: $d/public_html"
+  mail_on && mail_site_spool "$n"
   if [ -n "$adoms" ]; then ( cmd_site_domains "$n" --set "$adoms" --ssl "$assl" ) 2>&1 || true; fi
   return 0
 }
@@ -6986,6 +7326,7 @@ cmd_site_del(){
   if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" || warn "Verifica o PHP-FPM $PANEL_PHP."; fi
   rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
   rm -rf "/etc/cron.d/minipainel-$n" "${CRON_DIR:?}/$n" "$CRON_DIR/$n.json"; touch /etc/cron.d 2>/dev/null
+  rm -rf "${MSPOOL:?}/$n" "${MLIB:?}/rejected/$n" "$MLIB/rejected/$n.log" "$MLIB/sent/$n"
   if [ -s "$DBMAP" ]; then jq --arg s "$n" 'with_entries(select(.value != $s))' "$DBMAP" > "$DBMAP.tmp" && mv -f "$DBMAP.tmp" "$DBMAP"; fi
   sleep 1
   pkill -u "mp_$n" >/dev/null 2>&1
@@ -7454,6 +7795,9 @@ cmd_service(){
     mariadb) unit=mariadb; name=MariaDB ;;
     php-*)   v="${id#php-}"; php_is_installed "$v" || die "PHP $v não está instalado."
              unit=$(php_service "$v"); name="PHP-FPM $v" ;;
+    postfix|dovecot|rspamd|unbound) mail_on || die "O email não está ativo."; unit=$id; name=$id ;;
+    redis) mail_on || die "O email não está ativo."; unit=$(mail_svc_redis); name=Redis ;;
+    clamav) [ "$(mail_get CLAMAV 0)" = 1 ] || die "O antivírus não está ativo."; unit=clamav-daemon; systemctl list-unit-files clamd@.service >/dev/null 2>&1 && [ "$OS_FAMILY" != debian ] && unit=clamd@scan; name=ClamAV ;;
     *) die "Serviço desconhecido: $id (nginx, mariadb ou php-X.Y)." ;;
   esac
   if [ "$act" = stop ]; then
@@ -7676,6 +8020,7 @@ cmd_fw_restore(){
     fw_nft_add "$ip" "$left" >/dev/null 2>&1 || warn "Não foi possível repor o bloqueio de $ip."
   done < "$FW_BLOCKS"
   fw_write_state
+  mail_fw_apply
   echo "Bloqueios repostos: $( [ -f "$FW_BLOCKS" ] && wc -l < "$FW_BLOCKS" || echo 0)."
   return 0
 }
@@ -8679,6 +9024,622 @@ bk_decrypt_dir(){ # pasta (decifra no lugar)
   rm -f "$pf" "$dir/ENCRYPTED"
 }
 
+# =============================== EMAIL ======================================
+MAIL_CONF=/etc/minipainel/mail.conf
+MAIL_DATA=/etc/minipainel/mail/data.json      # {domains:{}, boxes:{}, aliases:{}}
+VMAIL=/var/mail/vhosts
+PF_MP=/etc/postfix/mp
+DV_USERS=/etc/dovecot/mp-users
+MSPOOL=/var/spool/mp-mail                      # envio dos sites (escrito pelos sites)
+MLIB=/var/lib/minipainel/mail                  # contadores, retidos e rejeitados (só root)
+RSPAMD_LOCAL=/etc/rspamd/local.d
+DKIM_DIR=/var/lib/rspamd/dkim
+mail_get(){ local v; v=$(grep -m1 "^$1=" "$MAIL_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
+mail_set(){
+  install -d -m 755 /etc/minipainel; touch "$MAIL_CONF"; chmod 644 "$MAIL_CONF"
+  if grep -q "^$1=" "$MAIL_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$MAIL_CONF"; else echo "$1=$2" >> "$MAIL_CONF"; fi
+}
+mail_on(){ [ "$(mail_get ENABLED 0)" = 1 ]; }
+mail_need(){ mail_on || die "O email não está ativo. Ativa-o na página Email ou com: mpanel mail-enable --host mail.dominio.pt"; }
+mail_data(){ if [ -s "$MAIL_DATA" ]; then cat "$MAIL_DATA"; else echo '{"domains":{},"boxes":{},"aliases":{}}'; fi; }
+mail_data_save(){
+  install -d -m 700 "$(dirname "$MAIL_DATA")"
+  printf '%s\n' "$1" | jq '.' > "$MAIL_DATA.tmp" && chmod 600 "$MAIL_DATA.tmp" && mv -f "$MAIL_DATA.tmp" "$MAIL_DATA"
+}
+valid_email(){ local re='^[a-z0-9]([a-z0-9._+-]{0,62}[a-z0-9])?@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$'; [[ "$1" =~ $re ]]; }
+valid_mailhash(){ local re='^\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$'; [[ "$1" =~ $re ]]; }
+mail_hash_stdin(){ "$(php_cli "$PANEL_PHP")" -r 'echo crypt(rtrim(stream_get_contents(STDIN), "\n"), "\$6\$" . substr(strtr(base64_encode(random_bytes(12)), "+", "."), 0, 16) . "\$");'; }
+mail_svc_redis(){ if systemctl list-unit-files redis-server.service >/dev/null 2>&1 && systemctl list-unit-files redis-server.service | grep -q redis-server; then echo redis-server; else echo redis; fi; }
+mail_cert(){ cert_files mp-mail || echo "/etc/minipainel/ssl/panel.crt /etc/minipainel/ssl/panel.key"; }
+
+# --- recursivo DNS local (as listas negras não respondem a resolvers públicos) ---
+mail_resolver_setup(){
+  install -d -m 755 /etc/unbound/unbound.conf.d
+  cat > /etc/unbound/unbound.conf.d/minipainel.conf <<'EOF'
+# IDDigital Hosting — resolver local para o antispam (listas negras)
+server:
+    interface: 127.0.0.1
+    access-control: 127.0.0.0/8 allow
+    hide-identity: yes
+    hide-version: yes
+    qname-minimisation: yes
+    prefetch: yes
+EOF
+  if [ -d /etc/unbound/unbound.conf.d ] && ! grep -q 'unbound.conf.d' /etc/unbound/unbound.conf 2>/dev/null; then
+    echo 'include: "/etc/unbound/unbound.conf.d/*.conf"' >> /etc/unbound/unbound.conf
+  fi
+  if [ ! -s /var/lib/unbound/root.key ]; then
+    install -d -m 755 /var/lib/unbound
+    command -v unbound-anchor >/dev/null 2>&1 && timeout 30 unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1
+    [ -s /var/lib/unbound/root.key ] || cp /usr/share/dns/root.key /var/lib/unbound/root.key 2>/dev/null
+    chown unbound:unbound /var/lib/unbound /var/lib/unbound/root.key 2>/dev/null
+  fi
+  systemctl enable --now unbound >/dev/null 2>&1; systemctl restart unbound >/dev/null 2>&1
+  # só muda o resolver do sistema se o unbound estiver mesmo a responder
+  if ! mail_unbound_ok; then
+    warn "O Unbound não está a responder em 127.0.0.1; o resolver do sistema não foi alterado (as listas negras podem não funcionar)."
+    return 0
+  fi
+  if systemctl is-active systemd-resolved >/dev/null 2>&1; then
+    install -d -m 755 /etc/systemd/resolved.conf.d
+    printf '[Resolve]\nDNS=127.0.0.1\nDomains=~.\n' > /etc/systemd/resolved.conf.d/minipainel.conf
+    systemctl restart systemd-resolved >/dev/null 2>&1
+  else
+    if [ -d /etc/NetworkManager/conf.d ]; then printf '[main]\ndns=none\n' > /etc/NetworkManager/conf.d/90-minipainel-dns.conf; systemctl reload NetworkManager >/dev/null 2>&1; fi
+    [ -f /etc/resolv.conf.minipainel ] || cp -pL /etc/resolv.conf /etc/resolv.conf.minipainel 2>/dev/null
+    [ -L /etc/resolv.conf ] && rm -f /etc/resolv.conf
+    printf '# IDDigital Hosting — resolver local (unbound); original em /etc/resolv.conf.minipainel\nnameserver 127.0.0.1\noptions edns0 trust-ad\n' > /etc/resolv.conf
+  fi
+}
+
+mail_unbound_ok(){ local i; for i in 1 2 3 4 5 6; do dig +short +time=2 +tries=1 @127.0.0.1 . NS 2>/dev/null | grep -q . && return 0; sleep 1; done; return 1; }
+mail_dnsbl_sites(){ # para o postscreen
+  local own s out="zen.spamhaus.org=127.0.0.[2..11]*3, b.barracudacentral.org=127.0.0.2*2, bl.spamcop.net*1, psbl.surriel.com*1"
+  own=$(mail_get DNSBL "dnsbl.3rhost.pt")
+  for s in $own; do out+=", $s*3"; done
+  echo "$out"
+}
+mail_postfix_config(){
+  local h c ip6=all cf kf
+  h=$(mail_get HOST); c=$(mail_cert); cf=${c%% *}; kf=${c##* }
+  [ "${IPV6:-0}" = 1 ] || ip6=ipv4
+  install -d -m 755 "$PF_MP"
+  [ -s /etc/postfix/main.cf ] || printf '# IDDigital Hosting — Postfix (gerido pelo painel com postconf)\n' > /etc/postfix/main.cf
+  printf '/^mp_/ x\n' > "$PF_MP/site_users"
+  postconf -e "myhostname = $h" "myorigin = \$myhostname" "mydestination = \$myhostname, localhost" "mynetworks = 127.0.0.0/8 [::1]/128" \
+    "inet_interfaces = all" "inet_protocols = $ip6" "smtpd_banner = \$myhostname ESMTP" "biff = no" "append_dot_mydomain = no" \
+    "virtual_mailbox_domains = texthash:$PF_MP/vdomains" "virtual_mailbox_maps = texthash:$PF_MP/vmailbox" \
+    "virtual_alias_maps = texthash:$PF_MP/valias" "virtual_transport = lmtp:unix:private/dovecot-lmtp" \
+    "smtpd_sasl_type = dovecot" "smtpd_sasl_path = private/auth" "smtpd_sasl_auth_enable = no" \
+    "smtpd_sender_login_maps = texthash:$PF_MP/sender_login" \
+    "smtpd_tls_cert_file = $cf" "smtpd_tls_key_file = $kf" "smtpd_tls_security_level = may" "smtpd_tls_auth_only = yes" \
+    "smtpd_tls_protocols = >=TLSv1.2" "smtpd_tls_mandatory_protocols = >=TLSv1.2" "smtp_tls_security_level = may" "smtp_tls_protocols = >=TLSv1.2" \
+    "smtpd_helo_required = yes" "disable_vrfy_command = yes" "strict_rfc821_envelopes = yes" \
+    "smtpd_helo_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_invalid_helo_hostname, reject_non_fqdn_helo_hostname" \
+    "smtpd_sender_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_non_fqdn_sender, reject_unknown_sender_domain" \
+    "smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination" \
+    "smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination, reject_non_fqdn_recipient, reject_unknown_recipient_domain" \
+    "milter_protocol = 6" "milter_default_action = accept" "milter_mail_macros = i {mail_addr} {client_addr} {client_name} {auth_authen}" \
+    "smtpd_milters = inet:127.0.0.1:11332" "non_smtpd_milters = inet:127.0.0.1:11332" \
+    "message_size_limit = 52428800" "mailbox_size_limit = 0" "recipient_delimiter = +" \
+    "authorized_submit_users = !regexp:$PF_MP/site_users, static:anyone" \
+    "postscreen_access_list = permit_mynetworks" "postscreen_dnsbl_sites = $(mail_dnsbl_sites)" \
+    "postscreen_dnsbl_threshold = 3" "postscreen_dnsbl_action = enforce" "postscreen_greet_action = enforce" \
+    "postscreen_pipelining_enable = no" "postscreen_non_smtp_command_enable = no" "postscreen_bare_newline_enable = no" \
+    "smtpd_client_connection_rate_limit = 30" "smtpd_client_message_rate_limit = 100" "anvil_rate_time_unit = 60s" \
+    "smtpd_client_auth_rate_limit = 10" "compatibility_level = 3.6"
+  postconf -M "smtp/inet=smtp inet n - n - 1 postscreen" \
+              "smtpd/pass=smtpd pass - - n - - smtpd" \
+              "dnsblog/unix=dnsblog unix - - n - 0 dnsblog" \
+              "tlsproxy/unix=tlsproxy unix - - n - 0 tlsproxy" \
+              "submission/inet=submission inet n - n - - smtpd" \
+              "smtps/inet=smtps inet n - n - - smtpd"
+  local svc
+  for svc in submission smtps; do
+    postconf -P "$svc/inet/syslog_name=postfix/$svc" "$svc/inet/smtpd_sasl_auth_enable=yes" \
+      "$svc/inet/smtpd_client_restrictions=permit_sasl_authenticated,reject" \
+      "$svc/inet/smtpd_sender_restrictions=reject_sender_login_mismatch,permit_sasl_authenticated,reject" \
+      "$svc/inet/smtpd_relay_restrictions=permit_sasl_authenticated,reject" \
+      "$svc/inet/smtpd_recipient_restrictions=permit_sasl_authenticated,reject" \
+      "$svc/inet/milter_macro_daemon_name=ORIGINATING"
+  done
+  postconf -P "submission/inet/smtpd_tls_security_level=encrypt" "smtps/inet/smtpd_tls_wrappermode=yes"
+}
+mail_dovecot_config(){
+  local h c vu vg
+  h=$(mail_get HOST); c=$(mail_cert); vu=$(id -u vmail); vg=$(id -g vmail)
+  sed -i 's/^!include auth-system.conf.ext/#!include auth-system.conf.ext/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null
+  install -d -m 755 /etc/dovecot/sieve
+  cat > /etc/dovecot/sieve/mp-spam.sieve <<'EOF'
+require ["fileinto", "mailbox"];
+if anyof (header :contains "X-Spam" "Yes", header :contains "X-Spam-Status" "Yes") { fileinto :create "Junk"; stop; }
+EOF
+  cat > /etc/dovecot/conf.d/99-minipainel.conf <<EOF
+# IDDigital Hosting — caixas de correio virtuais (gerado pelo painel; não editar à mão)
+protocols = imap pop3 lmtp sieve
+listen = *$([ "${IPV6:-0}" = 1 ] && echo ', ::')
+ssl = required
+ssl_cert = <${c%% *}
+ssl_key = <${c##* }
+ssl_min_protocol = TLSv1.2
+ssl_prefer_server_ciphers = yes
+disable_plaintext_auth = yes
+auth_mechanisms = plain login
+auth_verbose = yes
+auth_failure_delay = 3 secs
+mail_location = maildir:~/Maildir
+mail_privileged_group = vmail
+first_valid_uid = $vu
+last_valid_uid = $vu
+passdb {
+  driver = passwd-file
+  args = scheme=SHA512-CRYPT username_format=%Lu $DV_USERS
+}
+userdb {
+  driver = passwd-file
+  args = username_format=%Lu $DV_USERS
+  default_fields = uid=$vu gid=$vg home=$VMAIL/%Ld/%Ln
+}
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+protocol lmtp {
+  mail_plugins = \$mail_plugins quota sieve
+  postmaster_address = postmaster@$h
+}
+protocol imap {
+  mail_plugins = \$mail_plugins quota imap_quota
+}
+protocol pop3 {
+  mail_plugins = \$mail_plugins quota
+}
+namespace inbox {
+  mailbox Drafts {
+    auto = subscribe
+    special_use = \\Drafts
+  }
+  mailbox Junk {
+    auto = subscribe
+    special_use = \\Junk
+  }
+  mailbox Trash {
+    auto = subscribe
+    special_use = \\Trash
+  }
+  mailbox Sent {
+    auto = subscribe
+    special_use = \\Sent
+  }
+}
+plugin {
+  quota = maildir:Quota
+  quota_rule = *:storage=1G
+  quota_exceeded_message = A caixa de correio está cheia.
+  sieve = file:~/sieve;active=~/.dovecot.sieve
+  sieve_before = /etc/dovecot/sieve/mp-spam.sieve
+}
+EOF
+  sievec /etc/dovecot/sieve/mp-spam.sieve >/dev/null 2>&1
+  touch "$DV_USERS"; chown root:dovecot "$DV_USERS"; chmod 640 "$DV_USERS"
+}
+mail_rspamd_config(){
+  install -d -m 755 "$RSPAMD_LOCAL"
+  install -d -o _rspamd -g _rspamd -m 750 "$DKIM_DIR" 2>/dev/null || install -d -o rspamd -g rspamd -m 750 "$DKIM_DIR"
+  printf 'bind_socket = "127.0.0.1:11332";\nmilter = yes;\ntimeout = 120s;\nupstream "local" {\n  default = yes;\n  self_scan = yes;\n}\n' > "$RSPAMD_LOCAL/worker-proxy.inc"
+  printf 'bind_socket = "127.0.0.1:11333";\n' > "$RSPAMD_LOCAL/worker-normal.inc"
+  printf 'bind_socket = "127.0.0.1:11334";\n' > "$RSPAMD_LOCAL/worker-controller.inc"
+  if mail_unbound_ok; then printf 'dns {\n  nameserver = ["127.0.0.1:53:10"];\n}\nlocal_addrs = "127.0.0.0/8, ::1";\n' > "$RSPAMD_LOCAL/options.inc"
+  else printf 'local_addrs = "127.0.0.0/8, ::1";\n' > "$RSPAMD_LOCAL/options.inc"; fi
+  printf 'servers = "127.0.0.1";\n' > "$RSPAMD_LOCAL/redis.conf"
+  printf 'reject = 15;\nadd_header = 6;\ngreylist = 4;\n' > "$RSPAMD_LOCAL/actions.conf"
+  printf 'enabled = true;\n' > "$RSPAMD_LOCAL/greylist.conf"
+  printf 'path = "%s/$domain.$selector.key";\nselector = "mp";\nallow_username_mismatch = true;\nsign_local = true;\nsign_authenticated = true;\nuse_domain = "header";\nallow_hdrfrom_mismatch = false;\n' "$DKIM_DIR" > "$RSPAMD_LOCAL/dkim_signing.conf"
+  cp "$RSPAMD_LOCAL/dkim_signing.conf" "$RSPAMD_LOCAL/arc.conf"
+  printf 'use = ["x-spamd-bar", "x-spam-level", "x-spam-status", "authentication-results"];\nauthenticated_headers = ["authentication-results"];\n' > "$RSPAMD_LOCAL/milter_headers.conf"
+  printf 'rates {\n  user = {\n    bucket = {\n      burst = 100;\n      rate = "%s / 1h";\n    }\n  }\n}\n' "$(mail_get BOX_LIMIT 200)" > "$RSPAMD_LOCAL/ratelimit.conf"
+  {
+    printf 'rbls {\n'
+    local n=0 z
+    for z in $(mail_get DNSBL "dnsbl.3rhost.pt"); do
+      n=$((n + 1))
+      printf '  mp_own_%s {\n    rbl = "%s";\n    ipv6 = false;\n    received = false;\n    symbol = "MP_OWN_DNSBL_%s";\n    description = "Lista negra própria (%s)";\n  }\n' "$n" "$z" "$n" "$z"
+    done
+    printf '}\n'
+  } > "$RSPAMD_LOCAL/rbl.conf"
+  {
+    printf 'symbols {\n'
+    local i
+    for i in $(seq 1 "$(mail_get DNSBL "dnsbl.3rhost.pt" | wc -w)"); do printf '  "MP_OWN_DNSBL_%s" {\n    weight = 7.0;\n  }\n' "$i"; done
+    printf '}\n'
+  } > "$RSPAMD_LOCAL/rbl_group.conf"
+  if [ "$(mail_get CLAMAV 0)" = 1 ]; then
+    local sock=/run/clamav/clamd.ctl; [ -S /run/clamd.scan/clamd.sock ] && sock=/run/clamd.scan/clamd.sock
+    printf 'clamav {\n  action = "reject";\n  message = "Vírus detetado: ${VIRUS}";\n  type = "clamav";\n  servers = "%s";\n  symbol = "CLAM_VIRUS";\n  scan_mime_parts = true;\n  max_size = 26214400;\n}\n' "$sock" > "$RSPAMD_LOCAL/antivirus.conf"
+  else
+    rm -f "$RSPAMD_LOCAL/antivirus.conf"
+  fi
+}
+# Bloqueia a porta 25 de saída para tudo exceto o root e o Postfix: um site comprometido não envia spam diretamente.
+mail_fw_apply(){
+  fw_has_nft || return 0
+  nft delete table inet minipainel_mail >/dev/null 2>&1
+  mail_on || return 0
+  local pu; pu=$(id -u postfix 2>/dev/null) || return 0
+  nft -f - <<EOF
+table inet minipainel_mail {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    tcp dport 25 meta skuid != { 0, $pu } counter reject with tcp reset
+  }
+}
+EOF
+}
+mail_apply(){ # gera os mapas do Postfix e os utilizadores do Dovecot a partir de data.json
+  local j; j=$(mail_data)
+  install -d -m 755 "$PF_MP"
+  jq -r '.domains | keys[] | "\(.) OK"' <<<"$j" > "$PF_MP/vdomains"
+  jq -r '.boxes | keys[] | "\(.) OK"' <<<"$j" > "$PF_MP/vmailbox"
+  jq -r '.aliases | to_entries[] | "\(.key) \(.value | join(","))"' <<<"$j" > "$PF_MP/valias"
+  {
+    jq -r '.boxes | keys[] | "\(.) \(.)"' <<<"$j"
+    jq -r '(.boxes | keys) as $b | .aliases | to_entries[] | . as $a | ($a.value | map(select(. as $d | $b | index($d)))) as $own | select($own | length > 0) | "\($a.key) \($own | join(","))"' <<<"$j"
+  } > "$PF_MP/sender_login"
+  chmod 644 "$PF_MP"/vdomains "$PF_MP"/vmailbox "$PF_MP"/valias "$PF_MP"/sender_login
+  jq -r '.boxes | to_entries[] | "\(.key):{SHA512-CRYPT}\(.value.hash)::::::userdb_quota_rule=*:storage=\(.value.quota)M"' <<<"$j" > "$DV_USERS.tmp"
+  chown root:dovecot "$DV_USERS.tmp"; chmod 640 "$DV_USERS.tmp"; mv -f "$DV_USERS.tmp" "$DV_USERS"
+  postfix reload >/dev/null 2>&1 || systemctl reload postfix >/dev/null 2>&1
+  return 0
+}
+# --- ativação ---
+cmd_mail_enable(){
+  local h="" re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+  while [ $# -gt 0 ]; do case "$1" in --host) h="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
+  h=$(printf '%s' "${h:-$(mail_get HOST)}" | tr 'A-Z' 'a-z')
+  [[ "$h" =~ $re ]] || die "Indica o nome do servidor de correio (ex.: mail.iddigital.pt) com --host."
+  echo "A instalar Postfix, Dovecot, Rspamd, Redis e Unbound (pode demorar alguns minutos)..."
+  if [ "$OS_FAMILY" = debian ]; then
+    echo "postfix postfix/main_mailer_type select No configuration" | debconf-set-selections
+    echo "postfix postfix/mailname string $h" | debconf-set-selections
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q postfix dovecot-imapd dovecot-pop3d dovecot-lmtpd dovecot-sieve dovecot-managesieved \
+      rspamd redis-server unbound bind9-dnsutils >/dev/null 2>&1 || die "Falhou a instalação dos pacotes de email."
+  else
+    if [ ! -f /etc/yum.repos.d/rspamd.repo ]; then
+      local elv; elv=$(. /etc/os-release; echo "${VERSION_ID%%.*}")
+      curl -fsSL "https://rspamd.com/rpm-stable/centos-$elv/rspamd.repo" -o /etc/yum.repos.d/rspamd.repo && rpm --import https://rspamd.com/rpm-stable/gpg.key || die "Não foi possível adicionar o repositório do Rspamd."
+    fi
+    dnf install -y -q postfix dovecot dovecot-pigeonhole rspamd redis unbound bind-utils >/dev/null 2>&1 || die "Falhou a instalação dos pacotes de email."
+  fi
+  id vmail >/dev/null 2>&1 || useradd -r -U -d "$VMAIL" -s "$(command -v nologin || echo /sbin/nologin)" -c "IDDigital Hosting mail" vmail
+  install -d -o vmail -g vmail -m 750 "$VMAIL"
+  install -d -m 711 "$MSPOOL"; install -d -m 700 "$MLIB" "$MLIB/held" "$MLIB/rejected" "$MLIB/sent"
+  mail_set ENABLED 1; mail_set HOST "$h"
+  [ -n "$(mail_get DNSBL)" ] || mail_set DNSBL "dnsbl.3rhost.pt"
+  [ -n "$(mail_get SITE_LIMIT)" ] || mail_set SITE_LIMIT 100
+  [ -n "$(mail_get BOX_LIMIT)" ] || mail_set BOX_LIMIT 200
+  [ -n "$(mail_get AUTH_FAILS)" ] || mail_set AUTH_FAILS 10
+  [ -n "$(mail_get CLAMAV)" ] || mail_set CLAMAV 0
+  [ -s "$MAIL_DATA" ] || mail_data_save '{"domains":{},"boxes":{},"aliases":{}}'
+  echo "A configurar o resolver DNS local (unbound)..."; mail_resolver_setup
+  mail_host_web; local errf; errf=$(mktemp)
+  if [ "$(srv_get MODE lan)" = internet ]; then
+    le_issue mp-mail "$h" 2>"$errf" || { self_issue mp-mail "$h"; echo "Aviso: certificado Let's Encrypt para $h falhou; ficou um autoassinado. $(head -c 300 "$errf")"; }
+  else
+    cert_files mp-mail >/dev/null || self_issue mp-mail "$h"
+  fi
+  rm -f "$errf"
+  mail_postfix_config; mail_dovecot_config; mail_rspamd_config; mail_apply
+  local s; for s in $(mail_svc_redis) unbound rspamd dovecot postfix; do systemctl enable "$s" >/dev/null 2>&1; systemctl restart "$s" >/dev/null 2>&1 || warn "O serviço $s não arrancou."; done
+  for s in 25 465 587 993 995 143 110; do fw_open "$s" >/dev/null 2>&1; done
+  mail_fw_apply
+  # o mail() do PHP dos sites passa a ir para a fila controlada do painel
+  for s in $(site_names); do mail_site_spool "$s"; write_pool "$s" "$(site_get "$s" PHP)"; done
+  for s in $(php_installed); do apply_php "$s" >/dev/null 2>&1; done
+  echo "Email ativo em $h. Próximo passo: adiciona um domínio de email e cria os registos DNS indicados."
+  return 0
+}
+mail_host_web(){ # porta 80 para a validação do certificado do servidor de correio
+  local h; h=$(mail_get HOST)
+  [ -n "$h" ] || { rm -f "$NGX_CONFD/mail-host.conf"; return 0; }
+  install -d -m 755 "$NGX_CONFD"
+  { printf '# IDDigital Hosting — validação do certificado de %s\nserver {\n    listen 80;\n    server_name %s;\n' "$h" "$h"; acme_loc; printf '    location / { return 444; }\n}\n'; } > "$NGX_CONFD/mail-host.conf"
+  ngx_default_sync; apply_nginx >/dev/null 2>&1
+}
+mail_site_spool(){ local s=$1; id "mp_$s" >/dev/null 2>&1 || return 0; install -d -m 711 "$MSPOOL"; install -d -o "mp_$s" -g "mp_$s" -m 700 "$MSPOOL/$s" "$MSPOOL/$s/tmp" "$MSPOOL/$s/new"; }
+
+# --- domínios, caixas e aliases ---
+cmd_mail_domain_add(){
+  local d="${1:-}" j
+  mail_need; valid_domain "$d" || die "Domínio inválido: $d"
+  j=$(mail_data); [ "$(jq --arg d "$d" '.domains | has($d)' <<<"$j")" = false ] || die "O domínio $d já existe."
+  install -d -o vmail -g vmail -m 750 "$VMAIL/$d"
+  if [ ! -s "$DKIM_DIR/$d.mp.key" ]; then
+    rspamadm dkim_keygen -s mp -b 2048 -d "$d" -k "$DKIM_DIR/$d.mp.key" > "$DKIM_DIR/$d.mp.txt" 2>/dev/null || die "Não foi possível gerar a chave DKIM."
+    chown "$(stat -c %U "$DKIM_DIR")":"$(stat -c %G "$DKIM_DIR")" "$DKIM_DIR/$d.mp.key" "$DKIM_DIR/$d.mp.txt"; chmod 640 "$DKIM_DIR/$d.mp.key"
+  fi
+  j=$(jq --arg d "$d" --arg t "$EPOCHSECONDS" '.domains[$d] = {created:($t|tonumber)}' <<<"$j")
+  mail_data_save "$j"; mail_apply
+  echo "Domínio de email $d adicionado com DKIM. Cria os registos DNS indicados na página Email."
+  return 0
+}
+cmd_mail_domain_del(){
+  local d="${1:-}" j
+  mail_need; j=$(mail_data)
+  [ "$(jq --arg d "$d" '.domains | has($d)' <<<"$j")" = true ] || die "O domínio $d não existe."
+  j=$(jq --arg d "$d" '.domains |= del(.[$d]) | .boxes |= with_entries(select(.key | endswith("@" + $d) | not)) | .aliases |= with_entries(select(.key | endswith("@" + $d) | not))' <<<"$j")
+  mail_data_save "$j"; mail_apply
+  rm -rf "${VMAIL:?}/$d" "$DKIM_DIR/$d.mp.key" "$DKIM_DIR/$d.mp.txt"
+  echo "Domínio $d apagado, com as caixas de correio e os aliases."
+  return 0
+}
+mail_box_args(){ # --hash H | --password P, --quota N
+  BHASH=""; BQUOTA=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --hash) BHASH="${2:-}"; shift 2 || shift ;;
+      --password) BHASH=$(printf '%s' "${2:-}" | mail_hash_stdin); [ ${#2} -ge 10 ] || die "A password tem de ter pelo menos 10 caracteres."; shift 2 || shift ;;
+      --quota) BQUOTA="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [ -z "$BHASH" ] || valid_mailhash "$BHASH" || die "Hash de password inválido."
+  [ -z "$BQUOTA" ] || { [[ "$BQUOTA" =~ ^[0-9]{1,7}$ ]] && [ "$BQUOTA" -ge 10 ]; } || die "Quota inválida (MB, mínimo 10)."
+}
+cmd_mail_box_add(){
+  local e="${1:-}" d j BHASH BQUOTA gen=""
+  [ $# -gt 0 ] && shift
+  mail_need; e=$(printf '%s' "$e" | tr 'A-Z' 'a-z'); valid_email "$e" || die "Endereço inválido: $e"
+  mail_box_args "$@"; d=${e#*@}
+  j=$(mail_data)
+  [ "$(jq --arg d "$d" '.domains | has($d)' <<<"$j")" = true ] || die "O domínio $d não está configurado no email."
+  [ "$(jq --arg e "$e" '(.boxes | has($e)) or (.aliases | has($e))' <<<"$j")" = false ] || die "O endereço $e já existe."
+  if [ -z "$BHASH" ]; then gen=$(gen_pass 16); BHASH=$(printf '%s' "$gen" | mail_hash_stdin); fi
+  j=$(jq --arg e "$e" --arg h "$BHASH" --argjson q "${BQUOTA:-1024}" --arg t "$EPOCHSECONDS" '.boxes[$e] = {hash:$h, quota:$q, created:($t|tonumber)}' <<<"$j")
+  mail_data_save "$j"; mail_apply
+  echo "Caixa de correio $e criada (quota ${BQUOTA:-1024} MB)."
+  [ -n "$gen" ] && echo "Password: $gen"
+  mail_client_info "$e"
+  return 0
+}
+mail_client_info(){ local h; h=$(mail_get HOST); echo "Configuração: IMAP $h:993 (SSL) · POP3 $h:995 (SSL) · SMTP $h:465 (SSL) ou 587 (STARTTLS) · utilizador: $1"; }
+cmd_mail_box_set(){
+  local e="${1:-}" j BHASH BQUOTA
+  [ $# -gt 0 ] && shift
+  mail_need; j=$(mail_data)
+  [ "$(jq --arg e "$e" '.boxes | has($e)' <<<"$j")" = true ] || die "A caixa $e não existe."
+  mail_box_args "$@"
+  [ -n "$BHASH" ] && j=$(jq --arg e "$e" --arg h "$BHASH" '.boxes[$e].hash = $h' <<<"$j")
+  [ -n "$BQUOTA" ] && j=$(jq --arg e "$e" --argjson q "$BQUOTA" '.boxes[$e].quota = $q' <<<"$j")
+  mail_data_save "$j"; mail_apply
+  echo "Caixa $e atualizada.$([ -n "$BHASH" ] && echo " Password alterada.")$([ -n "$BQUOTA" ] && echo " Quota: $BQUOTA MB.")"
+  return 0
+}
+cmd_mail_box_del(){
+  local e="${1:-}" j u d
+  mail_need; j=$(mail_data)
+  [ "$(jq --arg e "$e" '.boxes | has($e)' <<<"$j")" = true ] || die "A caixa $e não existe."
+  j=$(jq --arg e "$e" '.boxes |= del(.[$e]) | .aliases |= (map_values(map(select(. != $e))) | with_entries(select(.value | length > 0)))' <<<"$j")
+  mail_data_save "$j"; mail_apply
+  u=${e%@*}; d=${e#*@}
+  [[ "$u" =~ ^[a-z0-9._+-]+$ ]] && rm -rf "${VMAIL:?}/$d/$u"
+  echo "Caixa de correio $e apagada."
+  return 0
+}
+cmd_mail_alias_set(){
+  local a="${1:-}" dests="${2:-}" j d x list="[]"
+  mail_need; a=$(printf '%s' "$a" | tr 'A-Z' 'a-z')
+  valid_email "$a" || [[ "$a" =~ ^@([a-z0-9-]+\.)+[a-z]{2,}$ ]] || die "Alias inválido: $a (usa nome@dominio ou @dominio para receber tudo)."
+  d=${a#*@}; j=$(mail_data)
+  [ "$(jq --arg d "$d" '.domains | has($d)' <<<"$j")" = true ] || die "O domínio $d não está configurado no email."
+  [ "$(jq --arg a "$a" '.boxes | has($a)' <<<"$j")" = false ] || die "$a já é uma caixa de correio."
+  for x in $(printf '%s' "$dests" | tr 'A-Z,;' 'a-z  '); do
+    valid_email "$x" || die "Destino inválido: $x"
+    list=$(jq -c --arg x "$x" '. + [$x] | unique' <<<"$list")
+  done
+  [ "$(jq 'length' <<<"$list")" -gt 0 ] || die "Indica pelo menos um destino."
+  [ "$(jq 'length' <<<"$list")" -le 20 ] || die "Máximo de 20 destinos."
+  j=$(jq --arg a "$a" --argjson l "$list" '.aliases[$a] = $l' <<<"$j")
+  mail_data_save "$j"; mail_apply
+  echo "Encaminhamento $a → $(jq -r 'join(", ")' <<<"$list")."
+  return 0
+}
+cmd_mail_alias_del(){
+  local a="${1:-}" j; mail_need; j=$(mail_data)
+  [ "$(jq --arg a "$a" '.aliases | has($a)' <<<"$j")" = true ] || die "O alias $a não existe."
+  mail_data_save "$(jq --arg a "$a" '.aliases |= del(.[$a])' <<<"$j")"; mail_apply
+  echo "Alias $a apagado."; return 0
+}
+
+# --- definições do antispam e antivírus ---
+cmd_mail_settings(){
+  local re_n='^[0-9]{1,5}$' z
+  mail_need
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dnsbl) z="${2:-}"; [ "$z" = none ] && z=""; for x in $z; do valid_domain "$x" || die "Lista negra inválida: $x"; done; mail_set DNSBL "$z"; shift 2 || shift ;;
+      --site-limit) [[ "${2:-}" =~ $re_n ]] || die "Limite inválido."; mail_set SITE_LIMIT "$2"; shift 2 || shift ;;
+      --box-limit) [[ "${2:-}" =~ $re_n ]] || die "Limite inválido."; mail_set BOX_LIMIT "$2"; shift 2 || shift ;;
+      --auth-fails) [[ "${2:-}" =~ $re_n ]] && [ "$2" -ge 3 ] || die "Valor inválido (mínimo 3)."; mail_set AUTH_FAILS "$2"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  postconf -e "postscreen_dnsbl_sites = $(mail_dnsbl_sites)"; mail_rspamd_config
+  postfix reload >/dev/null 2>&1; systemctl reload rspamd >/dev/null 2>&1 || systemctl restart rspamd >/dev/null 2>&1
+  echo "Definições do antispam guardadas."; return 0
+}
+cmd_mail_av(){
+  local a="${1:-}"; mail_need
+  case "$a" in
+    on)
+      echo "A instalar o ClamAV (cerca de 1,2 GB de RAM quando ativo)..."
+      if [ "$OS_FAMILY" = debian ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y -q clamav-daemon clamav-freshclam >/dev/null 2>&1 || die "Falhou a instalação do ClamAV."
+        systemctl enable --now clamav-freshclam clamav-daemon >/dev/null 2>&1
+      else dnf install -y -q clamav clamd clamav-update >/dev/null 2>&1 || die "Falhou a instalação do ClamAV."
+        sed -i 's/^#\?LocalSocket .*/LocalSocket \/run\/clamd.scan\/clamd.sock/' /etc/clamd.d/scan.conf; sed -i 's/^Example/#Example/' /etc/clamd.d/scan.conf /etc/freshclam.conf
+        freshclam >/dev/null 2>&1; systemctl enable --now clamd@scan >/dev/null 2>&1
+      fi
+      mail_set CLAMAV 1 ;;
+    off) mail_set CLAMAV 0
+      systemctl disable --now clamav-daemon clamd@scan >/dev/null 2>&1 ;;
+    *) die "Usa: mpanel mail-av on|off" ;;
+  esac
+  mail_rspamd_config; systemctl restart rspamd >/dev/null 2>&1
+  echo "Antivírus $([ "$a" = on ] && echo 'ativado (as primeiras assinaturas podem demorar alguns minutos a descarregar)' || echo desativado)."
+  return 0
+}
+
+# --- registos DNS e verificação ---
+mail_public_ip(){ local ip; ip=$(mail_get PUBLIC_IP); [ -n "$ip" ] || ip=$(curl -s4 -m 6 https://api.ipify.org 2>/dev/null); [[ "$ip" =~ ^[0-9.]+$ ]] && echo "$ip"; }
+mail_dkim_value(){ tr -d '\n\t' < "$DKIM_DIR/$1.mp.txt" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"\n' | tr -s ' ' | sed 's/^ //'; }
+cmd_mail_dns_check(){
+  local d="${1:-}" h ip mx spf dk dm ptr a out
+  mail_need; [ "$(mail_data | jq --arg d "$d" '.domains | has($d)')" = true ] || die "O domínio $d não existe."
+  h=$(mail_get HOST); ip=$(mail_public_ip)
+  mx=$(dig +short MX "$d" | awk '{print $2}' | sed 's/\.$//' | tr '\n' ' ')
+  spf=$(dig +short TXT "$d" | tr -d '"' | grep -i '^v=spf1' | head -1)
+  dk=$(dig +short TXT "mp._domainkey.$d" | tr -d '" \n')
+  dm=$(dig +short TXT "_dmarc.$d" | tr -d '"' | head -1)
+  a=$(dig +short A "$h" | tail -1)
+  ptr=$( [ -n "$ip" ] && dig +short -x "$ip" | sed 's/\.$//' | head -1)
+  out=$(jq -n --arg d "$d" --arg h "$h" --arg ip "$ip" --arg mx "$mx" --arg spf "$spf" --arg dk "$dk" --arg dkx "$(mail_dkim_value "$d" | tr -d ' ')" \
+    --arg dm "$dm" --arg a "$a" --arg ptr "$ptr" --arg t "$EPOCHSECONDS" \
+    '{checked:($t|tonumber), ip:$ip,
+      mx:{ok:($mx | split(" ") | index($h) != null), found:$mx},
+      a:{ok:($ip != "" and $a == $ip), found:$a},
+      spf:{ok:($spf != "" and (($spf | test(" mx( |$)")) or ($spf | contains("a:" + $h)) or ($ip != "" and ($spf | contains("ip4:" + $ip))))), found:$spf},
+      dkim:{ok:($dk != "" and $dk == $dkx), found:(if $dk == "" then "" else "publicado" end)},
+      dmarc:{ok:($dm | test("^v=DMARC1")), found:$dm},
+      ptr:{ok:($ptr == $h), found:$ptr}}')
+  local f=$DATA/stats/mail-dns.json
+  jq --arg d "$d" --argjson o "$out" '.[$d] = $o' "$( [ -s "$f" ] && echo "$f" || { echo '{}' > "$f"; echo "$f"; })" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
+  local bad; bad=$(jq -r 'to_entries | map(select(.value | type == "object" and has("ok") and (.ok | not)) | .key) | join(", ")' <<<"$out")
+  if [ -z "$bad" ]; then echo "DNS de $d: tudo correto."; else echo "DNS de $d: falta corrigir $bad. Vê os valores na página Email."; fi
+  return 0
+}
+# --- envio dos sites: fila controlada, limites e suspensão automática ---
+mail_site_sent(){ # site segundos -> n.º de envios nesse período
+  local f="$MLIB/sent/$1" since=$(( EPOCHSECONDS - $2 ))
+  [ -f "$f" ] || { echo 0; return; }
+  awk -v s="$since" '$1 >= s' "$f" | wc -l
+}
+mail_site_rej(){ local f="$MLIB/rejected/$1.log" since=$(( EPOCHSECONDS - $2 )); [ -f "$f" ] || { echo 0; return; }; awk -v s="$since" '$1 >= s' "$f" | wc -l; }
+mail_site_from_ok(){ # site from -> 0 se o remetente pertence ao site (domínios do site)
+  local s=$1 f=$2 d; d=${f#*@}
+  valid_email "$f" || return 1
+  [[ " $(site_get "$s" DOMAINS) " == *" $d "* ]] && return 0
+  [[ " $(site_get "$s" DOMAINS) " == *" www.$d "* ]] && return 0
+  return 1
+}
+cmd_mail_spool(){
+  mail_on || return 0
+  exec 7>/run/minipainel-mailspool.lock; flock -n 7 || return 0
+  local s u lim sent f base from msg res act sc rej susp nheld
+  for s in $(site_names); do
+    [ -d "$MSPOOL/$s/new" ] || continue
+    u="mp_$s"; id "$u" >/dev/null 2>&1 || continue
+    susp=$(site_get "$s" MAIL_SUSP); lim=$(site_get "$s" MAIL_LIMIT); lim=${lim:-$(mail_get SITE_LIMIT 100)}
+    sent=$(mail_site_sent "$s" 3600)
+    for f in $(cd "$MSPOOL/$s/new" && ls -1 -- *.eml 2>/dev/null | sort | head -n 200); do
+      [ "$susp" = 1 ] && break
+      [ "$sent" -ge "$lim" ] && break
+      base=${f%.eml}
+      msg=$(mktemp /var/tmp/mp-msg.XXXXXX)
+      runuser -u "$u" -- head -c 31457280 "$MSPOOL/$s/new/$f" > "$msg" 2>/dev/null
+      from=$(runuser -u "$u" -- head -c 300 "$MSPOOL/$s/new/$base.from" 2>/dev/null | head -n 1 | tr -d '\r <>')
+      mail_site_from_ok "$s" "$from" || from="$s@$(mail_get HOST)"
+      res=$(rspamc -h 127.0.0.1:11333 --json -u "site-$s" -i 127.0.0.1 -F "$from" < "$msg" 2>/dev/null)
+      act=$(jq -r '.action // "no action"' <<<"$res" 2>/dev/null); sc=$(jq -r '.score // 0' <<<"$res" 2>/dev/null)
+      if [ "$act" = reject ]; then
+        install -d -m 700 "$MLIB/rejected/$s"; mv -f "$msg" "$MLIB/rejected/$s/$base.eml"
+        echo "$EPOCHSECONDS $sc" >> "$MLIB/rejected/$s.log"
+        rej=$(mail_site_rej "$s" 3600)
+        if [ "$rej" -ge "$(mail_get SPAM_SUSPEND 5)" ]; then
+          site_set "$s" MAIL_SUSP 1; site_set "$s" MAIL_SUSP_WHY "spam detetado ($rej mensagens rejeitadas na última hora)"; susp=1
+          jq -cn --arg t "$EPOCHSECONDS" --arg a "Envio de email do site $s suspenso automaticamente: $rej mensagens com spam na última hora" '{ts:($t|tonumber), ip:"servidor", user:"automático", action:$a, ok:false}' >> "$DATA/logs/audit.log"
+        fi
+      else
+        { printf 'X-MP-Site: %s\n' "$s"; cat "$msg"; } | /usr/sbin/sendmail -t -i -f "$from" && { echo "$EPOCHSECONDS" >> "$MLIB/sent/$s"; sent=$((sent + 1)); }
+        rm -f "$msg"
+      fi
+      runuser -u "$u" -- rm -f "$MSPOOL/$s/new/$f" "$MSPOOL/$s/new/$base.from"
+    done
+    # guarda só as últimas 24 h dos contadores
+    for f in "$MLIB/sent/$s" "$MLIB/rejected/$s.log"; do [ -f "$f" ] && awk -v s="$(( EPOCHSECONDS - 86400 ))" '$1 >= s' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"; done
+  done
+  return 0
+}
+cmd_mail_site(){ # site --limit N | --suspend | --resume | --purge
+  local s="${1:-}" re='^[0-9]{1,6}$'
+  [ $# -gt 0 ] && shift
+  valid_site "$s" && site_exists "$s" || die "O site '$s' não existe."
+  case "${1:-}" in
+    --limit) [[ "${2:-}" =~ $re ]] || die "Limite inválido."; site_set "$s" MAIL_LIMIT "$2"; echo "Limite de envio de $s: $2 emails por hora." ;;
+    --suspend) site_set "$s" MAIL_SUSP 1; site_set "$s" MAIL_SUSP_WHY "suspenso manualmente"; echo "Envio de email do site $s suspenso (as mensagens ficam retidas)." ;;
+    --resume) site_set "$s" MAIL_SUSP 0; site_set "$s" MAIL_SUSP_WHY ""; rm -f "$MLIB/rejected/$s.log"; echo "Envio de email do site $s retomado." ;;
+    --purge) find "$MSPOOL/$s/new" -type f -delete 2>/dev/null; rm -rf "${MLIB:?}/rejected/$s"; echo "Mensagens retidas e rejeitadas de $s apagadas." ;;
+    *) die "Usa: mpanel mail-site <site> --limit N | --suspend | --resume | --purge" ;;
+  esac
+  return 0
+}
+cmd_mail_queue(){ # list | flush | delete <id>|all
+  mail_need
+  case "${1:-list}" in
+    list) postqueue -j 2>/dev/null | jq -r '[.queue_id, .queue_name, .sender, (.recipients | map(.address) | join(",")), ((.recipients[0].delay_reason // "") | .[0:80])] | @tsv' ;;
+    flush) postqueue -f; echo "Fila reenviada." ;;
+    delete) local q="${2:-}" re='^[0-9A-Za-z]{6,20}$'
+      if [ "$q" = all ]; then postsuper -d ALL >/dev/null 2>&1; echo "Fila de correio esvaziada."
+      else [[ "$q" =~ $re ]] || die "Identificador inválido."; postsuper -d "$q" >/dev/null 2>&1 && echo "Mensagem $q apagada da fila."; fi ;;
+    *) die "Usa: mpanel mail-queue list|flush|delete <id>|all" ;;
+  esac
+  return 0
+}
+mail_state_json(){
+  if ! mail_on; then echo '{"enabled":false}'; return 0; fi
+  local j dns q s sites="[]" used
+  j=$(mail_data)
+  dns=$(cat "$DATA/stats/mail-dns.json" 2>/dev/null || echo '{}')
+  q=$(postqueue -j 2>/dev/null | jq -cs 'map({id:.queue_id, q:.queue_name, from:.sender, to:(.recipients | map(.address) | join(", ")), why:((.recipients[0].delay_reason // "") | .[0:160]), t:.arrival_time, size:.message_size}) | .[0:200]' 2>/dev/null)
+  for s in $(site_names); do
+    sites=$(jq -c --arg s "$s" --arg h1 "$(mail_site_sent "$s" 3600)" --arg h24 "$(mail_site_sent "$s" 86400)" \
+      --arg held "$(find "$MSPOOL/$s/new" -name '*.eml' 2>/dev/null | wc -l)" --arg rej "$(find "$MLIB/rejected/$s" -name '*.eml' 2>/dev/null | wc -l)" \
+      --arg su "$(site_get "$s" MAIL_SUSP)" --arg why "$(site_get "$s" MAIL_SUSP_WHY)" --arg lim "$(site_get "$s" MAIL_LIMIT)" \
+      '. + [{site:$s, sent_1h:($h1|tonumber), sent_24h:($h24|tonumber), held:($held|tonumber), rejected:($rej|tonumber), suspended:($su=="1"), why:$why, limit:(if $lim == "" then null else ($lim|tonumber) end)}]' <<<"$sites")
+  done
+  local dk; dk=$(jq -r '.domains | keys[]' <<<"$j" | while read -r d; do printf '%s\t%s\n' "$d" "$(mail_dkim_value "$d")"; done | jq -R 'split("\t") | {(.[0]): (.[1] // "")}' | jq -cs 'add // {}')
+  used=$(jq -r '.boxes | keys[]' <<<"$j" | while read -r e; do printf '%s\t%s\n' "$e" "$(du -sm "$VMAIL/${e#*@}/${e%@*}" 2>/dev/null | awk '{print $1}')"; done | jq -R 'split("\t") | {(.[0]): ((.[1] // "0") | tonumber? // 0)}' | jq -cs 'add // {}')
+  jq -n --argjson j "$j" --argjson dns "$dns" --argjson q "${q:-[]}" --argjson sites "$sites" --argjson used "$used" --argjson dk "${dk:-null}" \
+    --arg h "$(mail_get HOST)" --arg dnsbl "$(mail_get DNSBL)" --arg sl "$(mail_get SITE_LIMIT 100)" --arg bl "$(mail_get BOX_LIMIT 200)" \
+    --arg af "$(mail_get AUTH_FAILS 10)" --arg av "$(mail_get CLAMAV 0)" --arg exp "$(cert_expiry mp-mail)" \
+    --arg st "$(for x in postfix dovecot rspamd; do systemctl is-active "$x" 2>/dev/null; done | grep -c '^active$')" \
+    '{enabled:true, host:$h, dnsbl:$dnsbl, site_limit:($sl|tonumber), box_limit:($bl|tonumber), auth_fails:($af|tonumber), clamav:($av=="1"),
+      cert_exp:(if $exp == "" then null else ($exp|tonumber) end), services_ok:($st == "3"),
+      domains:[$j.domains | keys[] | . as $d | {name:$d, boxes:([$j.boxes | keys[] | select(endswith("@" + $d))] | length), dns:($dns[$d] // null), dkim:(($dk // {})[$d] // "")}],
+      boxes:[$j.boxes | to_entries[] | {email:.key, quota:.value.quota, used:($used[.key] // 0)}],
+      aliases:[$j.aliases | to_entries[] | {alias:.key, dests:.value}],
+      sites:$sites, queue:$q}'
+}
+cmd_mail_dns_info(){ # registos a criar para um domínio
+  local d="${1:-}" h ip; mail_need
+  h=$(mail_get HOST); ip=$(mail_public_ip)
+  printf '%s\tMX\t10 %s\n' "$d" "$h"
+  printf '%s\tTXT\tv=spf1 mx a:%s ~all\n' "$d" "$h"
+  printf 'mp._domainkey.%s\tTXT\t%s\n' "$d" "$(mail_dkim_value "$d")"
+  printf '_dmarc.%s\tTXT\tv=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:postmaster@%s\n' "$d" "$d"
+  printf '%s\tA\t%s\n' "$h" "${ip:-<IP público>}"
+  printf '%s\tPTR\t%s (pedir ao fornecedor do servidor)\n' "${ip:-<IP público>}" "$h"
+}
+
 write_auth(){ # mantém a verificação em dois passos ao mudar a password
   auth_update --arg u "$1" --arg h "$2" '.user = $u | .hash = $h'
 }
@@ -8747,6 +9708,15 @@ write_state(){
         jq -cn --arg v "$v" --arg u "$(php_service "$v")" --arg s "$(systemctl is-active "$(php_service "$v")" 2>/dev/null)" --arg p "$PANEL_PHP" \
           '{id:("php-"+$v), name:("PHP-FPM "+$v), unit:$u, active:($s=="active"), panel:($v==$p), version:$v}'
       done
+      if mail_on; then
+        for v in postfix dovecot rspamd redis unbound; do
+          u=$v; [ "$v" = redis ] && u=$(mail_svc_redis)
+          jq -cn --arg i "$v" --arg u "$u" --arg s "$(systemctl is-active "$u" 2>/dev/null)" \
+            '{id:$i, name:({"postfix":"Postfix (SMTP)","dovecot":"Dovecot (IMAP/POP3)","rspamd":"Rspamd (antispam)","redis":"Redis","unbound":"Unbound (DNS)"}[$i]), unit:$u, active:($s=="active"), mail:true}'
+        done
+        if [ "$(mail_get CLAMAV 0)" = 1 ]; then u=clamav-daemon; [ "$OS_FAMILY" = debian ] || u=clamd@scan
+          jq -cn --arg u "$u" --arg s "$(systemctl is-active "$u" 2>/dev/null)" '{id:"clamav", name:"ClamAV (antivírus)", unit:$u, active:($s=="active"), mail:true}'; fi
+      fi
     } | jq -cs '.')
   host=$(hostname 2>/dev/null)
   ip=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -8763,6 +9733,7 @@ write_state(){
     --arg host "$host" --arg ip "$ip" --arg os "$os" --arg up "${up:-0}" --arg disk "${disk:-0}" --arg ram "${ram:-0}" \
     --arg load "${load:-0}" --arg cpus "${cpus:-1}" --arg pport "$PANEL_PORT" --arg pphp "$PANEL_PHP" \
     --arg pmav "$pmav" --argjson dbadm "$dbadm" --arg dbadmu "$DB_ADMIN" --argjson crons "$(cron_state_json)" \
+    --argjson mail "$(mail_state_json 2>/dev/null || echo '{"enabled":false}')" \
     --arg spa "$(srv_get PORTS_ACCESS all)" --arg spal "$(srv_get PANEL_ALLOW '')" \
     --arg smode "$(srv_get MODE lan)" --arg semail "$(srv_get EMAIL '')" --arg spd "$(srv_get PANEL_DOMAIN '')" --arg spssl "$(srv_get PANEL_SSL le)" --arg spexp "$( [ -n "$(srv_get PANEL_DOMAIN '')" ] && cert_expiry mp-painel)" \
     --arg defphp "$DEFAULT_PHP" --arg gen "$(date '+%Y-%m-%d %H:%M:%S')" --arg ver "$MP_VERSION" \
@@ -8770,6 +9741,7 @@ write_state(){
     '{version:$ver, generated:$gen, default_php:$defphp, php:$php, sites:$sites, databases:$dbs,
       services:{nginx:($ng=="active"), mariadb:($db=="active")}, service_list:$svcs,
       pma:{installed:($pmav!=""), version:$pmav}, db_admin:{user:$dbadmu, exists:$dbadm}, crons:$crons,
+      mail:$mail,
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
@@ -8802,7 +9774,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -8820,7 +9792,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v1.10.0 (mpanel)
+IDDigital Hosting — CLI v2.0.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -8853,6 +9825,18 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Email (Postfix + Dovecot + Rspamd)
+  mail-enable --host mail.dominio.pt   instala e ativa o email
+  mail-domain-add|mail-domain-del <domínio>
+  mail-dns-info <domínio> | mail-dns-check <domínio>
+  mail-box-add <email> [--password P] [--quota MB]    (sem password: gerada)
+  mail-box-set <email> [--password P] [--quota MB] | mail-box-del <email>
+  mail-alias-set <alias@dom|@dom> "dest1 dest2" | mail-alias-del <alias>
+  mail-site <site> --limit N | --suspend | --resume | --purge   envio do mail() de cada site
+  mail-queue list|flush|delete <id>|all
+  mail-settings [--dnsbl "zona1 zona2"|none] [--site-limit N] [--box-limit N] [--auth-fails N]
+  mail-av on|off                       antivírus ClamAV (~1,2 GB de RAM)
 
 Segurança do painel
   panel-allow "IP rede/24 ..."|none    IPs autorizados a abrir o painel (none = todos)
@@ -8956,6 +9940,20 @@ dispatch(){
     ports-access)      cmd_ports_access "$@" ;;
     panel-user)        cmd_panel_user "$@" ;;
     panel-2fa)         cmd_panel_2fa "$@" ;;
+    mail-enable)       cmd_mail_enable "$@" ;;
+    mail-domain-add)   cmd_mail_domain_add "$@" ;;
+    mail-domain-del)   cmd_mail_domain_del "$@" ;;
+    mail-box-add)      cmd_mail_box_add "$@" ;;
+    mail-box-set)      cmd_mail_box_set "$@" ;;
+    mail-box-del)      cmd_mail_box_del "$@" ;;
+    mail-alias-set)    cmd_mail_alias_set "$@" ;;
+    mail-alias-del)    cmd_mail_alias_del "$@" ;;
+    mail-settings)     cmd_mail_settings "$@" ;;
+    mail-av)           cmd_mail_av "$@" ;;
+    mail-dns-check)    cmd_mail_dns_check "$@" ;;
+    mail-dns-info)     cmd_mail_dns_info "$@" ;;
+    mail-site)         cmd_mail_site "$@" ;;
+    mail-queue)        cmd_mail_queue "$@" ;;
     backup-start)      cmd_backup_start "$@" ;;
     bk-list)           cmd_bk_list "$@" ;;
     bk-restore)        cmd_bk_restore "$@" ;;
@@ -8985,6 +9983,7 @@ esac
 [ "$(id -u)" -eq 0 ] || die "Tem de ser executado como root."
 # o backup usa o seu próprio bloqueio, para não impedir as outras operações do painel
 if [ "$cmd" = backup-run ]; then shift; cmd_backup_run "$@"; exit $?; fi
+if [ "$cmd" = mail-spool ]; then cmd_mail_spool; exit $?; fi
 exec 9>"$LOCK"
 flock -w 300 9 || die "Outra operação do painel está em curso."
 
@@ -8993,7 +9992,7 @@ if [ "$cmd" = worker ]; then cmd_worker; exit 0; fi
 dispatch "$@"; rc=$?
 if [ "$rc" -eq 0 ]; then
   case "$cmd" in
-    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|panel-allow|ports-access|panel-user|panel-2fa|state|refresh)
+    site-add|site-del|site-php|site-enable|site-disable|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|pma-update|service|cron-add|cron-edit|cron-del|cron-on|cron-off|site-domains|server-mode|panel-domain|ngx-sync|panel-allow|ports-access|panel-user|panel-2fa|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-site|mail-queue|state|refresh)
       write_state || { echo "ERRO: não foi possível gerar o estado do painel ($STATE)." >&2; rc=1; } ;;
   esac
 fi
@@ -9035,7 +10034,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v1.10.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.0.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -9252,6 +10251,30 @@ update_crons(){
   put "$DIR/crons.json" "{\"ts\":$EPOCHSECONDS,\"runs\":{$o}}"
 }
 
+# ---------- email: fila dos sites e força bruta nas caixas ----------
+mail_enabled(){ grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null; }
+mail_spool_kick(){
+  mail_enabled || return 0
+  compgen -G "/var/spool/mp-mail/*/new/*.eml" >/dev/null 2>&1 || return 0
+  ( setsid /usr/local/sbin/mpanel mail-spool >/dev/null 2>&1 & )
+}
+mail_authfail(){
+  mail_enabled || return 0
+  local lim f=$DIR/mail-authfail.txt now=$EPOCHSECONDS
+  lim=$(grep -m1 '^AUTH_FAILS=' /etc/minipainel/mail.conf | cut -d= -f2); lim=${lim:-10}
+  touch "$f"
+  journalctl -q --since "-65s" -o cat -t postfix/submission/smtpd -t postfix/smtps/smtpd -t postfix/smtpd -t dovecot 2>/dev/null \
+    | grep -E 'SASL [A-Z0-9-]+ authentication failed|auth failed' \
+    | sed -nE 's/.*rip=([0-9a-fA-F:.]+).*/\1/p; s/.*SASL [A-Z0-9-]+ authentication failed.*/&/; s/^[^[]*\[([0-9a-fA-F:.]+)\]: SASL.*/\1/p' \
+    | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
+  awk -v s=$(( now - 600 )) '$1 >= s' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  awk '{ c[$2]++ } END { for (i in c) print c[i], i }' "$f" | while read -r n ip; do
+    [ "$n" -ge "$lim" ] || continue
+    ( setsid /usr/local/sbin/mpanel block "$ip" --for 1h --by auto --reason "Força bruta no email ($n falhas em 10 min)" >/dev/null 2>&1 & )
+    awk -v ip="$ip" '$2 != ip' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  done
+}
+
 # ---------- ciclo principal ----------
 for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
 read -r p_tot p_idle <<<"$(read_cpu)"
@@ -9293,6 +10316,7 @@ while :; do
   put "$DIR/live.json" "{\"ts\":$EPOCHSECONDS,\"tz\":\"$tz\",\"cpus\":$NCPU,\"cpu\":$(d10 "$cpu"),\"mem\":{\"pct\":$(d10 "$mem"),\"used\":$mu,\"total\":$mt},\"swap\":{\"pct\":$(d10 "$swap"),\"used\":$su,\"total\":$st},\"disk\":{\"pct\":$(d10 "$disk"),\"used\":${dk_u:-0},\"total\":${dk_t:-0}},\"load\":[$l1,$l5,$l15],\"net\":{\"rx\":$rxb,\"tx\":$txb},\"sites\":{$sj}}"
 
   sample_conns
+  mail_spool_kick
   acc_n=$(( acc_n + 1 )); a_cpu=$(( a_cpu + cpu )); a_mem=$(( a_mem + mem )); a_swap=$(( a_swap + swap ))
   a_disk=$(( a_disk + disk )); a_load=$(( a_load + load )); a_rx=$(( a_rx + rxb )); a_tx=$(( a_tx + txb ))
 
@@ -9311,6 +10335,7 @@ while :; do
     read_fw_conf
     fw_selfheal
     update_crons
+    mail_authfail
     h=$(( EPOCHSECONDS / 3600 ))
     if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
     write_sites_json
@@ -9345,10 +10370,48 @@ say "A configurar as tarefas agendadas (cron)..."
 if [ "$OS_FAMILY" = debian ]; then CRON_SVC=cron; else CRON_SVC=crond; fi
 systemctl enable --now "$CRON_SVC" >/dev/null 2>&1 || warn "Não foi possível ativar o serviço $CRON_SVC."
 install -d -m 755 /etc/minipainel/cron
+cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
+#!/usr/bin/env bash
+# =============================================================================
+#  mp-sendmail — IDDigital Hosting v2.0.0
+#  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
+#  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
+#  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
+# =============================================================================
+set -u
+site=${1:-}; [ $# -gt 0 ] && shift
+re='^[a-z][a-z0-9-]{0,23}$'
+[[ "$site" =~ $re ]] || exit 75
+[ "$(id -un)" = "mp_$site" ] || exit 77
+grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null || { echo "O envio de email não está ativo neste servidor." >&2; exit 69; }
+from=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f|-r) from=${2:-}; shift 2 || shift ;;
+    -f*) from=${1#-f}; shift ;;
+    -r*) from=${1#-r}; shift ;;
+    *) shift ;;
+  esac
+done
+d=/var/spool/mp-mail/$site
+[ -d "$d/new" ] && [ -d "$d/tmp" ] || exit 75
+umask 077
+id="$(date +%s%N).$$"
+head -c 31457281 > "$d/tmp/$id.eml" || exit 75
+if [ "$(stat -c %s "$d/tmp/$id.eml")" -gt 31457280 ]; then rm -f "$d/tmp/$id.eml"; echo "Mensagem demasiado grande (máx. 30 MB)." >&2; exit 75; fi
+printf '%s\n' "${from:0:254}" > "$d/new/$id.from"
+mv "$d/tmp/$id.eml" "$d/new/$id.eml"
+exit 0
+MPSENDMAIL
+chown root:root /usr/local/sbin/mp-sendmail; chmod 755 /usr/local/sbin/mp-sendmail
+if [ "$OS_FAMILY" != debian ] && command -v semanage >/dev/null 2>&1; then
+  se_fc httpd_sys_rw_content_t "/var/spool/mp-mail(/.*)?"
+fi
+
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v1.10.0
+#  mpanel-cron — IDDigital Hosting v2.0.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -9516,6 +10579,9 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel cron-sync >/dev/null || warn "Não foi possível sincronizar as tarefas agendadas (mpanel cron-sync)."
 /usr/local/sbin/mpanel bk-init >/dev/null || warn "Não foi possível configurar os backups (mpanel bk-init)."
 /usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
+if grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null; then
+  /usr/local/sbin/mpanel mail-enable >/dev/null || warn "Não foi possível atualizar a configuração do email (mpanel mail-enable)."
+fi
 /usr/local/sbin/mpanel state || warn "Não foi possível gerar o estado inicial (mpanel state)."
 
 # ----------------------------------------------------------------------------
