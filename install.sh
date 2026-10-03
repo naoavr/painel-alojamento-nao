@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.5.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.6.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.5.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.6.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.5.0"
+MP_VERSION="2.6.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -400,6 +400,20 @@ cat > /etc/nginx/minipainel/panel.inc <<EOF
         fastcgi_send_timeout 900s;
     }
 
+    # terminal (ttyd numa socket local; só existe enquanto o terminal está aberto)
+    location ^~ /terminal/ {
+        auth_request /_mp_auth;
+        error_page 401 = @mp_login;
+        proxy_pass http://unix:/run/minipainel-term/term.sock;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_buffering off;
+    }
+
     location / {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root/index.php;
@@ -473,7 +487,7 @@ pm = ondemand
 pm.max_children = 4
 pm.process_idle_timeout = 30s
 request_terminate_timeout = 0
-php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/:/var/log/minipainel/sites/
+php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/:/var/log/minipainel/sites/:/var/log/minipainel/terminal/
 php_admin_value[session.save_path] = /var/lib/minipainel/sessions
 php_admin_value[upload_tmp_dir] = /var/lib/minipainel/tmp
 php_admin_value[sys_temp_dir] = /var/lib/minipainel/tmp
@@ -530,7 +544,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.5.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.6.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -538,7 +552,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.5.0';
+const MP_VERSION = '2.6.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -696,6 +710,7 @@ function ip_in(string $ip, string $net): bool {
 }
 /* ---------- logs dos sites (nginx: lidos diretamente; PHP e cron: pelo gestor de ficheiros do site) ---------- */
 const MP_SITE_LOGS = '/var/log/minipainel/sites';
+const MP_TERM_LOG  = '/var/log/minipainel/terminal';
 function log_tail(string $f, int $max, string $grep = '', int $maxBytes = 33554432): array {
     if (!is_file($f) || is_link($f)) return [];
     $fh = @fopen($f, 'r'); if (!$fh) return [];
@@ -843,6 +858,7 @@ const ICONS = [
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
     'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'term'   => '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
     'logs'   => '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
     'dns'    => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/><circle cx="12" cy="12" r="2"/>',
     'mail'   => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
@@ -1262,6 +1278,9 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.term-wrap{position:relative;height:calc(100vh - 260px);min-height:420px;background:#000;border-radius:0 0 24px 24px;overflow:hidden}
+.term-wrap iframe{display:none;width:100%;height:100%;border:0}
+.term-wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;color:#cbd5e1}
 .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
 @media (max-width:1100px){.grid3{grid-template-columns:1fr}}
 .lg-url{display:inline-block;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
@@ -1461,6 +1480,7 @@ $pages = [
     'backups'  => ['Backups', 'archive'],
     'auditoria'=> ['Auditoria', 'file'],
     'atualizacoes' => ['Atualizações', 'download'],
+    'terminal' => ['Terminal', 'term'],
     'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
@@ -1487,6 +1507,28 @@ if (qget('stats') === 'conns') {
     session_write_close();
     $d = @file_get_contents(MP_STATS . '/conns.json');
     echo $d !== false ? $d : '{}';
+    exit;
+}
+
+if (qget('term') === 'view' || qget('term') === 'dl') {
+    if (empty($_SESSION['user'])) { http_response_code(401); exit; }
+    session_write_close();
+    $tid = qget('id');
+    if (!preg_match('/^\d{8}-\d{6}$/', $tid) || !is_file(MP_TERM_LOG . '/' . $tid . '.log')) { http_response_code(404); exit('Sessão não encontrada.'); }
+    if (qget('term') === 'dl') {
+        $ext = qget('f') === 'timing' ? 'timing' : 'log';
+        $tf = MP_TERM_LOG . '/' . $tid . '.' . $ext;
+        if (!is_file($tf)) { http_response_code(404); exit('Ficheiro não encontrado.'); }
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Content-Disposition: attachment; filename="terminal-' . $tid . '.' . $ext . '"');
+        header('Content-Length: ' . (string)filesize($tf));
+        readfile($tf); exit;
+    }
+    $raw = (string)@file_get_contents(MP_TERM_LOG . '/' . $tid . '.log', false, null, 0, 20971520);
+    $txt = preg_replace('/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]/', '', $raw) ?? $raw;
+    $txt = preg_replace('/[^\x09\x0a\x20-\x7e\x80-\xff]/', '', str_replace("\r\n", "\n", $txt)) ?? $txt;
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><meta charset="utf-8"><title>Sessão ' . h($tid) . '</title><style>body{margin:0;background:#0f1720;color:#d6e2ee;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace}pre{margin:0;padding:20px;white-space:pre-wrap;word-break:break-word}</style><pre>' . h($txt) . '</pre>';
     exit;
 }
 
@@ -1876,6 +1918,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'mail_av':
             job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
             $back = ['t' => 'antispam'];
+            break;
+
+        case 'terminal_open':
+            if (empty($auth['totp'])) { $bad('Ativa primeiro a verificação em dois passos (Conta).'); break; }
+            if (!reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
+            $tk = bin2hex(random_bytes(16));
+            $_SESSION['term'] = ['t' => $tk, 'ts' => time()];
+            job_submit('terminal-start', [$tk], 'Abrir o terminal (root)');
+            break;
+        case 'terminal_close':
+            unset($_SESSION['term']);
+            job_submit('terminal-stop', [], 'Fechar o terminal');
             break;
 
         case 'dns_enable':
@@ -2426,11 +2480,12 @@ $titles = [
     'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, proteção contra força bruta, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
+    'terminal' => 'Terminal do servidor (root) no browser. Exige a verificação em dois passos; as sessões ficam gravadas.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
     'dns'      => 'DNS autoritativo: zonas dos domínios alojados neste servidor.',
     'logs'     => 'Acessos e erros de cada site: servidor web, PHP e tarefas agendadas.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'atualizacoes']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
 $section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -4008,6 +4063,52 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       <?php endif; ?>
 <?php endif; ?>
 
+<?php elseif ($page === 'terminal'):
+    $tOn = !empty($auth['totp']);
+    $tSes = (is_array($_SESSION['term'] ?? null) && time() - (int)$_SESSION['term']['ts'] < 14400) ? (string)$_SESSION['term']['t'] : '';
+    $recs = [];
+    foreach ((array)glob(MP_TERM_LOG . '/*.log') as $rf) {
+        $rid = basename((string)$rf, '.log'); if (!preg_match('/^\d{8}-\d{6}$/', $rid)) continue;
+        $recs[] = ['id' => $rid, 's' => (int)@filesize((string)$rf), 'm' => (int)@filemtime((string)$rf)];
+    }
+    usort($recs, function ($a, $b) { return strcmp($b['id'], $a['id']); });
+    $tz = tz_off(live_stats());
+?>
+<?php if (!$tOn): ?>
+      <section class="card"><div class="empty"><b>O terminal exige a verificação em dois passos</b>Por segurança, o terminal (root) só fica disponível com o 2FA ativo.<br><a class="btn" href="?p=conta&amp;tfa=setup">Ativar a verificação em dois passos</a></div></section>
+<?php elseif ($tSes === ''): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Abrir terminal</h2><p>Terminal do servidor como <b>root</b>, no browser. A sessão é gravada e fecha ao fim de 15 minutos sem atividade.</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('terminal_open') ?>
+          <div class="fgrid"><?= reauth_fields($auth) ?></div>
+          <div style="margin-top:16px"><button class="btn" type="submit"><?= ic('code') ?>Abrir terminal</button></div>
+        </form>
+        <div class="card-f mu">Tudo o que aparecer no ecrã fica gravado durante 90 dias (as passwords escritas não aparecem no ecrã e por isso não ficam gravadas). A abertura fica também no registo de auditoria.</div>
+      </section>
+<?php else: ?>
+      <section class="card term-card">
+        <div class="card-h"><div><h2>Terminal (root)</h2><p>Sessão gravada · fecha com <span class="mono">exit</span> ou ao fim de 15 min sem atividade</p></div>
+          <form method="post"><?= act_fields('terminal_close') ?><button class="btn sm dan" type="submit">Fechar terminal</button></form></div>
+        <div class="term-wrap"><div class="term-wait" id="term-wait"><span class="spin"></span> A iniciar o terminal…</div><iframe id="term" title="Terminal" data-src="/terminal/<?= h($tSes) ?>/"></iframe></div>
+      </section>
+<?php endif; ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Sessões gravadas</h2><p>Guardadas durante 90 dias em <span class="mono"><?= h(MP_TERM_LOG) ?></span>. O ficheiro de tempos permite rever a sessão com <span class="mono">scriptreplay</span>.</p></div></div>
+        <?php if (!$recs): ?><div class="empty">Ainda não há sessões gravadas.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Início</th><th class="r">Tamanho</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach (array_slice($recs, 0, 100) as $r): $dt = DateTime::createFromFormat('Ymd-His', $r['id'], new DateTimeZone('UTC')); ?>
+            <tr><td class="first mono" data-label="Início"><?= h($dt ? gmdate('d/m/Y H:i:s', $dt->getTimestamp() + $tz) : $r['id']) ?></td><td class="r" data-label="Tamanho"><?= h(fmt_bytes((float)$r['s'])) ?></td>
+              <td class="act r"><a class="btn sm sec" href="?term=view&amp;id=<?= h($r['id']) ?>" target="_blank" rel="noopener">Ver</a> <a class="btn sm sec" href="?term=dl&amp;id=<?= h($r['id']) ?>">Descarregar</a> <a class="btn sm sec" href="?term=dl&amp;f=timing&amp;id=<?= h($r['id']) ?>" title="Para rever com: scriptreplay -t sessão.timing sessão.log">Tempos</a></td></tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+
 <?php elseif ($page === 'auditoria'):
     $alog = [];
     $af = MP_DATA . '/logs/audit.log';
@@ -4374,6 +4475,16 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   var live = null; $('lg-live').addEventListener('change', function (e) { if (e.target.checked) live = setInterval(load, 5000); else clearInterval(live); });
   load();
 })();
+</script>
+<?php endif; ?>
+<?php if ($page === 'terminal'): ?>
+<script>
+(function () { var f = document.getElementById('term'); if (!f) return; var w = document.getElementById('term-wait'), src = f.getAttribute('data-src'), n = 0;
+  function tick() { fetch(src, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+      if (r.ok) { f.src = src; w.style.display = 'none'; f.style.display = 'block'; }
+      else if (++n < 120) setTimeout(tick, 1000); else w.textContent = 'O terminal não arrancou. Fecha e volta a abrir.'; })
+    .catch(function () { if (++n < 120) setTimeout(tick, 1000); }); }
+  tick(); })();
 </script>
 <?php endif; ?>
 <?php if ($page === 'atualizacoes'): ?>
@@ -7228,7 +7339,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.5.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.6.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7668,11 +7779,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.5.0
+#  mpanel — IDDigital Hosting CLI v2.6.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.5.0"
+MP_VERSION="2.6.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -8927,7 +9038,7 @@ cmd_cron_run(){
   cron_write_site "$n"
   st="$WWW_ROOT/$n/logs/cron-$id.status"
   s1=$(runuser -u "mp_$n" -- cat "$st" 2>/dev/null)
-  setsid runuser -u "mp_$n" -- /usr/local/sbin/mpanel-cron "$n" "$id" >/dev/null 2>&1 < /dev/null &
+  setsid runuser -u "mp_$n" -- /usr/local/sbin/mpanel-cron "$n" "$id" >/dev/null 2>&1 < /dev/null 9>&- &
   for i in $(seq 1 40); do
     sleep 0.5
     out=$(runuser -u "mp_$n" -- cat "$st" 2>/dev/null)
@@ -9222,7 +9333,7 @@ cmd_backup_run(){
 }
 cmd_backup_start(){ # lança em segundo plano (usado pelo painel)
   [ -n "$(flock -n "$BK_LOCK" true 2>&1 || echo busy)" ] && die "Já está a decorrer um backup."
-  setsid /usr/local/sbin/mpanel backup-run "$@" >/dev/null 2>&1 < /dev/null &
+  setsid /usr/local/sbin/mpanel backup-run "$@" >/dev/null 2>&1 < /dev/null 9>&- &
   echo "Backup iniciado em segundo plano. O progresso aparece na página Backups."
   return 0
 }
@@ -10807,7 +10918,7 @@ upd_spawn(){ # comando...
   if command -v systemd-run >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemd-run --quiet --collect --unit="minipainel-upd-$EPOCHSECONDS" /bin/bash "$cp" "$@" >/dev/null 2>&1
   else
-    setsid /bin/bash "$cp" "$@" >/dev/null 2>&1 < /dev/null &
+    setsid /bin/bash "$cp" "$@" >/dev/null 2>&1 < /dev/null 9>&- &
   fi
 }
 cmd_update_start(){ [ -f "$UPD_RUN" ] && die "Já está a decorrer uma atualização."; upd_status "A preparar" painel; upd_spawn update-run "$@"; echo "Atualização iniciada. O progresso aparece na página Atualizações."; return 0; }
@@ -11474,6 +11585,57 @@ cmd_logs_settings(){
   echo "Os logs dos sites passam a ser guardados durante $d dias."; return 0
 }
 
+# ============================ TERMINAL (ttyd, root, só com 2FA) ==============
+TERM_RUN=/run/minipainel-term
+TERM_LOG=/var/log/minipainel/terminal
+TTYD_VER=1.7.7
+TTYD_SHA_X86=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
+TTYD_SHA_ARM=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165
+term_bin(){ if command -v ttyd >/dev/null 2>&1; then command -v ttyd; else echo /usr/local/lib/minipainel/ttyd; fi; }
+term_install(){
+  [ -x "$(term_bin)" ] && return 0
+  if [ "$OS_FAMILY" = debian ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y -q ttyd >/dev/null 2>&1; else dnf install -y -q ttyd >/dev/null 2>&1; fi
+  [ -x "$(term_bin)" ] && return 0
+  # sem pacote na distribuição: binário oficial com versão e SHA-256 fixados
+  local arch sha url tmp; arch=$(uname -m)
+  case "$arch" in x86_64) sha=$TTYD_SHA_X86 ;; aarch64) sha=$TTYD_SHA_ARM ;; *) die "Arquitetura $arch sem ttyd disponível." ;; esac
+  url="https://github.com/tsl0922/ttyd/releases/download/$TTYD_VER/ttyd.$arch"; tmp=$(mktemp)
+  curl -fsSL -m 120 -o "$tmp" "$url" || { rm -f "$tmp"; die "Não foi possível descarregar o ttyd."; }
+  [ "$(sha256sum "$tmp" | awk '{print $1}')" = "$sha" ] || { rm -f "$tmp"; die "O ttyd descarregado não corresponde ao SHA-256 esperado; instalação recusada."; }
+  install -d -m 755 /usr/local/lib/minipainel; install -m 755 "$tmp" /usr/local/lib/minipainel/ttyd; rm -f "$tmp"
+}
+term_2fa_on(){ jq -e '(.totp // "") != ""' "$AUTH" >/dev/null 2>&1; }
+cmd_terminal_start(){
+  local tok="${1:-}" re='^[a-f0-9]{32}$' bin w=() id i
+  [[ "$tok" =~ $re ]] || die "Pedido inválido."
+  term_2fa_on || die "O terminal só pode ser usado com a verificação em dois passos ativa (Conta)."
+  term_install; bin=$(term_bin)
+  cmd_terminal_stop >/dev/null 2>&1
+  install -d -o root -g "$WEB_GROUP" -m 2750 "$TERM_RUN"
+  install -d -o root -g "$PANEL_SYSUSER" -m 2750 "$TERM_LOG"
+  "$bin" --help 2>&1 | grep -q -- '--writable' && w=(-W)
+  id=$(date '+%Y%m%d-%H%M%S')
+  local args=(-i "$TERM_RUN/term.sock" -b "/terminal/$tok" -o -O "${w[@]}" -t fontSize=14 -t disableLeaveAlert=true -t "titleFixed=Terminal — $(hostname -s)" /usr/local/sbin/mpanel-term "$id")
+  if command -v systemd-run >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemd-run --quiet --collect --unit=minipainel-term --property=RuntimeMaxSec=14400 --property=UMask=0007 "$bin" "${args[@]}" >/dev/null 2>&1 || die "Não foi possível arrancar o terminal."
+  else
+    ( umask 007; setsid bash -c 'echo $$ > "$0"; exec timeout 4h "$@"' "$TERM_RUN/ttyd.pid" "$bin" "${args[@]}" >/dev/null 2>&1 < /dev/null 9>&- & )
+  fi
+  for i in $(seq 1 30); do [ -S "$TERM_RUN/term.sock" ] && break; sleep 0.2; done
+  [ -S "$TERM_RUN/term.sock" ] || die "O terminal não arrancou."
+  chgrp "$WEB_GROUP" "$TERM_RUN/term.sock" 2>/dev/null; chmod 660 "$TERM_RUN/term.sock" 2>/dev/null
+  logger -t minipainel-audit -p authpriv.notice "terminal root aberto pelo painel (sessão $id)" 2>/dev/null
+  echo "Terminal pronto (sessão $id; fecha ao fim de 15 min sem atividade)."
+  return 0
+}
+cmd_terminal_stop(){
+  systemctl stop minipainel-term >/dev/null 2>&1
+  local pg; pg=$(cat "$TERM_RUN/ttyd.pid" 2>/dev/null)
+  if [[ "$pg" =~ ^[0-9]+$ ]]; then kill -TERM -- "-$pg" >/dev/null 2>&1; sleep 0.3; kill -KILL -- "-$pg" >/dev/null 2>&1; fi
+  rm -f "$TERM_RUN/term.sock" "$TERM_RUN/ttyd.pid"
+  echo "Terminal fechado."; return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -11593,7 +11755,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -11611,7 +11773,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.5.0 (mpanel)
+IDDigital Hosting — CLI v2.6.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -11650,6 +11812,9 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
   dns-zone-add|dns-zone-del <domínio>       zona com registos automáticos (sites, email, nameservers)
   dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
   dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
+
+Terminal no painel (root; só com 2FA; sessões gravadas 90 dias em /var/log/minipainel/terminal)
+  terminal-stop                        fecha o terminal aberto pelo painel
 
 Logs dos sites (/var/log/minipainel/sites e /srv/www/<site>/logs)
   logs-settings --days N               dias a guardar (7 a 365; omissão 90)
@@ -11815,6 +11980,8 @@ dispatch(){
     dns-sync)          cmd_dns_sync "$@" ;;
     dns-check)         cmd_dns_check "$@" ;;
     logs-settings)     cmd_logs_settings "$@" ;;
+    terminal-start)    cmd_terminal_start "$@" ;;
+    terminal-stop)     cmd_terminal_stop ;;
     conf-lock)         conf_lock ;;
     update-check)      cmd_update_check ;;
     update-start)      cmd_update_start "$@" ;;
@@ -11907,7 +12074,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.5.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.6.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -12295,7 +12462,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.5.0
+#  mp-sendmail — IDDigital Hosting v2.6.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -12330,10 +12497,32 @@ if [ "$OS_FAMILY" != debian ] && command -v semanage >/dev/null 2>&1; then
   se_fc httpd_sys_rw_content_t "/var/spool/mp-mail(/.*)?"
 fi
 
+cat > /usr/local/sbin/mpanel-term <<'MPTERM'
+#!/usr/bin/env bash
+# =============================================================================
+#  mpanel-term — IDDigital Hosting v2.6.0
+#  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
+#  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
+#  e termina ao fim de 15 minutos sem atividade.
+# =============================================================================
+id=${1:-}
+[[ "$id" =~ ^[0-9]{8}-[0-9]{6}$ ]] || exit 2
+LOG=/var/log/minipainel/terminal
+umask 027
+export TERM=xterm-256color TMOUT=900 HOME=/root
+cd /root || exit 1
+printf '\033[1;33mIDDigital Hosting — terminal root.\033[0m Esta sessão está a ser gravada. Fecha com "exit".\r\n\r\n'
+exec script -q -f -T "$LOG/$id.timing" -O "$LOG/$id.log" -c "TMOUT=900 exec bash -l"
+MPTERM
+chown root:root /usr/local/sbin/mpanel-term; chmod 700 /usr/local/sbin/mpanel-term
+install -d -o root -g minipainel -m 2750 /var/log/minipainel/terminal
+printf '# IDDigital Hosting — gravações do terminal: guardar 90 dias\n45 4 * * * root find /var/log/minipainel/terminal -type f -mtime +90 -delete\n' > /etc/cron.d/minipainel-terminal
+chmod 644 /etc/cron.d/minipainel-terminal
+
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.5.0
+#  mpanel-cron — IDDigital Hosting v2.6.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
