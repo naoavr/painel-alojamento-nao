@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.6.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.7.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.6.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.7.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.6.0"
+MP_VERSION="2.7.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -487,7 +487,7 @@ pm = ondemand
 pm.max_children = 4
 pm.process_idle_timeout = 30s
 request_terminate_timeout = 0
-php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/:/var/log/minipainel/sites/:/var/log/minipainel/terminal/
+php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/:/var/log/minipainel/sites/:/var/log/minipainel/terminal/:/var/lib/minipainel/geoip/
 php_admin_value[session.save_path] = /var/lib/minipainel/sessions
 php_admin_value[upload_tmp_dir] = /var/lib/minipainel/tmp
 php_admin_value[sys_temp_dir] = /var/lib/minipainel/tmp
@@ -544,7 +544,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.6.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.7.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -552,7 +552,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.6.0';
+const MP_VERSION = '2.7.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -745,6 +745,48 @@ function log_summary(string $f): array { // últimas 24 h
     }
     foreach (['ips', 'e404', 'e5xx'] as $k) { arsort($sum[$k]); $sum[$k] = array_slice($sum[$k], 0, 10, true); }
     return $sum;
+}
+/* ---------- países (base DB-IP Lite, consultada localmente) e paginação ---------- */
+const MP_GEO = '/var/lib/minipainel/geoip';
+function geo_cc(string $ip): string {
+    static $fh = [], $n = [], $cache = [];
+    if (isset($cache[$ip])) return $cache[$ip];
+    $v6 = strpos($ip, ':') !== false; $k = $v6 ? 6 : 4; $rec = $v6 ? 34 : 10; $cc = '';
+    if (!isset($fh[$k])) { $f = MP_GEO . '/v' . $k . '.bin'; $fh[$k] = is_readable($f) ? fopen($f, 'rb') : false; $n[$k] = $fh[$k] ? intdiv((int)filesize($f), $rec) : 0; }
+    if ($fh[$k]) {
+        if ($v6) { $x = @inet_pton($ip); if ($x === false || strlen($x) !== 16) return $cache[$ip] = ''; }
+        else { $x = ip2long($ip); if ($x === false) return $cache[$ip] = ''; }
+        $lo = 0; $hi = $n[$k] - 1;
+        while ($lo <= $hi) {
+            $mid = ($lo + $hi) >> 1; fseek($fh[$k], $mid * $rec); $r = (string)fread($fh[$k], $rec);
+            if ($v6) { $a = substr($r, 0, 16); $b = substr($r, 16, 16); $lt = strcmp($x, $a) < 0; $gt = strcmp($x, $b) > 0; }
+            else { $u = unpack('Na/Nb', $r); $lt = $x < $u['a']; $gt = $x > $u['b']; }
+            if ($lt) $hi = $mid - 1; elseif ($gt) $lo = $mid + 1; else { $cc = substr($r, $rec - 2, 2); break; }
+        }
+    }
+    return $cache[$ip] = $cc;
+}
+function cc_name(string $cc): string {
+    if (!preg_match('/^[A-Z]{2}$/', $cc)) return 'Rede local ou desconhecido';
+    if (class_exists('Locale')) { $n = Locale::getDisplayRegion('-' . $cc, 'pt_PT'); if ($n !== '' && $n !== $cc) return $n; }
+    return $cc;
+}
+function cc_flag(string $cc): string { return preg_match('/^[A-Z]{2}$/', $cc) ? mb_chr(127397 + ord($cc[0])) . mb_chr(127397 + ord($cc[1])) : '🌐'; }
+function paginate(array $items, int $per = 50, string $param = 'pg'): array {
+    $total = count($items); $pages = max(1, (int)ceil($total / $per)); $pg = min($pages, max(1, (int)qget($param)));
+    return [array_slice($items, ($pg - 1) * $per, $per), $pg, $pages, $total];
+}
+function pager(int $pg, int $pages, int $total, string $param = 'pg', string $what = 'itens'): string {
+    if ($pages <= 1) return '';
+    $q = $_GET; $link = function (int $p) use ($q, $param) { $q[$param] = $p; return '?' . h(http_build_query($q)); };
+    $h = '<nav class="pager" aria-label="Páginas"><span class="mu">' . $total . ' ' . h($what) . '</span>';
+    $h .= $pg > 1 ? '<a class="chip sm" href="' . $link($pg - 1) . '">‹ Anterior</a>' : '';
+    foreach (array_unique([1, max(1, $pg - 2), $pg - 1, $pg, $pg + 1, min($pages, $pg + 2), $pages]) as $p) {
+        if ($p < 1 || $p > $pages) continue;
+        $h .= '<a class="chip sm' . ($p === $pg ? ' prim' : '') . '" href="' . $link($p) . '">' . $p . '</a>';
+    }
+    $h .= $pg < $pages ? '<a class="chip sm" href="' . $link($pg + 1) . '">Seguinte ›</a>' : '';
+    return $h . '</nav>';
 }
 function valid_net(string $s): bool {
     $ip = $s; $bits = null;
@@ -1278,6 +1320,13 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pager{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.pager .mu{margin-right:6px}
+.cc-flag{font-size:18px;line-height:1;font-family:"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif}
+.cbar{height:6px;border-radius:99px;background:var(--line);margin:6px 0 4px;overflow:hidden}
+.cbar span{display:block;height:100%;background:var(--acc)}
+.ovl-on{border:1px solid var(--err);background:color-mix(in srgb,var(--err) 8%,var(--card))}
+.ovl-on b{color:var(--err)}
 .term-wrap{position:relative;height:calc(100vh - 260px);min-height:420px;background:#000;border-radius:0 0 24px 24px;overflow:hidden}
 .term-wrap iframe{display:none;width:100%;height:100%;border:0}
 .term-wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;color:#cbd5e1}
@@ -1505,8 +1554,17 @@ if (qget('stats') === 'conns') {
     header('Content-Type: application/json');
     if (empty($_SESSION['user'])) { http_response_code(401); echo '{}'; exit; }
     session_write_close();
-    $d = @file_get_contents(MP_STATS . '/conns.json');
-    echo $d !== false ? $d : '{}';
+    $cj = jload(MP_STATS . '/conns.json') ?? [];
+    $byc = [];
+    foreach ((array)($cj['ips'] ?? []) as $i => $r) {
+        $cc = geo_cc((string)($r['ip'] ?? '')); $cj['ips'][$i]['cc'] = $cc; $cj['ips'][$i]['fl'] = cc_flag($cc); $cj['ips'][$i]['cn'] = cc_name($cc);
+        $k = $cc !== '' ? $cc : '--'; $byc[$k] = $byc[$k] ?? ['cc' => $cc, 'n' => 0, 'ips' => 0, 'fl' => cc_flag($cc), 'cn' => cc_name($cc)];
+        $byc[$k]['n'] += (int)($r['n'] ?? 0); $byc[$k]['ips']++;
+    }
+    usort($byc, function ($a, $b) { return $b['n'] <=> $a['n']; });
+    $cj['countries'] = array_values($byc);
+    $cj['ovl'] = jload(MP_STATS . '/overload.json') ?? ['active' => false];
+    echo json_encode($cj, JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -1918,6 +1976,25 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'mail_av':
             job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
             $back = ['t' => 'antispam'];
+            break;
+
+        case 'geo_block':
+            $gc = strtoupper(post('cc')); $op = post('op') === 'del' ? 'del' : 'add';
+            if (!preg_match('/^[A-Z]{2}$/', $gc)) { $bad('Escolhe um país.'); break; }
+            job_submit('geo-block', [$op, $gc], ($op === 'add' ? 'Bloquear o país ' : 'Desbloquear o país ') . $gc);
+            $back = ['t' => 'paises'];
+            break;
+        case 'geoip_update':
+            job_submit('geoip-update', [], 'Atualizar a base de países');
+            $back = ['t' => 'paises'];
+            break;
+        case 'overload_settings':
+            $mx = strtolower(post('max')); $st = post('start'); $sp = post('stop'); $hc = strtoupper(post('home'));
+            if ($mx !== 'auto' && (!ctype_digit($mx) || (int)$mx < 50)) { $bad('Capacidade: auto ou um número igual ou superior a 50.'); break; }
+            if (!ctype_digit($st) || !ctype_digit($sp) || (int)$sp >= (int)$st || (int)$st > 99 || (int)$sp < 10) { $bad('Percentagens inválidas (a de saída tem de ser menor que a de entrada).'); break; }
+            if (!preg_match('/^[A-Z]{2}$/', $hc)) { $bad('País inválido.'); break; }
+            job_submit('overload-settings', [post('on') === 'off' ? '--off' : '--on', '--max', $mx, '--start', $st, '--stop', $sp, '--home', $hc], 'Limite de ligações');
+            $back = ['t' => 'protecao'];
             break;
 
         case 'terminal_open':
@@ -2955,99 +3032,163 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $portLabels = [];
     foreach ($sites as $s) $portLabels[(string)(int)($s['port'] ?? 0)] = (string)($s['name'] ?? '');
     $portLabels[(string)(int)($sys['panel_port'] ?? 2443)] = 'Painel';
-    $portLabels += ['22' => 'SSH', '3306' => 'MariaDB', '80' => 'HTTP', '443' => 'HTTPS'];
+    $portLabels += ['22' => 'SSH', '3306' => 'MariaDB', '80' => 'HTTP', '443' => 'HTTPS', '25' => 'SMTP', '587' => 'SMTP', '465' => 'SMTPS', '993' => 'IMAPS', '995' => 'POP3S', '21' => 'FTP', '53' => 'DNS', '2096' => 'Webmail'];
     $durs = ['600s' => '10 minutos', '1h' => '1 hora', '24h' => '24 horas', '7d' => '7 dias'];
     $curDur = (int)($fwAuto['duration'] ?? 3600);
     $tzl = tz_off(live_stats());
+    $geo = is_array($state['geo'] ?? null) ? $state['geo'] : ['block' => [], 'home' => 'PT', 'countries' => [], 'updated' => 0, 'ovl' => ['on' => true, 'capacity' => 0, 'start' => 80, 'stop' => 60, 'max' => 'auto']];
+    $ovl = jload(MP_STATS . '/overload.json') ?? ['active' => false];
+    $ltab = in_array(qget('t'), ['ativas', 'paises', 'bloqueios', 'protecao'], true) ? qget('t') : 'ativas';
+    $allCc = array_values(array_filter((array)($geo['countries'] ?? []), function ($c) { return preg_match('/^[A-Z]{2}$/', $c); }));
+    usort($allCc, function ($a, $b) { return strcoll(cc_name($a), cc_name($b)); });
 ?>
       <?php if (empty($fw['nft'])): ?>
         <div class="card"><div class="empty"><b>A firewall do painel não está ativa</b>No servidor: <span class="mono">mpanel fw-restore</span> (requer o pacote nftables).</div></div>
       <?php endif; ?>
+      <?php if (!empty($ovl['active'])): ?>
+        <div class="card ovl-on"><div class="card-b"><b><?= ic('ban') ?> Modo de proteção ativo</b> desde <?= h(gmdate('H:i', (int)($ovl['since'] ?? time()) + $tzl)) ?>: <?= (int)($ovl['total'] ?? 0) ?> ligações para uma capacidade de <?= (int)($ovl['capacity'] ?? 0) ?>. Só são aceites ligações novas de <?= cc_flag((string)($ovl['home'] ?? 'PT')) ?> <?= h(cc_name((string)($ovl['home'] ?? 'PT'))) ?>, da rede local e dos IPs de confiança.</div></div>
+      <?php endif; ?>
+      <nav class="tabs" aria-label="Secções">
+        <?php foreach (['ativas' => 'Ligações ativas', 'paises' => 'Países', 'bloqueios' => 'Bloqueios (' . count($fwBlocks) . ')', 'protecao' => 'Proteção e limites'] as $tk => $tl): ?>
+          <a class="chip<?= $ltab === $tk ? ' prim' : '' ?>" href="?p=ligacoes&amp;t=<?= $tk ?>"><?= h($tl) ?></a>
+        <?php endforeach; ?>
+      </nav>
+
+  <?php if ($ltab === 'ativas' || $ltab === 'paises'): ?>
       <section class="stats" id="cn-stats">
-        <div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Ligações abertas</div><div class="v" data-c="total"><?= (int)($cj['total'] ?? 0) ?></div></div></div>
+        <div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Ligações abertas</div><div class="v"><span data-c="total"><?= (int)($cj['total'] ?? 0) ?></span> <small>/ <?= (int)($geo['ovl']['capacity'] ?? 0) ?></small></div></div></div>
         <div class="stat"><span class="tile t-blue"><?= ic('world') ?></span><div><div class="k">IPs distintos</div><div class="v" data-c="distinct"><?= (int)($cj['distinct'] ?? 0) ?></div></div></div>
         <div class="stat"><span class="tile t-warn"><?= ic('reload') ?></span><div><div class="k">Em espera (SYN)</div><div class="v" data-c="syn"><?= (int)($cj['syn'] ?? 0) ?></div></div></div>
-        <div class="stat"><span class="tile t-vio"><?= ic('ban') ?></span><div><div class="k">IPs bloqueados</div><div class="v"><?= count($fwBlocks) ?></div></div></div>
+        <div class="stat"><span class="tile <?= !empty($ovl['active']) ? 't-warn' : 't-vio' ?>"><?= ic('ban') ?></span><div><div class="k">Proteção</div><div class="v" style="font-size:17px"><?= !empty($ovl['active']) ? 'Ativa' : (!empty($geo['ovl']['on']) ? 'Em vigilância' : 'Desligada') ?></div></div></div>
       </section>
+  <?php endif; ?>
 
-      <section class="card" id="cn" data-me="<?= h($myIp) ?>" data-limit="<?= (int)$fwAuto['limit'] ?>" data-auto="<?= !empty($fwAuto['on']) ? 1 : 0 ?>"
-        data-labels="<?= h((string)json_encode($portLabels)) ?>" data-allow="<?= h((string)json_encode(array_values($fwAllow))) ?>" data-init="<?= h((string)json_encode($cj)) ?>">
+  <?php if ($ltab === 'ativas'): ?>
+      <section class="card" id="cn" data-mode="ip" data-me="<?= h($myIp) ?>" data-limit="<?= (int)$fwAuto['limit'] ?>" data-auto="<?= !empty($fwAuto['on']) ? 1 : 0 ?>"
+        data-labels="<?= h((string)json_encode($portLabels)) ?>" data-allow="<?= h((string)json_encode(array_values($fwAllow))) ?>">
         <div class="card-h">
           <div><h2>Ligações por IP</h2><p>Atualiza a cada 5 segundos. Só ligações a serviços deste servidor.</p></div>
-          <input class="in cn-search" id="cn-q" type="search" placeholder="Procurar IP…" aria-label="Procurar IP" autocomplete="off">
+          <input class="in cn-search" id="cn-q" type="search" placeholder="Procurar IP ou país…" aria-label="Procurar" autocomplete="off">
         </div>
         <table class="list cards">
-          <thead><tr><th>IP de origem</th><th class="r">Ligações</th><th>Destino</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
-          <tbody id="cn-rows"><tr><td colspan="4" class="empty">A carregar…</td></tr></tbody>
+          <thead><tr><th>IP de origem</th><th>País</th><th class="r">Ligações</th><th>Destino</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody id="cn-rows"><tr><td colspan="5" class="empty">A carregar…</td></tr></tbody>
         </table>
-        <div class="card-f mu" id="cn-foot"></div>
+        <div class="card-f" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="mu" id="cn-foot" style="flex:1"></span><nav class="pager" id="cn-pager"></nav></div>
       </section>
 
-      <section class="card">
-          <div class="card-h"><div><h2>IPs bloqueados</h2><p>Bloqueados em todas as portas, incluindo SSH.</p></div></div>
-          <?php if (!$fwBlocks): ?>
-            <div class="empty">Nenhum IP bloqueado.</div>
-          <?php else: ?>
-          <table class="list cards">
-            <thead><tr><th>IP / rede</th><th>Origem</th><th>Motivo</th><th>Expira</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
-            <tbody>
-            <?php foreach ($fwBlocks as $b): $exp = (int)($b['exp'] ?? 0); $left = $exp - time(); ?>
-              <tr>
-                <td class="first" data-label="IP"><div class="nm mono"><?= h($b['ip'] ?? '') ?></div></td>
-                <td data-label="Origem"><span class="pill <?= ($b['by'] ?? '') === 'auto' ? 'p-err' : 'p-off' ?>"><?= ($b['by'] ?? '') === 'auto' ? 'Automático' : 'Manual' ?></span> <span class="mu"><?= h(gmdate('d/m/Y H:i', (int)($b['created'] ?? 0) + $tzl)) ?></span></td>
-                <td data-label="Motivo" class="mu"><?= h(($b['reason'] ?? '') !== '' ? $b['reason'] : '—') ?></td>
-                <td data-label="Expira"><?= $exp === 0 ? 'Permanente' : 'em ' . h($left >= 86400 ? round($left / 86400) . ' d' : ($left >= 3600 ? round($left / 3600) . ' h' : max(1, round($left / 60)) . ' min')) ?></td>
-                <td class="act r"><form method="post" style="margin:0"><?= act_fields('fw_unblock', ['ip' => (string)($b['ip'] ?? '')]) ?><button class="btn sm sec" type="submit">Desbloquear</button></form></td>
-              </tr>
-            <?php endforeach; ?>
-            </tbody>
-          </table>
-          <?php endif; ?>
-      </section>
-
+  <?php elseif ($ltab === 'paises'): ?>
       <div class="grid2e">
-          <section class="card">
-            <div class="card-h"><div><h2>Bloqueio automático</h2><p>Bloqueia IPs com demasiadas ligações abertas em simultâneo.</p></div><span class="pill <?= !empty($fwAuto['on']) ? 'p-ok' : 'p-off' ?>"><?= !empty($fwAuto['on']) ? 'Ativo' : 'Desativado' ?></span></div>
-            <form method="post" class="card-b">
-              <?= act_fields('fw_auto') ?>
-              <div class="fgrid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
-                <label class="fld">Estado<select class="in" name="on"><option value="on"<?= !empty($fwAuto['on']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($fwAuto['on']) ? ' selected' : '' ?>>Desativado</option></select></label>
-                <label class="fld">Limite por IP<input class="in" name="limit" inputmode="numeric" pattern="[0-9]{2,6}" required value="<?= (int)$fwAuto['limit'] ?>"><small>ligações abertas</small></label>
-                <label class="fld">Duração<select class="in" name="dur"><?php foreach ($durs as $dk => $dl): $ds = (int)fw_secs_php($dk); ?><option value="<?= h($dk) ?>"<?= $ds === $curDur ? ' selected' : '' ?>><?= h($dl) ?></option><?php endforeach; ?></select></label>
-              </div>
-              <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
-            </form>
-            <div class="card-f mu">Nunca são bloqueados: este servidor, os IPs de confiança e os IPs de onde usaste o painel nos últimos 7 dias.</div>
-          </section>
-
-          <section class="card">
-            <div class="card-h"><div><h2>IPs de confiança</h2><p>Nunca são bloqueados, nem manual nem automaticamente.</p></div></div>
-            <?php if ($fwAllow): ?>
-            <div class="row-list">
-              <?php foreach ($fwAllow as $a): ?>
-                <div class="item"><span class="grow mono"><?= h($a) ?></span><form method="post" style="margin:0"><?= act_fields('fw_allow_del', ['ip' => (string)$a]) ?><button class="btn sm sec" type="submit">Remover</button></form></div>
-              <?php endforeach; ?>
-            </div>
-            <?php endif; ?>
-            <form method="post" class="card-b" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-              <?= act_fields('fw_allow_add') ?>
-              <label class="fld" style="flex:1;min-width:200px">IP ou rede<input class="in mono" name="ip" required placeholder="ex.: <?= h($myIp !== '' ? $myIp : '89.155.12.30') ?>" autocomplete="off"></label>
-              <button class="btn sec" type="submit">Adicionar</button>
-            </form>
-          </section>
+      <section class="card" id="cn" data-mode="cc" data-home="<?= h((string)$geo['home']) ?>" data-blocked="<?= h((string)json_encode(array_values((array)$geo['block']))) ?>">
+        <div class="card-h"><div><h2>Origem das ligações agora</h2><p>Por país, a partir dos IPs com ligações abertas. Atualiza a cada 5 segundos.</p></div></div>
+        <div id="cc-rows" class="row-list"><div class="empty">A carregar…</div></div>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>Países bloqueados</h2><p>Ligações novas destes países são recusadas em todas as portas. As respostas às ligações feitas pelo próprio servidor continuam a passar.</p></div></div>
+        <?php if (!$geo['block']): ?><div class="empty">Nenhum país bloqueado.</div>
+        <?php else: ?><div class="row-list">
+          <?php foreach ((array)$geo['block'] as $cc): ?><div class="item"><span class="cc-flag"><?= cc_flag((string)$cc) ?></span><div class="grow"><div class="nm"><?= h(cc_name((string)$cc)) ?></div><div class="mu mono"><?= h($cc) ?></div></div>
+            <form method="post"><?= act_fields('geo_block', ['op' => 'del', 'cc' => (string)$cc]) ?><button class="btn sm sec" type="submit">Desbloquear</button></form></div><?php endforeach; ?>
+        </div><?php endif; ?>
+        <form method="post" class="card-b" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap" data-confirm="Bloquear este país? Visitantes, robôs de pesquisa e serviços desse país deixam de chegar aos sites e ao email.">
+          <?= act_fields('geo_block', ['op' => 'add']) ?>
+          <label class="fld" style="flex:1;min-width:220px">País<select class="in" name="cc" required><option value="">— escolher —</option>
+            <?php foreach ($allCc as $cc): if ($cc === ($geo['home'] ?? 'PT') || in_array($cc, (array)$geo['block'], true)) continue; ?><option value="<?= h($cc) ?>"><?= cc_flag($cc) ?> <?= h(cc_name($cc)) ?></option><?php endforeach; ?>
+          </select></label>
+          <button class="btn dan" type="submit">Bloquear país</button>
+        </form>
+        <div class="card-f"><div class="warnbox">Cuidado: bloquear países pode impedir a renovação de certificados (o Let's Encrypt valida a partir de vários países, incluindo os EUA), os robôs de pesquisa (Google, Bing) e as notificações de pagamentos (MB Way, Stripe, PayPal…) vindas desses países.</div>
+          <p class="mu" style="margin:10px 0 0;font-size:12px">Geolocalização por <a href="https://db-ip.com" target="_blank" rel="noopener">DB-IP</a> (CC BY 4.0) · base de <?= !empty($geo['updated']) ? h(gmdate('m/Y', (int)$geo['updated'])) : '—' ?>, atualizada todos os meses<?php if (empty($geo['updated'])): ?> · <form method="post" style="display:inline"><?= act_fields('geoip_update') ?><button class="lnk" type="submit" style="display:inline">descarregar agora</button></form><?php endif; ?></p></div>
+      </section>
       </div>
+
+  <?php elseif ($ltab === 'bloqueios'): [$bl, $bpg, $bpages, $btot] = paginate($fwBlocks, 50); ?>
+      <section class="card">
+        <div class="card-h"><div><h2>IPs e gamas bloqueados</h2><p>Bloqueados em todas as portas, incluindo SSH. Aceita um IP (185.220.101.47) ou uma gama (45.148.10.0/24).</p></div><button class="chip sm soft" type="button" data-open="dlg-block">Bloquear IP ou gama</button></div>
+        <?php if (!$fwBlocks): ?>
+          <div class="empty">Nenhum IP bloqueado.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>IP / gama</th><th>País</th><th>Origem</th><th>Motivo</th><th>Expira</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($bl as $b): $exp = (int)($b['exp'] ?? 0); $left = $exp - time(); $bip = (string)($b['ip'] ?? ''); $bcc = geo_cc(explode('/', $bip)[0]); ?>
+            <tr>
+              <td class="first" data-label="IP"><div class="nm mono"><?= h($bip) ?></div></td>
+              <td data-label="País"><span class="cc-flag"><?= cc_flag($bcc) ?></span> <?= h(cc_name($bcc)) ?></td>
+              <td data-label="Origem"><span class="pill <?= ($b['by'] ?? '') === 'auto' ? 'p-err' : 'p-off' ?>"><?= ($b['by'] ?? '') === 'auto' ? 'Automático' : 'Manual' ?></span></td>
+              <td data-label="Motivo" class="mu"><?= h(($b['reason'] ?? '') !== '' ? $b['reason'] : '—') ?></td>
+              <td data-label="Expira"><?= $exp === 0 ? 'Permanente' : 'em ' . h($left >= 86400 ? round($left / 86400) . ' d' : ($left >= 3600 ? round($left / 3600) . ' h' : max(1, (int)round($left / 60)) . ' min')) ?></td>
+              <td class="act r"><form method="post" style="margin:0"><?= act_fields('fw_unblock', ['ip' => $bip]) ?><button class="btn sm sec" type="submit">Desbloquear</button></form></td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <div class="card-f"><?= pager($bpg, $bpages, $btot, 'pg', 'bloqueios') ?></div>
+        <?php endif; ?>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>IPs de confiança</h2><p>Nunca são bloqueados (nem por IP, nem por país, nem pelo modo de proteção).</p></div></div>
+        <?php if ($fwAllow): ?>
+        <div class="row-list">
+          <?php foreach ($fwAllow as $a): ?>
+            <div class="item"><span class="grow mono"><?= h($a) ?></span><form method="post" style="margin:0"><?= act_fields('fw_allow_del', ['ip' => (string)$a]) ?><button class="btn sm sec" type="submit">Remover</button></form></div>
+          <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+        <form method="post" class="card-b" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <?= act_fields('fw_allow_add') ?>
+          <label class="fld" style="flex:1;min-width:200px">IP ou gama<input class="in mono" name="ip" required placeholder="ex.: <?= h($myIp !== '' ? $myIp : '89.155.0.10') ?>" autocomplete="off"></label>
+          <button class="btn sec" type="submit">Adicionar</button>
+        </form>
+      </section>
+
+  <?php else: $go = (array)($geo['ovl'] ?? []); ?>
+      <div class="grid2e">
+      <section class="card">
+        <div class="card-h"><div><h2>Limite de ligações</h2><p>Ao chegar ao limite, o servidor deixa de aceitar ligações novas de fora do seu país, mantendo sempre margem para os visitantes nacionais.</p></div>
+          <span class="pill <?= !empty($ovl['active']) ? 'p-err' : (!empty($go['on']) ? 'p-ok' : 'p-off') ?>"><?= !empty($ovl['active']) ? 'Proteção ativa' : (!empty($go['on']) ? 'Em vigilância' : 'Desligado') ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('overload_settings') ?>
+          <div class="fgrid">
+            <label class="fld">Estado<select class="in" name="on"><option value="on"<?= !empty($go['on']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($go['on']) ? ' selected' : '' ?>>Desligado</option></select></label>
+            <label class="fld">País do servidor (sempre aceite)<select class="in" name="home"><?php foreach ($allCc ?: ['PT'] as $cc): ?><option value="<?= h($cc) ?>"<?= $cc === ($geo['home'] ?? 'PT') ? ' selected' : '' ?>><?= cc_flag($cc) ?> <?= h(cc_name($cc)) ?></option><?php endforeach; ?></select></label>
+            <label class="fld">Capacidade (ligações simultâneas)<input class="in" name="max" value="<?= h((string)($go['max'] ?? 'auto')) ?>" placeholder="auto"><small>auto = calculada pelo nginx: <?= (int)($go['capacity'] ?? 0) ?></small></label>
+            <div class="fgrid" style="grid-template-columns:1fr 1fr">
+              <label class="fld">Entrada (%)<input class="in" name="start" inputmode="numeric" pattern="[0-9]{1,2}" value="<?= (int)($go['start'] ?? 80) ?>"></label>
+              <label class="fld">Saída (%)<input class="in" name="stop" inputmode="numeric" pattern="[0-9]{1,2}" value="<?= (int)($go['stop'] ?? 60) ?>"></label>
+            </div>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">Agora: <?= (int)($ovl['total'] ?? ($cj['total'] ?? 0)) ?> ligações. No modo de proteção continuam sempre aceites: o país do servidor, a rede local, os IPs de confiança, os IPs de onde usaste o painel nos últimos 7 dias e o DNS. Sai do modo quando a carga fica abaixo do limite de saída durante 2 minutos. Cada mudança fica na auditoria.</div>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>Bloqueio automático por IP</h2><p>Bloqueia IPs com demasiadas ligações abertas em simultâneo.</p></div><span class="pill <?= !empty($fwAuto['on']) ? 'p-ok' : 'p-off' ?>"><?= !empty($fwAuto['on']) ? 'Ativo' : 'Desativado' ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('fw_auto') ?>
+          <div class="fgrid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+            <label class="fld">Estado<select class="in" name="on"><option value="on"<?= !empty($fwAuto['on']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($fwAuto['on']) ? ' selected' : '' ?>>Desativado</option></select></label>
+            <label class="fld">Limite por IP<input class="in" name="limit" inputmode="numeric" pattern="[0-9]{2,6}" required value="<?= (int)$fwAuto['limit'] ?>"></label>
+            <label class="fld">Duração<select class="in" name="dur"><?php foreach ($durs as $dk => $dl): $ds = (int)fw_secs_php($dk); ?><option value="<?= h($dk) ?>"<?= $ds === $curDur ? ' selected' : '' ?>><?= h($dl) ?></option><?php endforeach; ?></select></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">Nunca são bloqueados: este servidor, os IPs de confiança e os IPs de onde usaste o painel nos últimos 7 dias.</div>
+      </section>
+      </div>
+  <?php endif; ?>
 
       <dialog id="dlg-block">
         <form method="post">
           <?= act_fields('fw_block') ?>
-          <div class="dlg-h"><h3>Bloquear IP ou rede</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+          <div class="dlg-h"><h3>Bloquear IP ou gama</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
           <div class="dlg-b">
-            <label class="fld">IP ou rede<input class="in mono" name="ip" id="blk-ip" required placeholder="ex.: 185.220.101.47 ou 45.148.10.0/24" autocomplete="off"></label>
+            <label class="fld">IP ou gama<input class="in mono" name="ip" id="blk-ip" required placeholder="ex.: 185.220.101.47 ou 45.148.10.0/24" autocomplete="off"></label>
             <div class="fgrid">
               <label class="fld">Duração<select class="in" name="dur"><option value="1h">1 hora</option><option value="24h" selected>24 horas</option><option value="7d">7 dias</option><option value="perm">Permanente</option></select></label>
               <label class="fld">Motivo (opcional)<input class="in" name="reason" maxlength="80" autocomplete="off"></label>
             </div>
-            <div class="warnbox">O IP fica bloqueado em todas as portas, incluindo SSH, e as ligações abertas são cortadas de imediato.</div>
+            <div class="warnbox">Fica bloqueado em todas as portas, incluindo SSH, e as ligações abertas são cortadas de imediato.</div>
           </div>
           <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Bloquear</button></div>
         </form>
@@ -4578,46 +4719,61 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <script>
 (function () {
   var box = document.getElementById('cn'); if (!box) return;
+  var mode = box.getAttribute('data-mode');
   var L = JSON.parse(box.getAttribute('data-labels') || '{}'), allow = JSON.parse(box.getAttribute('data-allow') || '[]');
   var me = box.getAttribute('data-me'), lim = +box.getAttribute('data-limit') || 0, auto = box.getAttribute('data-auto') === '1';
-  var data = JSON.parse(box.getAttribute('data-init') || '{}'), q = document.getElementById('cn-q');
+  var home = box.getAttribute('data-home') || '', blocked = JSON.parse(box.getAttribute('data-blocked') || '[]');
+  var data = {}, q = document.getElementById('cn-q'), page = 1, PER = 50;
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function lab(p) { return L[p] ? L[p] + ' :' + p : ':' + p; }
-  function render() {
-    var rows = (data.ips || []), f = (q.value || '').trim(), h = '';
-    if (f) rows = rows.filter(function (r) { return r.ip.indexOf(f) !== -1; });
-    rows.slice(0, 200).forEach(function (r) {
-      var ports = Object.keys(r.ports || {}).sort(function (a, b) { return r.ports[b] - r.ports[a]; })
-        .map(function (p) { return esc(lab(p)) + ' (' + r.ports[p] + ')'; }).join(' · ');
-      var isMe = r.ip === me, ok = allow.indexOf(r.ip) !== -1, hot = lim && r.n >= lim * 0.8;
-      var act = isMe ? '<span class="mu">protegido</span>' : ok ? '<span class="mu">confiança</span>'
-        : '<button class="btn sm danger-o" type="button" data-block="' + esc(r.ip) + '">Bloquear</button>';
-      h += '<tr><td class="first" data-label="IP"><span class="nm mono">' + esc(r.ip) + '</span>' + (isMe ? ' <span class="pill p-me">tu</span>' : '') +
-        (r.syn ? '<div class="mu">' + r.syn + ' em espera (SYN)</div>' : '') + '</td>' +
-        '<td class="r" data-label="Ligações"><b class="' + (hot ? 'cn-hot' : '') + '">' + r.n + '</b></td>' +
-        '<td class="mu" data-label="Destino">' + ports + '</td><td class="act r">' + act + '</td></tr>';
-    });
-    if (!h) h = '<tr><td colspan="4" class="empty">' + (f ? 'Nenhum IP corresponde à pesquisa.' : 'Sem ligações abertas de momento.') + '</td></tr>';
-    document.getElementById('cn-rows').innerHTML = h;
+  function stats() {
     document.querySelectorAll('[data-c]').forEach(function (e) { var k = e.getAttribute('data-c'); if (data[k] !== undefined) e.textContent = data[k]; });
-    var t = data.ts ? new Date(data.ts * 1000) : null;
-    document.getElementById('cn-foot').textContent = (rows.length > 200 ? 'A mostrar 200 de ' + rows.length + ' IPs. ' : '') +
-      (auto ? 'Bloqueio automático ativo acima de ' + lim + ' ligações por IP. ' : 'Bloqueio automático desativado. ') +
-      (t ? 'Última leitura às ' + t.toLocaleTimeString('pt-PT') + '.' : '');
   }
-  document.getElementById('cn-rows').addEventListener('click', function (e) {
-    var b = e.target.closest('[data-block]'); if (!b) return;
-    document.getElementById('blk-ip').value = b.getAttribute('data-block');
-    document.getElementById('dlg-block').showModal();
+  function renderIp() {
+    var rows = (data.ips || []), f = (q.value || '').trim().toLowerCase(), h = '';
+    if (f) rows = rows.filter(function (r) { return r.ip.indexOf(f) !== -1 || (r.cn || '').toLowerCase().indexOf(f) !== -1 || (r.cc || '').toLowerCase() === f; });
+    var pages = Math.max(1, Math.ceil(rows.length / PER)); if (page > pages) page = pages;
+    rows.slice((page - 1) * PER, page * PER).forEach(function (r) {
+      var ports = Object.keys(r.ports || {}).sort(function (a, b) { return r.ports[b] - r.ports[a]; }).map(function (p) { return esc(lab(p)) + ' (' + r.ports[p] + ')'; }).join(' · ');
+      var isMe = r.ip === me, ok = allow.indexOf(r.ip) !== -1, hot = lim && r.n >= lim * 0.8;
+      var act = isMe ? '<span class="mu">protegido</span>' : ok ? '<span class="mu">confiança</span>' : '<button class="btn sm danger-o" type="button" data-block="' + esc(r.ip) + '">Bloquear</button>';
+      h += '<tr><td class="first" data-label="IP"><span class="nm mono">' + esc(r.ip) + '</span>' + (isMe ? ' <span class="pill p-me">tu</span>' : '') + (r.syn ? '<div class="mu">' + r.syn + ' em espera (SYN)</div>' : '') + '</td>' +
+        '<td data-label="País"><span class="cc-flag">' + esc(r.fl || '') + '</span> ' + esc(r.cn || '') + '</td>' +
+        '<td class="r" data-label="Ligações"><b class="' + (hot ? 'cn-hot' : '') + '">' + r.n + '</b></td><td class="mu" data-label="Destino">' + ports + '</td><td class="act r">' + act + '</td></tr>';
+    });
+    if (!h) h = '<tr><td colspan="5" class="empty">' + (f ? 'Nada corresponde à pesquisa.' : 'Sem ligações abertas de momento.') + '</td></tr>';
+    document.getElementById('cn-rows').innerHTML = h;
+    var pg = ''; if (pages > 1) { pg += '<span class="mu">' + rows.length + ' IPs</span>'; for (var i = 1; i <= pages; i++) if (i === 1 || i === pages || Math.abs(i - page) <= 2) pg += '<button type="button" class="chip sm' + (i === page ? ' prim' : '') + '" data-pg="' + i + '">' + i + '</button>'; }
+    document.getElementById('cn-pager').innerHTML = pg;
+    var t = data.ts ? new Date(data.ts * 1000) : null;
+    document.getElementById('cn-foot').textContent = (auto ? 'Bloqueio automático acima de ' + lim + ' ligações por IP. ' : '') + (t ? 'Última leitura às ' + t.toLocaleTimeString('pt-PT') + '.' : '');
+  }
+  function renderCc() {
+    var rows = data.countries || [], tot = rows.reduce(function (a, r) { return a + r.n; }, 0) || 1, h = '';
+    rows.slice(0, 40).forEach(function (r) {
+      var pc = Math.round(r.n * 100 / tot), canBlock = r.cc && r.cc !== home && blocked.indexOf(r.cc) === -1;
+      h += '<div class="item"><span class="cc-flag">' + esc(r.fl) + '</span><div class="grow"><div class="nm">' + esc(r.cn) + (r.cc === home ? ' <span class="pill p-ok">país do servidor</span>' : '') + '</div>' +
+        '<div class="cbar"><span style="width:' + pc + '%"></span></div><div class="mu">' + r.n + ' ligações · ' + r.ips + ' IPs · ' + pc + '%</div></div>' +
+        (canBlock ? '<button class="btn sm danger-o" type="button" data-cc="' + esc(r.cc) + '">Bloquear</button>' : '') + '</div>';
+    });
+    document.getElementById('cc-rows').innerHTML = h || '<div class="empty">Sem ligações abertas de momento.</div>';
+  }
+  function render() { stats(); if (mode === 'cc') renderCc(); else renderIp(); }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-block]');
+    if (b) { document.getElementById('blk-ip').value = b.getAttribute('data-block'); document.getElementById('dlg-block').showModal(); return; }
+    var p = e.target.closest('[data-pg]'); if (p) { page = +p.getAttribute('data-pg'); renderIp(); return; }
+    var c = e.target.closest('[data-cc]');
+    if (c) { var sel = document.querySelector('select[name=cc]'); if (sel) { sel.value = c.getAttribute('data-cc'); sel.form.requestSubmit(); } }
   });
-  q.addEventListener('input', render);
+  if (q) q.addEventListener('input', function () { page = 1; renderIp(); });
   function poll() {
     fetch('?stats=conns', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { if (r.status === 401) { location.reload(); return null; } return r.json(); })
       .then(function (d) { if (d && d.ts) { data = d; render(); } })
       .catch(function () {}).then(function () { setTimeout(poll, 5000); });
   }
-  render(); setTimeout(poll, 5000);
+  poll();
 })();
 </script>
 <?php endif; ?>
@@ -7339,7 +7495,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.6.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.7.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7779,11 +7935,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.6.0
+#  mpanel — IDDigital Hosting CLI v2.7.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.6.0"
+MP_VERSION="2.7.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -8759,10 +8915,23 @@ fw_init(){
 table inet minipainel {
   set block4 { type ipv4_addr; flags interval, timeout; }
   set block6 { type ipv6_addr; flags interval, timeout; }
+  set trust4 { type ipv4_addr; flags interval; }
+  set trust6 { type ipv6_addr; flags interval; }
+  set geo4 { type ipv4_addr; flags interval; }
+  set geo6 { type ipv6_addr; flags interval; }
+  set home4 { type ipv4_addr; flags interval; }
+  set home6 { type ipv6_addr; flags interval; }
+  chain ovl {
+  }
   chain input {
     type filter hook input priority -10; policy accept;
     ip saddr @block4 drop
     ip6 saddr @block6 drop
+    ip saddr @trust4 accept
+    ip6 saddr @trust6 accept
+    ct state new ip saddr @geo4 counter drop
+    ct state new ip6 saddr @geo6 counter drop
+    ct state new jump ovl
   }
 }
 NFT
@@ -8899,6 +9068,7 @@ cmd_fw_restore(){
   done < "$FW_BLOCKS"
   fw_write_state
   mail_fw_apply
+  geo_apply
   echo "Bloqueios repostos: $( [ -f "$FW_BLOCKS" ] && wc -l < "$FW_BLOCKS" || echo 0)."
   return 0
 }
@@ -11636,6 +11806,104 @@ cmd_terminal_stop(){
   echo "Terminal fechado."; return 0
 }
 
+# ============================ PAÍSES E LIMITE DE LIGAÇÕES ====================
+GEO_DIR=/var/lib/minipainel/geoip
+geo_cc_valid(){ [[ "$1" =~ ^[A-Z]{2}$ ]] && [ -f "$GEO_DIR/cc/$1.v4" ] || [ -f "$GEO_DIR/cc/$1.v6" ]; }
+cmd_geoip_update(){
+  local m tmp ok=0
+  tmp=$(mktemp); install -d -o root -g "$PANEL_SYSUSER" -m 750 "$GEO_DIR"
+  for m in "$(date +%Y-%m)" "$(date -d '-1 month' +%Y-%m)"; do
+    curl -fsSL -m 300 -o "$tmp" "https://download.db-ip.com/free/dbip-country-lite-$m.csv.gz" && gzip -t "$tmp" 2>/dev/null && [ "$(stat -c %s "$tmp")" -gt 1000000 ] && { ok=1; break; }
+  done
+  [ "$ok" = 1 ] || { rm -f "$tmp"; die "Não foi possível descarregar a base de geolocalização (DB-IP)."; }
+  "$(php_cli "$PANEL_PHP")" /usr/local/lib/minipainel/geoip-build.php "$tmp" "$GEO_DIR" || { rm -f "$tmp"; die "Falhou a construção da base de geolocalização."; }
+  rm -f "$tmp"
+  chown -R root:"$PANEL_SYSUSER" "$GEO_DIR"; find "$GEO_DIR" -type d -exec chmod 750 {} +; find "$GEO_DIR" -type f -exec chmod 640 {} +
+  date +%s > "$GEO_DIR/updated"
+  geo_apply
+  echo "Base de geolocalização atualizada (DB-IP Lite, $(date +%Y-%m))."
+  return 0
+}
+geo_elems(){ # ficheiro(s) de gamas -> linhas "add element"
+  local set=$1; shift
+  cat "$@" 2>/dev/null | grep -v '^$' | awk -v s="$set" 'BEGIN{n=0} { if (n % 2000 == 0) { if (n) print " }"; printf "add element inet minipainel %s {", s } else printf ","; printf " %s", $0; n++ } END { if (n) print " }" }'
+}
+geo_apply(){ # carrega países bloqueados, país da casa e IPs de confiança na firewall
+  fw_has_nft || return 0
+  nft list table inet minipainel >/dev/null 2>&1 || return 0
+  nft list set inet minipainel geo4 >/dev/null 2>&1 || return 0
+  local f c home; f=$(mktemp); home=$(srv_get HOME_CC PT)
+  {
+    for c in geo4 geo6 home4 home6; do echo "flush set inet minipainel $c"; done
+    local files4=() files6=()
+    for c in $(srv_get GEO_BLOCK ''); do files4+=("$GEO_DIR/cc/$c.v4"); files6+=("$GEO_DIR/cc/$c.v6"); done
+    [ ${#files4[@]} -gt 0 ] && geo_elems geo4 "${files4[@]}" && geo_elems geo6 "${files6[@]}"
+    geo_elems home4 "$GEO_DIR/cc/$home.v4"; geo_elems home6 "$GEO_DIR/cc/$home.v6"
+  } > "$f"
+  nft -f "$f" 2>/dev/null || warn "Não foi possível carregar os países na firewall."
+  rm -f "$f"; trust_apply
+  return 0
+}
+trust_apply(){ # IPs que nunca são bloqueados (servidor, confiança, admin dos últimos 7 dias)
+  nft list set inet minipainel trust4 >/dev/null 2>&1 || return 0
+  local ip f; f=$(mktemp)
+  { echo "flush set inet minipainel trust4"; echo "flush set inet minipainel trust6"
+    for ip in $(fw_protected_list | sort -u); do
+      if [[ "$ip" == *:* ]]; then echo "add element inet minipainel trust6 { $ip }"; elif [[ "$ip" =~ ^[0-9./]+$ ]]; then echo "add element inet minipainel trust4 { $ip }"; fi
+    done; } > "$f"
+  nft -f "$f" 2>/dev/null; rm -f "$f"; return 0
+}
+cmd_geo_block(){ # add|del CC
+  local op="${1:-}" c; c=$(printf '%s' "${2:-}" | tr 'a-z' 'A-Z'); local cur
+  geo_cc_valid "$c" || die "País desconhecido: $c (código de 2 letras, ex.: CN). Se a base ainda não existir: mpanel geoip-update"
+  [ "$c" = "$(srv_get HOME_CC PT)" ] && [ "$op" = add ] && die "Não é possível bloquear o país do próprio servidor ($c)."
+  cur=" $(srv_get GEO_BLOCK '') "
+  case "$op" in
+    add) [[ "$cur" == *" $c "* ]] || cur+="$c " ;;
+    del) cur=${cur// $c / } ;;
+    *) die "Usa: mpanel geo-block add|del <país>" ;;
+  esac
+  srv_set GEO_BLOCK "$(echo $cur | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  geo_apply
+  echo "$([ "$op" = add ] && echo "País $c bloqueado (ligações novas)." || echo "País $c desbloqueado.")"
+  return 0
+}
+cmd_overload_settings(){
+  local on mx st sp home re='^[0-9]{1,7}$'
+  on=$(srv_get OVL 1); mx=$(srv_get OVL_MAX auto); st=$(srv_get OVL_ON 80); sp=$(srv_get OVL_OFF 60); home=$(srv_get HOME_CC PT)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --on) on=1; shift ;; --off) on=0; shift ;;
+      --max) mx="${2:-}"; shift 2 || shift ;; --start) st="${2:-}"; shift 2 || shift ;; --stop) sp="${2:-}"; shift 2 || shift ;;
+      --home) home=$(printf '%s' "${2:-}" | tr 'a-z' 'A-Z'); shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [ "$mx" = auto ] || { [[ "$mx" =~ $re ]] && [ "$mx" -ge 50 ]; } || die "Capacidade inválida (auto ou um número ≥ 50)."
+  [[ "$st" =~ ^[0-9]{1,2}$ ]] && [[ "$sp" =~ ^[0-9]{1,2}$ ]] && [ "$st" -ge 5 ] && [ "$sp" -ge 1 ] && [ "$sp" -lt "$st" ] || die "Os limites são percentagens, e o de saída tem de ser menor que o de entrada."
+  geo_cc_valid "$home" || [ ! -d "$GEO_DIR/cc" ] || die "País desconhecido: $home"
+  [[ " $(srv_get GEO_BLOCK '') " == *" $home "* ]] && die "O país $home está bloqueado; desbloqueia-o primeiro."
+  srv_set OVL "$on"; srv_set OVL_MAX "$mx"; srv_set OVL_ON "$st"; srv_set OVL_OFF "$sp"; srv_set HOME_CC "$home"
+  geo_apply
+  echo "Proteção por limite de ligações: $([ "$on" = 1 ] && echo "ativa (entra aos $st%, sai abaixo de $sp%; capacidade $mx; mantém sempre $home)" || echo desligada)."
+  return 0
+}
+ovl_capacity(){ # ligações simultâneas que o servidor aguenta (nginx)
+  local mx wp wc; mx=$(srv_get OVL_MAX auto)
+  if [ "$mx" != auto ]; then echo "$mx"; return; fi
+  wp=$(grep -m1 -E '^\s*worker_processes' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';')
+  [[ "$wp" =~ ^[0-9]+$ ]] || wp=$(nproc 2>/dev/null || echo 1)
+  wc=$(grep -m1 -E '^\s*worker_connections' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';'); [[ "$wc" =~ ^[0-9]+$ ]] || wc=768
+  echo $(( wp * wc ))
+}
+geo_state_json(){
+  local upd n; upd=$(cat "$GEO_DIR/updated" 2>/dev/null || echo 0); n=$(ls "$GEO_DIR/cc" 2>/dev/null | sed 's/\..*//' | sort -u | tr '\n' ' ')
+  jq -n --arg b "$(srv_get GEO_BLOCK '')" --arg h "$(srv_get HOME_CC PT)" --arg u "$upd" --arg l "$n" --arg on "$(srv_get OVL 1)" --arg mx "$(srv_get OVL_MAX auto)" \
+     --arg cap "$(ovl_capacity)" --arg st "$(srv_get OVL_ON 80)" --arg sp "$(srv_get OVL_OFF 60)" \
+     '{block:($b | split(" ") | map(select(. != ""))), home:$h, updated:($u|tonumber), countries:($l | split(" ") | map(select(. != ""))),
+       ovl:{on:($on == "1"), max:$mx, capacity:($cap|tonumber), start:($st|tonumber), stop:($sp|tonumber)}}'
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -11706,6 +11974,7 @@ write_state(){
     --argjson usnaps "$j_snaps" \
     --argjson fti "$(ftp_installed && echo true || echo false)" --arg ftpl "$(ftp_get PLAIN 0)" --arg ftip "$(ftp_get PASV_IP)" \
     --argjson jdns "$(jv dns "$(dns_state_json 2>/dev/null)" '{"enabled":false}')" --arg ldays "$(logs_days)" \
+    --argjson jgeo "$(jv geo "$(geo_state_json 2>/dev/null)" '{}')" \
     --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
     --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
     --arg prr "$(awk -v s=$(( EPOCHSECONDS - 86400 )) '$1 >= s' "$DATA/stats/ban-history.txt" 2>/dev/null | wc -l)" \
@@ -11721,7 +11990,7 @@ write_state(){
       updates:{snaps:$usnaps},
       ftp:{installed:$fti, plain:($ftpl == "1"), pasv_ip:$ftip},
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
-      dns:$jdns, log_days:($ldays|tonumber),
+      dns:$jdns, log_days:($ldays|tonumber), geo:$jgeo,
       protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
@@ -11755,7 +12024,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -11773,7 +12042,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.6.0 (mpanel)
+IDDigital Hosting — CLI v2.7.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -11812,6 +12081,12 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
   dns-zone-add|dns-zone-del <domínio>       zona com registos automáticos (sites, email, nameservers)
   dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
   dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
+
+Países e limite de ligações
+  geoip-update                         atualiza a base de países (DB-IP Lite, CC BY 4.0; todos os meses sozinha)
+  geo-block add|del <país>             bloqueia ligações novas de um país (ex.: CN)
+  overload-settings [--on|--off] [--max auto|N] [--start 80] [--stop 60] [--home PT]
+                                       ao chegar ao limite só aceita ligações novas do país do servidor
 
 Terminal no painel (root; só com 2FA; sessões gravadas 90 dias em /var/log/minipainel/terminal)
   terminal-stop                        fecha o terminal aberto pelo painel
@@ -11982,6 +12257,10 @@ dispatch(){
     logs-settings)     cmd_logs_settings "$@" ;;
     terminal-start)    cmd_terminal_start "$@" ;;
     terminal-stop)     cmd_terminal_stop ;;
+    geoip-update)      cmd_geoip_update ;;
+    geo-block)         cmd_geo_block "$@" ;;
+    overload-settings) cmd_overload_settings "$@" ;;
+    trust-sync)        trust_apply; echo "IPs de confiança atualizados na firewall." ;;
     conf-lock)         conf_lock ;;
     update-check)      cmd_update_check ;;
     update-start)      cmd_update_start "$@" ;;
@@ -12074,7 +12353,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.6.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.7.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -12364,6 +12643,57 @@ auth_guard(){
   done
 }
 
+# ---------- limite de ligações com reserva para o país do servidor ----------
+ovl_get(){ local v; v=$(grep -m1 "^$1=" /etc/minipainel/server.conf 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+ovl_cap(){
+  local mx wp wc; mx=$(ovl_get OVL_MAX auto)
+  if [ "$mx" != auto ]; then echo "$mx"; return; fi
+  wp=$(grep -m1 -E '^\s*worker_processes' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';'); [[ "$wp" =~ ^[0-9]+$ ]] || wp=$(nproc 2>/dev/null || echo 1)
+  wc=$(grep -m1 -E '^\s*worker_connections' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';'); [[ "$wc" =~ ^[0-9]+$ ]] || wc=768
+  echo $(( wp * wc ))
+}
+ovl_rules_on(){
+  nft -f - >/dev/null 2>&1 <<'EOF'
+flush chain inet minipainel ovl
+add rule inet minipainel ovl ip saddr @home4 return
+add rule inet minipainel ovl ip6 saddr @home6 return
+add rule inet minipainel ovl ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 100.64.0.0/10 } return
+add rule inet minipainel ovl tcp dport 53 return
+add rule inet minipainel ovl meta l4proto tcp ct state new counter reject with tcp reset
+EOF
+}
+ovl_event(){ # registo na auditoria e para os alertas
+  local m=$1
+  printf '{"ts":%s,"ip":"servidor","user":"automático","action":"%s","ok":false}\n' "$EPOCHSECONDS" "$m" >> /var/lib/minipainel/logs/audit.log 2>/dev/null
+  logger -t minipainel-audit "$m" 2>/dev/null
+  printf '%s %s\n' "$EPOCHSECONDS" "$m" >> "$DIR/events.log"
+}
+overload_check(){
+  command -v nft >/dev/null 2>&1 && nft list chain inet minipainel ovl >/dev/null 2>&1 || return 0
+  local on tot cap st sp act since below now=$EPOCHSECONDS home OVL_STATE=$DIR/overload.json
+  on=$(ovl_get OVL 1); home=$(ovl_get HOME_CC PT)
+  tot=$(jq -r '.total // 0' "$DIR/conns.json" 2>/dev/null); [[ "$tot" =~ ^[0-9]+$ ]] || tot=0
+  cap=$(ovl_cap); st=$(ovl_get OVL_ON 80); sp=$(ovl_get OVL_OFF 60)
+  act=$(jq -r '.active // false' "$OVL_STATE" 2>/dev/null); since=$(jq -r '.since // 0' "$OVL_STATE" 2>/dev/null); below=$(jq -r '.below // 0' "$OVL_STATE" 2>/dev/null)
+  if [ "$act" != true ]; then
+    if [ "$on" = 1 ] && [ $(( tot * 100 )) -ge $(( cap * st )) ]; then
+      ovl_rules_on; act=true; since=$now; below=0
+      ovl_event "Modo de proteção ativado: $tot ligações (limite $(( cap * st / 100 ))); só são aceites ligações novas de $home e dos IPs de confiança"
+    fi
+  else
+    [ "$(nft list chain inet minipainel ovl 2>/dev/null | grep -c reject)" = 0 ] && ovl_rules_on   # repõe as regras se a firewall foi recarregada
+    if [ "$on" != 1 ] || [ $(( tot * 100 )) -lt $(( cap * sp )) ]; then
+      [ "$below" = 0 ] && below=$now
+      if [ "$on" != 1 ] || [ $(( now - below )) -ge 120 ]; then
+        nft flush chain inet minipainel ovl >/dev/null 2>&1; act=false
+        ovl_event "Modo de proteção desativado: $tot ligações; voltam a ser aceites ligações de todos os países"
+        since=0; below=0
+      fi
+    else below=0; fi
+  fi
+  put "$OVL_STATE" "{\"active\":$act,\"since\":$since,\"below\":$below,\"total\":$tot,\"capacity\":$cap,\"start\":$st,\"stop\":$sp,\"home\":\"$home\",\"ts\":$now}"
+}
+
 # ---------- ciclo principal ----------
 for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
 read -r p_tot p_idle <<<"$(read_cpu)"
@@ -12405,6 +12735,7 @@ while :; do
   put "$DIR/live.json" "{\"ts\":$EPOCHSECONDS,\"tz\":\"$tz\",\"cpus\":$NCPU,\"cpu\":$(d10 "$cpu"),\"mem\":{\"pct\":$(d10 "$mem"),\"used\":$mu,\"total\":$mt},\"swap\":{\"pct\":$(d10 "$swap"),\"used\":$su,\"total\":$st},\"disk\":{\"pct\":$(d10 "$disk"),\"used\":${dk_u:-0},\"total\":${dk_t:-0}},\"load\":[$l1,$l5,$l15],\"net\":{\"rx\":$rxb,\"tx\":$txb},\"sites\":{$sj}}"
 
   sample_conns
+  overload_check
   mail_spool_kick
   acc_n=$(( acc_n + 1 )); a_cpu=$(( a_cpu + cpu )); a_mem=$(( a_mem + mem )); a_swap=$(( a_swap + swap ))
   a_disk=$(( a_disk + disk )); a_load=$(( a_load + load )); a_rx=$(( a_rx + rxb )); a_tx=$(( a_tx + txb ))
@@ -12462,7 +12793,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.6.0
+#  mp-sendmail — IDDigital Hosting v2.7.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -12497,10 +12828,44 @@ if [ "$OS_FAMILY" != debian ] && command -v semanage >/dev/null 2>&1; then
   se_fc httpd_sys_rw_content_t "/var/spool/mp-mail(/.*)?"
 fi
 
+install -d -m 755 /usr/local/lib/minipainel
+cat > /usr/local/lib/minipainel/geoip-build.php <<'MPGEO'
+<?php
+// IDDigital Hosting — constrói os índices de geolocalização a partir do CSV da DB-IP (CC BY 4.0)
+// uso: php geoip-build.php <csv.gz> <pasta>
+[$src, $dir] = [$argv[1] ?? '', $argv[2] ?? ''];
+$in = gzopen($src, 'r'); if (!$in) { fwrite(STDERR, "CSV ilegível\n"); exit(1); }
+@mkdir($dir . '/cc', 0750, true);
+$v4 = fopen($dir . '/v4.bin.tmp', 'w'); $v6 = fopen($dir . '/v6.bin.tmp', 'w');
+$cc4 = []; $cc6 = []; $n = 0;
+while (($ln = gzgets($in)) !== false) {
+    $p = explode(',', trim($ln)); if (count($p) !== 3) continue;
+    [$a, $b, $c] = $p; if (!preg_match('/^[A-Z]{2}$/', $c) || $c === 'ZZ') continue;
+    if (strpos($a, ':') === false) {
+        $x = ip2long($a); $y = ip2long($b); if ($x === false || $y === false) continue;
+        fwrite($v4, pack('NN', $x, $y) . $c); $cc4[$c][] = "$a-$b";
+    } else {
+        $x = @inet_pton($a); $y = @inet_pton($b); if ($x === false || $y === false) continue;
+        fwrite($v6, $x . $y . $c); $cc6[$c][] = "$a-$b";
+    }
+    $n++;
+}
+gzclose($in); fclose($v4); fclose($v6);
+if ($n < 100000) { fwrite(STDERR, "CSV incompleto ($n linhas)\n"); exit(1); }
+foreach (glob($dir . '/cc/*') as $f) @unlink($f);
+foreach ($cc4 as $c => $l) file_put_contents("$dir/cc/$c.v4", implode("\n", $l) . "\n");
+foreach ($cc6 as $c => $l) file_put_contents("$dir/cc/$c.v6", implode("\n", $l) . "\n");
+rename($dir . '/v4.bin.tmp', $dir . '/v4.bin'); rename($dir . '/v6.bin.tmp', $dir . '/v6.bin');
+echo "$n gamas, " . count($cc4) . " países\n";
+MPGEO
+chmod 644 /usr/local/lib/minipainel/geoip-build.php
+printf '# IDDigital Hosting — base de países (DB-IP Lite) e IPs de confiança na firewall\n15 5 3 * * root /usr/local/sbin/mpanel geoip-update >/dev/null 2>&1\n*/10 * * * * root /usr/local/sbin/mpanel trust-sync >/dev/null 2>&1\n' > /etc/cron.d/minipainel-geo
+chmod 644 /etc/cron.d/minipainel-geo
+
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.6.0
+#  mpanel-term — IDDigital Hosting v2.7.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -12522,7 +12887,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.6.0
+#  mpanel-cron — IDDigital Hosting v2.7.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -12692,6 +13057,7 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
 /usr/local/sbin/mpanel pma-settings --apply >/dev/null 2>&1 || true
 /usr/local/sbin/mpanel conf-lock >/dev/null 2>&1 || true
+[ -f /var/lib/minipainel/geoip/v4.bin ] || /usr/local/sbin/mpanel geoip-update >/dev/null 2>&1 || warn "Não foi possível descarregar a base de países (tenta: mpanel geoip-update)."
 [ -f /etc/minipainel/protect.conf ] || /usr/local/sbin/mpanel protect-settings >/dev/null 2>&1 || true
 command -v pure-pw >/dev/null 2>&1 && { /usr/local/sbin/mpanel ftp-settings >/dev/null 2>&1 || warn "Não foi possível reaplicar a configuração do FTP."; }
 
