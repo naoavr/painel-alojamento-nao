@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.4.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.5.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.4.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.5.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.4.0"
+MP_VERSION="2.5.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -473,7 +473,7 @@ pm = ondemand
 pm.max_children = 4
 pm.process_idle_timeout = 30s
 request_terminate_timeout = 0
-php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/
+php_admin_value[open_basedir] = /opt/minipainel/:/var/lib/minipainel/:/var/backups/minipainel/:/var/log/minipainel/sites/
 php_admin_value[session.save_path] = /var/lib/minipainel/sessions
 php_admin_value[upload_tmp_dir] = /var/lib/minipainel/tmp
 php_admin_value[sys_temp_dir] = /var/lib/minipainel/tmp
@@ -530,7 +530,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.4.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.5.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -538,7 +538,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.4.0';
+const MP_VERSION = '2.5.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -694,6 +694,43 @@ function ip_in(string $ip, string $net): bool {
     $m = (0xFF << (8 - $r)) & 0xFF;
     return (ord($a[$by]) & $m) === (ord($b[$by]) & $m);
 }
+/* ---------- logs dos sites (nginx: lidos diretamente; PHP e cron: pelo gestor de ficheiros do site) ---------- */
+const MP_SITE_LOGS = '/var/log/minipainel/sites';
+function log_tail(string $f, int $max, string $grep = '', int $maxBytes = 33554432): array {
+    if (!is_file($f) || is_link($f)) return [];
+    $fh = @fopen($f, 'r'); if (!$fh) return [];
+    $size = (int)filesize($f); $pos = $size; $buf = ''; $out = [];
+    while ($pos > 0 && count($out) < $max && $size - $pos < $maxBytes) {
+        $rd = min(65536, $pos); $pos -= $rd; fseek($fh, $pos); $buf = (string)fread($fh, $rd) . $buf;
+        $parts = explode("\n", $buf); $buf = $pos > 0 ? (string)array_shift($parts) : '';
+        $sel = [];
+        foreach ($parts as $ln) { if ($ln === '') continue; if ($grep !== '' && stripos($ln, $grep) === false) continue; $sel[] = $ln; }
+        $out = array_merge($sel, $out);
+    }
+    if ($buf !== '' && ($grep === '' || stripos($buf, $grep) !== false)) array_unshift($out, $buf);
+    fclose($fh);
+    return array_slice($out, -$max);
+}
+function log_parse(string $ln): ?array { // formato "combined" do nginx
+    if (!preg_match('/^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d{3}) (\d+|-) "([^"]*)" "([^"]*)"/', $ln, $m)) return null;
+    $t = DateTime::createFromFormat('d/M/Y:H:i:s O', $m[2]);
+    return ['ip' => $m[1], 't' => $t ? $t->getTimestamp() : 0, 'm' => $m[3], 'u' => $m[4], 's' => (int)$m[5], 'b' => $m[6] === '-' ? 0 : (int)$m[6], 'r' => $m[7], 'a' => $m[8]];
+}
+function log_is_bot(string $ua): bool { return (bool)preg_match('/bot|crawl|spider|slurp|bingpreview|facebookexternalhit|curl|wget|python|go-http|semrush|ahrefs|mj12|petal|yandex|dotbot|scrapy/i', $ua); }
+function log_summary(string $f): array { // últimas 24 h
+    $since = time() - 86400; $sum = ['total' => 0, 'c' => ['2' => 0, '3' => 0, '4' => 0, '5' => 0], 'bots' => 0, 'bytes' => 0, 'ips' => [], 'e404' => [], 'e5xx' => []];
+    foreach (log_tail($f, 300000, '', 67108864) as $ln) {
+        $p = log_parse($ln); if (!$p || $p['t'] < $since) continue;
+        $sum['total']++; $k = (string)intdiv($p['s'], 100); if (isset($sum['c'][$k])) $sum['c'][$k]++;
+        $sum['bytes'] += $p['b']; if (log_is_bot($p['a'])) $sum['bots']++;
+        $sum['ips'][$p['ip']] = ($sum['ips'][$p['ip']] ?? 0) + 1;
+        $u = strtok($p['u'], '?') ?: $p['u'];
+        if ($p['s'] === 404) $sum['e404'][$u] = ($sum['e404'][$u] ?? 0) + 1;
+        if ($p['s'] >= 500) $sum['e5xx'][$u] = ($sum['e5xx'][$u] ?? 0) + 1;
+    }
+    foreach (['ips', 'e404', 'e5xx'] as $k) { arsort($sum[$k]); $sum[$k] = array_slice($sum[$k], 0, 10, true); }
+    return $sum;
+}
 function valid_net(string $s): bool {
     $ip = $s; $bits = null;
     if (strpos($s, '/') !== false) { [$ip, $bits] = explode('/', $s, 2); if (!ctype_digit($bits)) return false; }
@@ -806,6 +843,8 @@ const ICONS = [
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
     'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'logs'   => '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+    'dns'    => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/><circle cx="12" cy="12" r="2"/>',
     'mail'   => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
     'archive'=> '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
 ];
@@ -1223,6 +1262,13 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.cron-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.cron-cmd{max-width:60vw}}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+@media (max-width:1100px){.grid3{grid-template-columns:1fr}}
+.lg-url{display:inline-block;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.lg-ua{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg-raw{max-height:70vh;font-size:12px}
+.lg-filters{display:flex;gap:8px;flex-wrap:wrap}
+.lg-filters .in{height:38px;width:auto;min-width:120px}
 .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line-2)}
 .kv span{color:var(--ink-2)}
 .dd-menu a[aria-current]{background:var(--hover);font-weight:700}
@@ -1406,6 +1452,8 @@ $pages = [
     'ficheiros'=> ['Ficheiros', 'folder'],
     'cron'     => ['Tarefas agendadas', 'clock'],
     'email'    => ['Email', 'mail'],
+    'dns'      => ['DNS', 'dns'],
+    'logs'     => ['Logs', 'logs'],
     'bd'       => ['Bases de dados', 'db'],
     'php'      => ['PHP', 'code'],
     'servicos' => ['Serviços', 'pulse'],
@@ -1439,6 +1487,37 @@ if (qget('stats') === 'conns') {
     session_write_close();
     $d = @file_get_contents(MP_STATS . '/conns.json');
     echo $d !== false ? $d : '{}';
+    exit;
+}
+
+if (qget('logs') === 'json' || qget('logs') === 'dl') {
+    if (empty($_SESSION['user'])) { http_response_code(401); exit; }
+    session_write_close();
+    $ls = qget('site');
+    if (!preg_match('/^[a-z][a-z0-9-]{0,23}$/', $ls)) { http_response_code(400); exit; }
+    $ld = MP_SITE_LOGS . '/' . $ls;
+    if (qget('logs') === 'dl') {
+        $lf = qget('f');
+        if (!preg_match('/^(access|error)\.log(-\d{8})?(\.\d+)?(\.gz)?$/', $lf) || !is_file($ld . '/' . $lf) || is_link($ld . '/' . $lf)) { http_response_code(404); exit('Ficheiro não encontrado.'); }
+        @set_time_limit(0); while (ob_get_level() > 0) ob_end_clean();
+        header('Content-Type: ' . (substr($lf, -3) === '.gz' ? 'application/gzip' : 'text/plain; charset=utf-8'));
+        header('Content-Length: ' . (string)filesize($ld . '/' . $lf));
+        header('Content-Disposition: attachment; filename="' . $ls . '-' . $lf . '"');
+        header('X-Accel-Buffering: no');
+        readfile($ld . '/' . $lf); exit;
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    $lt = qget('t') === 'error' ? 'error' : 'access'; $n = max(10, min(5000, (int)qget('n') ?: 500)); $q = mb_substr(qget('q'), 0, 200);
+    if ($lt === 'error') { echo json_encode(['lines' => log_tail($ld . '/error.log', $n, $q)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE); exit; }
+    $st = qget('st'); $ipf = qget('ip'); $rows = [];
+    foreach (log_tail($ld . '/access.log', $st === '' && $ipf === '' ? $n : 200000, $q) as $ln) {
+        $p = log_parse($ln); if (!$p) continue;
+        if ($st !== '' && (string)intdiv($p['s'], 100) !== $st) continue;
+        if ($ipf !== '' && strpos($p['ip'], $ipf) !== 0) continue;
+        $p['u'] = mb_substr($p['u'], 0, 500); $p['a'] = mb_substr($p['a'], 0, 200); unset($p['r']);
+        $rows[] = $p;
+    }
+    echo json_encode(['rows' => array_slice($rows, -$n)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 
@@ -1797,6 +1876,46 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'mail_av':
             job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
             $back = ['t' => 'antispam'];
+            break;
+
+        case 'dns_enable':
+            $re = '/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/';
+            $n1 = strtolower(post('ns1')); $n2 = strtolower(post('ns2')); $ip = post('ip'); $hm = post('hm');
+            if (!preg_match($re, $n1) || !preg_match($re, $n2) || $n1 === $n2) { $bad('Indica dois nameservers diferentes.'); break; }
+            if ($ip !== '' && !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $bad('IP inválido.'); break; }
+            if ($hm !== '' && !filter_var($hm, FILTER_VALIDATE_EMAIL)) { $bad('Email inválido.'); break; }
+            $args = ['--ns1', $n1, '--ns2', $n2]; if ($ip !== '') array_push($args, '--ip', $ip); if ($hm !== '') array_push($args, '--hostmaster', $hm);
+            job_submit('dns-enable', $args, 'Ativar o DNS');
+            break;
+        case 'dns_zone_add':
+        case 'dns_zone_del':
+        case 'dns_sync':
+        case 'dns_check':
+            $zn = strtolower(post('zone'));
+            if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $zn)) { $bad('Domínio inválido.'); break; }
+            $map = ['dns_zone_add' => ['dns-zone-add', 'Adicionar a zona '], 'dns_zone_del' => ['dns-zone-del', 'Apagar a zona '], 'dns_sync' => ['dns-sync', 'Sincronizar a zona '], 'dns_check' => ['dns-check', 'Verificar a delegação de ']];
+            job_submit($map[$a][0], [$zn], $map[$a][1] . $zn);
+            if ($a !== 'dns_zone_del') $back = ['zone' => $a === 'dns_zone_add' ? '' : $zn];
+            break;
+        case 'dns_rec_add':
+            $zn = strtolower(post('zone')); $rt = strtoupper(post('type'));
+            if (!preg_match('/^[a-z0-9.-]+$/', $zn) || !in_array($rt, ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'], true)) { $bad('Pedido inválido.'); break; }
+            $val = trim(str_replace(["\r", "\n"], ' ', post_raw('value')));
+            if ($val === '' || strlen($val) > 2000) { $bad('Valor inválido.'); break; }
+            $ttl = ctype_digit(post('ttl')) ? post('ttl') : '3600'; $pr = ctype_digit(post('prio')) ? post('prio') : '10';
+            job_submit('dns-rec-add', [$zn, strtolower(post('name')), $rt, $val, '--ttl', $ttl, '--prio', $pr], 'Registo ' . $rt . ' em ' . $zn);
+            $back = ['zone' => $zn];
+            break;
+        case 'dns_rec_del':
+            $zn = strtolower(post('zone')); $rid = post('id');
+            if (!preg_match('/^[a-z0-9.-]+$/', $zn) || !preg_match('/^[A-Za-z0-9]{6,16}$/', $rid)) { $bad('Pedido inválido.'); break; }
+            job_submit('dns-rec-del', [$zn, $rid], 'Apagar registo de ' . $zn);
+            $back = ['zone' => $zn];
+            break;
+        case 'logs_settings':
+            $ld = post('days');
+            if (!ctype_digit($ld) || (int)$ld < 7 || (int)$ld > 365) { $bad('Dias entre 7 e 365.'); break; }
+            job_submit('logs-settings', ['--days', $ld], 'Guardar os logs durante ' . $ld . ' dias');
             break;
 
         case 'panel_allow':
@@ -2308,8 +2427,10 @@ $titles = [
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
+    'dns'      => 'DNS autoritativo: zonas dos domínios alojados neste servidor.',
+    'logs'     => 'Acessos e erros de cada site: servidor web, PHP e tarefas agendadas.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'cron', 'email', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'atualizacoes']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'backups', 'auditoria', 'atualizacoes']];
 $section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -2485,6 +2606,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
                     <?php if ($on): ?><a href="<?= h($url) ?>" target="_blank" rel="noopener"><?= ic('ext') ?>Abrir site</a><?php endif; ?>
                     <a href="?p=ficheiros&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('folder') ?>Ficheiros</a>
                     <a href="?p=cron&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('clock') ?>Tarefas agendadas</a>
+                    <a href="?p=logs&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('logs') ?>Logs</a>
                     <button type="button" data-open="dlg-dom-<?= h($n) ?>"><?= ic('world') ?>Domínios e SSL</button>
                     <button type="button" data-open="dlg-ftp-<?= h($n) ?>"><?= ic('upload') ?>Acesso FTP/SFTP<?= !empty($s['ftp']) ? ' <span class="pill p-ok" style="margin-left:auto">Ativo</span>' : '' ?></button>
                     <button type="button" data-open="dlg-lim-<?= h($n) ?>"><?= ic('sliders') ?>Limites</button>
@@ -3265,6 +3387,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           </div>
           <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
         </form>
+        <form method="post" class="card-f" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><?= act_fields('logs_settings') ?><span>Logs dos sites: guardar</span><input class="in" name="days" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)($state['log_days'] ?? 90) ?>" style="width:90px"><span>dias</span><button class="btn sm sec" type="submit">Guardar</button></form>
         <div class="card-f mu">Nunca são bloqueados o próprio servidor, os IPs de confiança (página Ligações) nem os IPs de onde usaste o painel nos últimos 7 dias. Quem volta a ser apanhado em 30 dias fica bloqueado mais tempo.</div>
       </section>
 
@@ -3716,6 +3839,175 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Reiniciar</button></div>
       </form></dialog>
 
+<?php elseif ($page === 'logs'):
+    $names = [];
+    foreach ($sites as $s) { $sn0 = (string)($s['name'] ?? ''); if (valid_site($sn0)) $names[] = $sn0; }
+    $lgSite = in_array(qget('site'), $names, true) ? qget('site') : ($names[0] ?? '');
+    $lgT = in_array(qget('t'), ['access', 'error', 'php', 'cron'], true) ? qget('t') : 'access';
+    $lgDir = MP_SITE_LOGS . '/' . $lgSite;
+    $lgSum = ($lgSite !== '' && $lgT === 'access') ? log_summary($lgDir . '/access.log') : null;
+    $lgFiles = [];
+    if ($lgSite !== '' && in_array($lgT, ['access', 'error'], true)) {
+        foreach ((array)glob($lgDir . '/' . $lgT . '.log*') as $lf) { if (is_file((string)$lf)) $lgFiles[] = ['n' => basename((string)$lf), 's' => (int)filesize((string)$lf), 'm' => (int)filemtime((string)$lf)]; }
+        usort($lgFiles, function ($a, $b) { return $b['m'] <=> $a['m']; });
+    }
+    $crons = is_array($state['crons'] ?? null) ? array_values(array_filter($state['crons'], function ($c) use ($lgSite) { return ($c['site'] ?? '') === $lgSite; })) : [];
+?>
+<?php if (!$names): ?>
+      <section class="card"><div class="empty"><b>Ainda não há sites</b>Os logs aparecem aqui depois de criares o primeiro site.</div></section>
+<?php else: ?>
+      <nav class="tabs" aria-label="Site">
+        <select class="in" onchange="location.href='?p=logs&amp;t=<?= $lgT ?>&amp;site='+encodeURIComponent(this.value)" aria-label="Site" style="height:40px;min-width:200px;width:auto">
+          <?php foreach ($names as $sn): ?><option value="<?= h($sn) ?>"<?= $sn === $lgSite ? ' selected' : '' ?>><?= h($sn) ?></option><?php endforeach; ?>
+        </select>
+        <?php foreach (['access' => 'Acessos', 'error' => 'Erros do servidor', 'php' => 'Erros do PHP', 'cron' => 'Tarefas agendadas'] as $tk => $tl): ?>
+          <a class="chip<?= $lgT === $tk ? ' prim' : '' ?>" href="?p=logs&amp;site=<?= h(rawurlencode($lgSite)) ?>&amp;t=<?= $tk ?>"><?= $tl ?></a>
+        <?php endforeach; ?>
+        <label class="chk" style="margin-left:auto"><input type="checkbox" id="lg-live"> Ao vivo</label>
+      </nav>
+
+  <?php if ($lgSum !== null): ?>
+      <section class="stats">
+        <div class="stat"><span class="tile t-blue"><?= ic('world') ?></span><div><div class="k">Pedidos (24 h)</div><div class="v"><?= number_format($lgSum['total'], 0, ',', ' ') ?> <small><?= h(fmt_bytes((float)$lgSum['bytes'])) ?></small></div></div></div>
+        <div class="stat"><span class="tile t-acc"><?= ic('check') ?></span><div><div class="k">Sucesso (2xx / 3xx)</div><div class="v"><?= $lgSum['c']['2'] ?> <small>/ <?= $lgSum['c']['3'] ?></small></div></div></div>
+        <div class="stat"><span class="tile t-warn"><?= ic('ban') ?></span><div><div class="k">Erros 4xx / 5xx</div><div class="v"><?= $lgSum['c']['4'] ?> <small>/ <b style="color:<?= $lgSum['c']['5'] > 0 ? 'var(--err)' : 'inherit' ?>"><?= $lgSum['c']['5'] ?></b></small></div></div></div>
+        <div class="stat"><span class="tile t-vio"><?= ic('server') ?></span><div><div class="k">Robôs</div><div class="v"><?= $lgSum['total'] ? round($lgSum['bots'] * 100 / $lgSum['total']) : 0 ?>%</div></div></div>
+      </section>
+      <div class="grid3">
+        <?php foreach (['e5xx' => ['Erros 5xx (servidor/PHP)', 'Sem erros 5xx nas últimas 24 h.'], 'e404' => ['Páginas não encontradas (404)', 'Sem 404 nas últimas 24 h.']] as $k => $lbl): ?>
+        <section class="card"><div class="card-h"><h2><?= $lbl[0] ?></h2></div>
+          <?php if (!$lgSum[$k]): ?><div class="empty"><?= $lbl[1] ?></div><?php else: ?><div class="row-list">
+          <?php foreach ($lgSum[$k] as $u => $cnt): ?><div class="item"><div class="grow mono lg-url" title="<?= h($u) ?>"><?= h($u) ?></div><b><?= (int)$cnt ?></b></div><?php endforeach; ?></div><?php endif; ?>
+        </section>
+        <?php endforeach; ?>
+        <section class="card"><div class="card-h"><h2>IPs mais ativos</h2></div>
+          <?php if (!$lgSum['ips']): ?><div class="empty">Sem pedidos nas últimas 24 h.</div><?php else: ?><div class="row-list">
+          <?php foreach ($lgSum['ips'] as $ip => $cnt): ?><div class="item"><div class="grow mono"><?= h($ip) ?></div><b><?= (int)$cnt ?></b>
+            <form method="post" data-confirm="Bloquear <?= h($ip) ?> durante 24 horas?"><?= act_fields('fw_block', ['ip' => (string)$ip, 'dur' => '24h', 'reason' => 'Bloqueado a partir dos logs de ' . $lgSite]) ?><button class="btn sm sec" type="submit">Bloquear</button></form></div><?php endforeach; ?></div><?php endif; ?>
+        </section>
+      </div>
+  <?php endif; ?>
+
+      <section class="card" id="lg" data-site="<?= h($lgSite) ?>" data-t="<?= $lgT ?>">
+        <div class="card-h"><div><h2><?= ['access' => 'Acessos', 'error' => 'Erros do servidor (nginx)', 'php' => 'Erros do PHP', 'cron' => 'Saída das tarefas agendadas'][$lgT] ?></h2><p class="mono"><?= h(['access' => MP_SITE_LOGS . "/$lgSite/access.log", 'error' => MP_SITE_LOGS . "/$lgSite/error.log", 'php' => "/srv/www/$lgSite/logs/php-error.log", 'cron' => "/srv/www/$lgSite/logs/cron-<id>.log"][$lgT]) ?></p></div>
+          <div class="lg-filters">
+            <?php if ($lgT === 'access'): ?>
+            <select class="in" id="lg-st" aria-label="Código"><option value="">Todos os códigos</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option></select>
+            <input class="in mono" id="lg-ip" placeholder="IP" aria-label="IP">
+            <?php elseif ($lgT === 'cron'): ?>
+            <select class="in" id="lg-cron" aria-label="Tarefa"><?php foreach ($crons as $c): ?><option value="<?= h($c['id']) ?>"><?= h(($c['desc'] ?? '') !== '' ? $c['desc'] : $c['cmd']) ?></option><?php endforeach; ?><?php if (!$crons): ?><option value="">Sem tarefas</option><?php endif; ?></select>
+            <?php endif; ?>
+            <input class="in" id="lg-q" type="search" placeholder="Procurar texto…" aria-label="Procurar">
+            <select class="in" id="lg-n" aria-label="Linhas"><option>200</option><option selected>500</option><option>2000</option></select>
+          </div></div>
+        <div id="lg-body"><div class="empty">A carregar…</div></div>
+        <div class="card-f" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <span class="mu" style="flex:1">Guardados durante <?= (int)($state['log_days'] ?? 90) ?> dias, rodados todos os dias e comprimidos.</span>
+          <?php foreach (array_slice($lgFiles, 0, 8) as $lf): ?><a class="chip sm" href="?logs=dl&amp;site=<?= h(rawurlencode($lgSite)) ?>&amp;f=<?= h(rawurlencode($lf['n'])) ?>"><?= ic('download') ?><?= h($lf['n']) ?> <span class="mu"><?= h(fmt_bytes((float)$lf['s'])) ?></span></a><?php endforeach; ?>
+          <?php if (count($lgFiles) > 8): ?><span class="mu">e mais <?= count($lgFiles) - 8 ?> ficheiros</span><?php endif; ?>
+        </div>
+      </section>
+<?php endif; ?>
+
+<?php elseif ($page === 'dns'):
+    $dn = is_array($state['dns'] ?? null) ? $state['dns'] : ['enabled' => false];
+    $dzs = is_array($dn['zones'] ?? null) ? $dn['zones'] : [];
+    $dz = null; foreach ($dzs as $z) { if (($z['name'] ?? '') === qget('zone')) $dz = $z; }
+?>
+<?php if (empty($dn['enabled'])): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Ativar o DNS</h2><p>O servidor passa a responder pelo DNS dos domínios que indicares (NSD, só autoritativo: nunca faz resolução para terceiros).</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('dns_enable') ?>
+          <div class="fgrid">
+            <label class="fld">Nameserver 1<input class="in mono" name="ns1" required placeholder="ns1.host.iddigital.pt" autocomplete="off"></label>
+            <label class="fld">Nameserver 2<input class="in mono" name="ns2" required placeholder="ns2.host.iddigital.pt" autocomplete="off"></label>
+            <label class="fld">IP público do servidor<input class="in mono" name="ip" placeholder="vazio = detetar automaticamente" autocomplete="off"></label>
+            <label class="fld">Email do responsável (SOA)<input class="in" type="email" name="hm" value="<?= h($srv['email'] ?? '') ?>" placeholder="dns@iddigital.pt"></label>
+          </div>
+          <div class="warnbox" style="margin-top:14px">Os dois nameservers vão apontar para este mesmo servidor: cumpre o mínimo exigido pelo .pt, mas não há redundância. Se o servidor parar, os domínios deixam de resolver (incluindo o email).</div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Instalar e ativar o DNS</button></div>
+        </form>
+      </section>
+<?php else: ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Servidor DNS</h2><p><span class="mono"><?= h($dn['ns1']) ?></span> e <span class="mono"><?= h($dn['ns2']) ?></span> → <span class="mono"><?= h($dn['ip']) ?></span><?= !empty($dn['ip6']) ? ' · <span class="mono">' . h($dn['ip6']) . '</span>' : '' ?></p></div>
+          <span class="pill <?= !empty($dn['active']) ? 'p-ok' : 'p-err' ?>"><?= !empty($dn['active']) ? 'A correr' : 'Parado' ?></span></div>
+        <div class="card-b mu">Para usar estes nameservers num domínio: (1) cria os registos A de <span class="mono"><?= h($dn['ns1']) ?></span> e <span class="mono"><?= h($dn['ns2']) ?></span> com o IP <span class="mono"><?= h($dn['ip']) ?></span> na zona onde esses nomes estão (ou como "glue records" no registador); (2) adiciona aqui a zona do domínio; (3) no registador, aponta os nameservers do domínio para os dois nomes acima.</div>
+      </section>
+
+      <?php if ($dz === null): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Zonas</h2><p>Os registos dos sites, do email e dos nameservers são criados e atualizados automaticamente.</p></div><button class="chip sm soft" type="button" data-open="dlg-dz-new">Adicionar zona</button></div>
+        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há zonas</b>Adiciona o primeiro domínio.</div>
+        <?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Domínio</th><th class="r">Registos</th><th>Série</th><th>Delegação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+          <?php foreach ($dzs as $z): $ck = is_array($z['check'] ?? null) ? $z['check'] : null; ?>
+            <tr>
+              <td class="first" data-label="Domínio"><a class="who" href="?p=dns&amp;zone=<?= h(rawurlencode($z['name'])) ?>" style="text-decoration:none;color:inherit"><span class="av <?= tone($z['name']) ?>"><?= ic('world') ?></span><span class="nm"><?= h($z['name']) ?></span></a></td>
+              <td class="r" data-label="Registos"><?= count((array)$z['records']) + 3 ?></td>
+              <td class="mono" data-label="Série"><?= h((string)$z['serial']) ?></td>
+              <td data-label="Delegação"><?= $ck === null ? '<span class="pill p-off">Por verificar</span>' : (!empty($ck['delegated']) ? '<span class="pill p-ok">Aponta para aqui</span>' : '<span class="pill p-warn">Ainda não aponta</span>') ?></td>
+              <td class="act r"><a class="btn sm sec" href="?p=dns&amp;zone=<?= h(rawurlencode($z['name'])) ?>">Gerir</a></td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+      <dialog id="dlg-dz-new"><form method="post"><?= act_fields('dns_zone_add') ?>
+        <div class="dlg-h"><h3>Adicionar zona</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b"><label class="fld">Domínio<input class="in mono" name="zone" required placeholder="dominio.pt" autocomplete="off"><small>São criados os registos do domínio e do www, dos sites e do email que usem este domínio, e um CAA para o Let's Encrypt</small></label></div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
+      </form></dialog>
+
+      <?php else: $ck = is_array($dz['check'] ?? null) ? $dz['check'] : null; ?>
+      <section class="card">
+        <div class="card-h"><div><nav class="crumbs fm-pre"><a href="?p=dns"><?= ic('home') ?>Zonas</a><span>›</span><b><?= h($dz['name']) ?></b></nav>
+            <p style="margin-top:6px">Série <span class="mono"><?= h((string)$dz['serial']) ?></span> · <?= $ck === null ? 'delegação por verificar' : (!empty($ck['delegated']) ? 'a delegação aponta para este servidor' : 'a delegação ainda não aponta para aqui (encontrado: ' . h(trim((string)$ck['found']) ?: 'nada') . ')') ?></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <form method="post"><?= act_fields('dns_check', ['zone' => (string)$dz['name']]) ?><button class="btn sm sec" type="submit">Verificar delegação</button></form>
+            <form method="post"><?= act_fields('dns_sync', ['zone' => (string)$dz['name']]) ?><button class="btn sm sec" type="submit">Sincronizar</button></form>
+            <button class="btn sm" type="button" data-open="dlg-dr-new">Novo registo</button>
+          </div></div>
+        <table class="list cards dnsrec">
+          <thead><tr><th>Nome</th><th>Tipo</th><th>Valor</th><th class="r">TTL</th><th>Origem</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody>
+            <tr><td class="first mono" data-label="Nome">@</td><td data-label="Tipo"><span class="pill p-off">NS</span></td><td class="mono" data-label="Valor"><?= h($dn['ns1']) ?>. · <?= h($dn['ns2']) ?>.</td><td class="r">3600</td><td><span class="mu">Servidor</span></td><td></td></tr>
+            <?php $recs = (array)$dz['records']; usort($recs, function ($a, $b) { return [$a['name'] === '@' ? '' : $a['name'], $a['type']] <=> [$b['name'] === '@' ? '' : $b['name'], $b['type']]; }); foreach ($recs as $r): ?>
+            <tr>
+              <td class="first mono" data-label="Nome"><?= h($r['name']) ?></td>
+              <td data-label="Tipo"><span class="pill p-me"><?= h($r['type']) ?></span></td>
+              <td data-label="Valor"><div class="dnsval mono"><?= (in_array($r['type'], ['MX', 'SRV'], true) ? (int)$r['prio'] . ' ' : '') . h($r['value']) ?></div></td>
+              <td class="r" data-label="TTL"><?= (int)$r['ttl'] ?></td>
+              <td data-label="Origem"><?= !empty($r['auto']) ? '<span class="pill p-ok">Automático</span>' : '<span class="mu">Manual</span>' ?></td>
+              <td class="act r"><?php if (empty($r['auto'])): ?><form method="post" data-confirm="Apagar este registo?"><?= act_fields('dns_rec_del', ['zone' => (string)$dz['name'], 'id' => (string)$r['id']]) ?><button class="btn sm sec" type="submit">Apagar</button></form><?php endif; ?></td>
+            </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+        <form method="post" class="card-f" data-confirm="Apagar a zona <?= h($dz['name']) ?>? O domínio deixa de resolver neste servidor."><?= act_fields('dns_zone_del', ['zone' => (string)$dz['name']]) ?><span class="mu" style="margin-right:12px">Os registos automáticos atualizam-se sozinhos quando mudas sites ou email; os manuais mantêm-se.</span><button class="btn sm dan" type="submit">Apagar zona</button></form>
+      </section>
+      <dialog id="dlg-dr-new"><form method="post"><?= act_fields('dns_rec_add', ['zone' => (string)$dz['name']]) ?>
+        <div class="dlg-h"><h3>Novo registo em <?= h($dz['name']) ?></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b">
+          <div class="fgrid">
+            <label class="fld">Nome<input class="in mono" name="name" required placeholder="@ ou www ou loja" autocomplete="off"><small>@ = o próprio domínio</small></label>
+            <label class="fld">Tipo<select class="in" name="type"><?php foreach (['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'] as $t): ?><option><?= $t ?></option><?php endforeach; ?></select></label>
+          </div>
+          <label class="fld">Valor<input class="in mono" name="value" required autocomplete="off" placeholder="91.209.16.24 · destino.dominio.pt · v=spf1 …"></label>
+          <div class="fgrid">
+            <label class="fld">TTL (segundos)<input class="in" name="ttl" inputmode="numeric" value="3600"></label>
+            <label class="fld">Prioridade (MX/SRV)<input class="in" name="prio" inputmode="numeric" value="10"></label>
+          </div>
+        </div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
+      </form></dialog>
+      <?php endif; ?>
+<?php endif; ?>
+
 <?php elseif ($page === 'auditoria'):
     $alog = [];
     $af = MP_DATA . '/logs/audit.log';
@@ -4042,6 +4334,46 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 (function () { var q = document.getElementById('au-q'); if (!q) return;
   q.addEventListener('input', function () { var f = q.value.toLowerCase();
     document.querySelectorAll('#au-t tbody tr').forEach(function (tr) { tr.style.display = !f || tr.textContent.toLowerCase().indexOf(f) !== -1 ? '' : 'none'; }); }); })();
+</script>
+<?php endif; ?>
+<?php if ($page === 'logs'): ?>
+<script>
+(function () {
+  var box = document.getElementById('lg'); if (!box) return;
+  var site = box.getAttribute('data-site'), t = box.getAttribute('data-t'), body = document.getElementById('lg-body');
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function pill(s) { var c = s >= 500 ? 'p-err' : (s >= 400 ? 'p-warn' : (s >= 300 ? 'p-off' : 'p-ok')); return '<span class="pill ' + c + '">' + s + '</span>'; }
+  function fdate(t) { var d = new Date(t * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
+  function raw(lines) {
+    if (!lines.length) { body.innerHTML = '<div class="empty">Sem linhas' + ($('lg-q').value ? ' com esse texto' : '') + '.</div>'; return; }
+    body.innerHTML = '<pre class="cron-out lg-raw">' + lines.slice().reverse().map(esc).join('\n') + '</pre>';
+  }
+  function load() {
+    var n = $('lg-n').value, q = $('lg-q').value.trim(), url;
+    if (t === 'access' || t === 'error') {
+      url = '?logs=json&site=' + encodeURIComponent(site) + '&t=' + t + '&n=' + n + '&q=' + encodeURIComponent(q);
+      if (t === 'access') url += '&st=' + encodeURIComponent($('lg-st').value) + '&ip=' + encodeURIComponent($('lg-ip').value.trim());
+      fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
+        if (t === 'error') return raw(d.lines || []);
+        var rows = d.rows || [];
+        if (!rows.length) { body.innerHTML = '<div class="empty">Sem pedidos com estes filtros.</div>'; return; }
+        body.innerHTML = '<table class="list cards lg-tab"><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
+          rows.slice().reverse().map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido"><span class="mu">' + esc(r.m) + '</span> <span class="mono lg-url" title="' + esc(r.u) + '">' + esc(r.u) + '</span></td><td data-label="Código">' + pill(r.s) + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>';
+      }).catch(function () { body.innerHTML = '<div class="empty">Não foi possível ler o log.</div>'; });
+    } else {
+      var f = t === 'php' ? 'php-error.log' : ('cron-' + (($('lg-cron') || {}).value || 'x') + '.log');
+      fetch('/ficheiros/' + encodeURIComponent(site) + '/?a=tail&p=' + encodeURIComponent('logs/' + f) + '&n=' + n + '&q=' + encodeURIComponent(q), { credentials: 'same-origin', headers: { 'X-MP-Request': '1' } })
+        .then(function (r) { return r.json(); }).then(function (d) { raw(d.lines || []); })
+        .catch(function () { body.innerHTML = '<div class="empty">Não foi possível ler o log.</div>'; });
+    }
+  }
+  var tm = null;
+  ['lg-n', 'lg-st', 'lg-cron'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', load); });
+  ['lg-q', 'lg-ip'].forEach(function (id) { if ($(id)) $(id).addEventListener('input', function () { clearTimeout(tm); tm = setTimeout(load, 400); }); });
+  var live = null; $('lg-live').addEventListener('change', function (e) { if (e.target.checked) live = setInterval(load, 5000); else clearInterval(live); });
+  load();
+})();
 </script>
 <?php endif; ?>
 <?php if ($page === 'atualizacoes'): ?>
@@ -6896,7 +7228,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.4.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.5.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7011,7 +7343,7 @@ function in_s(array $in, string $k): string { $v = $in[$k] ?? ''; return is_stri
 function in_list(array $in, string $k): array { $v = $in[$k] ?? []; return is_array($v) ? array_values(array_filter($v, 'is_string')) : []; }
 function q(string $k): string { $v = $_GET[$k] ?? ''; return is_string($v) ? $v : ''; }
 
-$readOnly = ['list', 'get', 'dl', 'upstat'];
+$readOnly = ['list', 'get', 'dl', 'upstat', 'logs', 'tail'];
 if ($method !== 'POST' && !in_array($a, $readOnly, true)) fm_fail(405, 'Método não permitido.');
 
 switch ($a) {
@@ -7061,6 +7393,39 @@ case 'dl':
     header("Content-Disposition: attachment; filename*=UTF-8''" . rawurlencode(basename($f)));
     readfile($f);
     exit;
+
+case 'logs':
+    // lista os logs da pasta logs do site (atuais e rodados)
+    if ($NOEDIT) fm_fail(400, 'Pedido inválido.');
+    $out = [];
+    foreach ((array)glob($ROOT . '/logs/*') as $lf) {
+        $b = basename((string)$lf);
+        if (!is_file((string)$lf) || is_link((string)$lf) || !preg_match('/^[A-Za-z0-9._-]+\.log([.-][0-9A-Za-z.-]+)?$/', $b)) continue;
+        $out[] = ['n' => $b, 's' => (int)filesize((string)$lf), 'm' => (int)filemtime((string)$lf)];
+    }
+    usort($out, function ($a, $b) { return $b['m'] <=> $a['m']; });
+    fm_json(['ok' => true, 'items' => $out]);
+
+case 'tail':
+    // últimas linhas de um log da pasta logs (sem seguir ligações simbólicas)
+    if ($NOEDIT) fm_fail(400, 'Pedido inválido.');
+    $b = basename(q('p'));
+    if (!preg_match('/^[A-Za-z0-9._-]+\.log$/', $b)) fm_fail(400, 'Ficheiro inválido.');
+    $lf = $ROOT . '/logs/' . $b;
+    if (!is_file($lf) || is_link($lf)) fm_json(['ok' => true, 'lines' => [], 'size' => 0]);
+    $max = max(10, min(5000, (int)q('n') ?: 500)); $grep = (string)q('q');
+    $fh = @fopen($lf, 'r'); if (!$fh) fm_fail(403, 'Sem permissão para ler o log.');
+    $size = (int)filesize($lf); $chunk = 65536; $pos = $size; $buf = ''; $lines = [];
+    while ($pos > 0 && count($lines) < $max && $size - $pos < 33554432) {
+        $rd = min($chunk, $pos); $pos -= $rd; fseek($fh, $pos); $buf = (string)fread($fh, $rd) . $buf;
+        $parts = explode("\n", $buf); $buf = $pos > 0 ? (string)array_shift($parts) : '';
+        $sel = [];
+        foreach ($parts as $ln) { if ($ln === '') continue; if ($grep !== '' && stripos($ln, $grep) === false) continue; $sel[] = mb_substr($ln, 0, 2000); }
+        $lines = array_merge($sel, $lines);
+    }
+    if ($buf !== '' && ($grep === '' || stripos($buf, $grep) !== false)) array_unshift($lines, $buf);
+    fclose($fh);
+    fm_json(['ok' => true, 'lines' => array_slice($lines, -$max), 'size' => $size]);
 
 case 'upstat':
     $id = q('id');
@@ -7303,11 +7668,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.4.0
+#  mpanel — IDDigital Hosting CLI v2.5.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.4.0"
+MP_VERSION="2.5.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -7482,6 +7847,7 @@ write_nginx(){
   local n=$1 p=$2 v=$3 dest=$4 l6="" up rt inc dflt=""
   inc="$NGX_INC/mp-$n.inc"
   install -d -m 755 "$NGX_INC"
+  logs_dir_site "$n"
   [ "$p" = 80 ] && dflt=" default_server"
   if [ "${IPV6:-0}" = 1 ]; then l6="    listen [::]:$p$dflt;"; fi
   up=$(lim_get "$n" UPLOAD)
@@ -7491,8 +7857,8 @@ write_nginx(){
     root $WWW_ROOT/$n/public_html;
     index index.php index.html index.htm;
     client_max_body_size ${up}M;
-    access_log /var/log/nginx/mp-$n.access.log;
-    error_log  /var/log/nginx/mp-$n.error.log;
+    access_log $SITE_LOGS/$n/access.log;
+    error_log  $SITE_LOGS/$n/error.log;
 
     location ~ /\.(?!well-known) { deny all; }
 
@@ -7705,6 +8071,7 @@ EOF
   echo "Site '$n' criado na porta $port com PHP $v."
   echo "Pasta: $d/public_html"
   mail_on && mail_site_spool "$n"
+  logs_rotate_conf
   if [ -n "$adoms" ]; then ( cmd_site_domains "$n" --set "$adoms" --ssl "$assl" ) 2>&1 || true; fi
   return 0
 }
@@ -7727,6 +8094,7 @@ cmd_site_del(){
   if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" || warn "Verifica o PHP-FPM $PANEL_PHP."; fi
   rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
   rm -rf "/etc/cron.d/minipainel-$n" "${CRON_DIR:?}/$n" "$CRON_DIR/$n.json"; touch /etc/cron.d 2>/dev/null
+  rm -rf "${SITE_LOGS:?}/$n"; logs_rotate_conf
   rm -rf "${MSPOOL:?}/$n" "${MLIB:?}/rejected/$n" "$MLIB/rejected/$n.log" "$MLIB/sent/$n"
   if [ -s "$DBMAP" ]; then jq --arg s "$n" 'with_entries(select(.value != $s))' "$DBMAP" > "$DBMAP.tmp" && mv -f "$DBMAP.tmp" "$DBMAP"; fi
   sleep 1
@@ -9257,6 +9625,7 @@ Confirma que os domínios apontam para este servidor e que as portas 80 e 443 es
   # 3) configuração final com HTTPS
   write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"
   apply_nginx || warn "Verifica o nginx (nginx -t)."
+  dns_autosync
   if [ -z "$doms" ]; then echo "Site $n sem domínios (só por porta)."; else echo "Domínios de $n: $doms."; fi
   [ -n "$msg" ] && echo "$msg"
   return 0
@@ -9297,7 +9666,8 @@ cmd_ngx_sync(){ # regenera a configuração nginx de todos os sites, do servidor
   local n
   install -d -m 755 "$NGX_INC" "$NGX_CONFD" "$ACME_ROOT"
   panel_allow_write; ports_allow_write
-  for n in $(site_names); do write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"; done
+  for n in $(site_names); do logs_migrate_site "$n"; write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"; done
+  logs_rotate_conf
   ngx_default_sync; panel_domain_write
   apply_nginx || die "Configuração do nginx inválida depois de regenerar (nginx -t)."
   echo "Configuração nginx regenerada."
@@ -9810,7 +10180,8 @@ cmd_mail_domain_add(){
   fi
   j=$(jq --arg d "$d" --arg t "$EPOCHSECONDS" '.domains[$d] = {created:($t|tonumber)}' <<<"$j")
   mail_data_save "$j"; mail_apply
-  echo "Domínio de email $d adicionado com DKIM. Cria os registos DNS indicados na página Email."
+  dns_autosync
+  echo "Domínio de email $d adicionado com DKIM. $(dns_on && [ -f "$DNS_DIR/$d.json" ] && echo 'Os registos foram criados na zona DNS deste servidor.' || echo 'Cria os registos DNS indicados na página Email.')"
   return 0
 }
 cmd_mail_domain_del(){
@@ -9820,6 +10191,7 @@ cmd_mail_domain_del(){
   j=$(jq --arg d "$d" '.domains |= del(.[$d]) | .boxes |= with_entries(select(.key | endswith("@" + $d) | not)) | .aliases |= with_entries(select(.key | endswith("@" + $d) | not))' <<<"$j")
   mail_data_save "$j"; mail_apply
   rm -rf "${VMAIL:?}/$d" "$DKIM_DIR/$d.mp.key" "$DKIM_DIR/$d.mp.txt"
+  dns_autosync
   echo "Domínio $d apagado, com as caixas de correio e os aliases."
   return 0
 }
@@ -10830,6 +11202,278 @@ cmd_protect_settings(){
   return 0
 }
 
+# ============================ DNS AUTORITATIVO (NSD) =========================
+DNS_CONF=/etc/minipainel/dns.conf           # ENABLED, NS1, NS2, IP, IP6, HOSTMASTER
+DNS_DIR=/etc/minipainel/dns                 # <zona>.json
+NSD_ZONES=/etc/nsd/zones
+dns_get(){ local v; v=$(grep -m1 "^$1=" "$DNS_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
+dns_set(){ touch "$DNS_CONF"; chmod 600 "$DNS_CONF"; if grep -q "^$1=" "$DNS_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$DNS_CONF"; else echo "$1=$2" >> "$DNS_CONF"; fi; }
+dns_on(){ [ "$(dns_get ENABLED 0)" = 1 ]; }
+dns_need(){ dns_on || die "O DNS não está ativo. Ativa-o na página DNS ou com: mpanel dns-enable --ns1 ns1.dominio.pt --ns2 ns2.dominio.pt"; }
+dns_zone_json(){ echo "$DNS_DIR/$1.json"; }
+dns_load(){ local f; f=$(dns_zone_json "$1"); if [ -s "$f" ]; then cat "$f"; else echo '{"serial":0,"records":[]}'; fi; }
+dns_save(){ install -d -m 700 "$DNS_DIR"; printf '%s\n' "$2" | jq '.' > "$(dns_zone_json "$1").tmp" && chmod 600 "$(dns_zone_json "$1").tmp" && mv -f "$(dns_zone_json "$1").tmp" "$(dns_zone_json "$1")"; }
+dns_zones(){ ls -1 "$DNS_DIR"/*.json 2>/dev/null | sed 's|.*/||; s|\.json$||' | sort; }
+dns_fqdn(){ case "$1" in *.) echo "$1" ;; *.*) echo "$1." ;; *) echo "$1" ;; esac; }   # valores com domínio completo levam ponto final
+dns_serial(){ local old=$1 d; d=$(date +%Y%m%d); if [ "${old:0:8}" = "$d" ]; then echo $(( old + 1 )); else echo "${d}01"; fi; }
+dns_ips(){ ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1; }
+dns_txt_quote(){ # divide em pedaços de 255 caracteres entre aspas
+  local v=$1 out="" chunk
+  v=${v//\\/\\\\}; v=${v//\"/\\\"}
+  while [ -n "$v" ]; do chunk=${v:0:250}; v=${v:250}; out+="\"$chunk\" "; done
+  echo "${out% }"
+}
+dns_write_zone(){ # gera o ficheiro de zona, verifica-o e só então o ativa
+  local z=$1 j f tmp ns1 ns2 hm serial
+  j=$(dns_load "$z"); f="$NSD_ZONES/$z.zone"; tmp=$(mktemp)
+  ns1=$(dns_get NS1); ns2=$(dns_get NS2); hm=$(dns_get HOSTMASTER "hostmaster.$z"); hm=${hm/@/.}
+  serial=$(jq -r '.serial' <<<"$j")
+  {
+    printf '; IDDigital Hosting — zona %s (gerada pelo painel; não editar à mão)\n$ORIGIN %s.\n$TTL 3600\n' "$z" "$z"
+    printf '@ IN SOA %s %s ( %s 10800 3600 1209600 3600 )\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$hm")" "$serial"
+    printf '@ IN NS %s\n@ IN NS %s\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$ns2")"
+    jq -r '.records[] | [.name, (.ttl|tostring), .type, (.prio // 0 | tostring), .value] | @tsv' <<<"$j" | while IFS=$'\t' read -r n t ty pr v; do
+      case "$ty" in
+        TXT) printf '%s %s IN TXT %s\n' "$n" "$t" "$(dns_txt_quote "$v")" ;;
+        MX) printf '%s %s IN MX %s %s\n' "$n" "$t" "$pr" "$(dns_fqdn "$v")" ;;
+        SRV) printf '%s %s IN SRV %s %s %s %s\n' "$n" "$t" "$pr" "${v%% *}" "$(echo "$v" | awk '{print $2}')" "$(dns_fqdn "${v##* }")" ;;
+        CNAME|NS) printf '%s %s IN %s %s\n' "$n" "$t" "$ty" "$(dns_fqdn "$v")" ;;
+        CAA) printf '%s %s IN CAA %s\n' "$n" "$t" "$v" ;;
+        *) printf '%s %s IN %s %s\n' "$n" "$t" "$ty" "$v" ;;
+      esac
+    done
+  } > "$tmp"
+  local errf; errf=$(mktemp)
+  if ! nsd-checkzone "$z" "$tmp" >"$errf" 2>&1; then
+    local e; e=$(tail -n 3 "$errf" | tr '\n' ' '); rm -f "$tmp" "$errf"
+    echo "Zona $z inválida: $e" >&2; return 1
+  fi
+  rm -f "$errf"
+  install -d -o root -g nsd -m 750 "$NSD_ZONES"
+  install -o root -g nsd -m 640 "$tmp" "$f"; rm -f "$tmp"
+  return 0
+}
+dns_apply(){ # lista de zonas do NSD e recarga
+  local z
+  local before after
+  before=$(md5sum /etc/nsd/minipainel-zones.conf 2>/dev/null | awk '{print $1}')
+  { echo "# IDDigital Hosting — zonas (gerado pelo painel)"; for z in $(dns_zones); do printf 'zone:\n    name: "%s"\n    zonefile: "%s/%s.zone"\n' "$z" "$NSD_ZONES" "$z"; done; } > /etc/nsd/minipainel-zones.conf
+  chmod 644 /etc/nsd/minipainel-zones.conf
+  after=$(md5sum /etc/nsd/minipainel-zones.conf | awk '{print $1}')
+  nsd-checkconf /etc/nsd/nsd.conf >/dev/null 2>&1 || { echo "Configuração do NSD inválida." >&2; return 1; }
+  if [ "$before" != "$after" ]; then
+    # zonas acrescentadas ou retiradas: o NSD só as lê ao arrancar (corte inferior a 1 segundo)
+    systemctl restart nsd >/dev/null 2>&1 || { pkill -x nsd; sleep 1; nsd -c /etc/nsd/nsd.conf >/dev/null 2>&1; }
+  else
+    systemctl reload nsd >/dev/null 2>&1 || pkill -HUP -x nsd 2>/dev/null
+  fi
+  return 0
+}
+dns_bump(){ # zona json -> grava com serial novo, gera e ativa (repõe o anterior se falhar)
+  local z=$1 j=$2 old
+  old=$(dns_load "$z")
+  j=$(jq --argjson s "$(dns_serial "$(jq -r '.serial' <<<"$old")")" '.serial = $s' <<<"$j")
+  dns_save "$z" "$j"
+  if ! dns_write_zone "$z"; then dns_save "$z" "$old"; return 1; fi
+  dns_apply
+}
+dns_auto_records(){ # registos automáticos da zona: sites, email e nameservers que pertencem a ela
+  local z=$1 ip ip6 n d rel recs="[]" h
+  ip=$(dns_get IP); ip6=$(dns_get IP6)
+  add(){ recs=$(jq -c --arg n "$1" --arg t "$2" --arg v "$3" --argjson p "${4:-0}" '. + [{name:$n, type:$t, value:$v, ttl:3600, prio:$p, auto:true}]' <<<"$recs"); }
+  rel(){ if [ "$1" = "$z" ]; then echo "@"; else echo "${1%."$z"}"; fi; }
+  add "@" A "$ip"; [ -n "$ip6" ] && add "@" AAAA "$ip6"
+  add "www" A "$ip"; [ -n "$ip6" ] && add "www" AAAA "$ip6"
+  for h in "$(dns_get NS1)" "$(dns_get NS2)"; do case "$h" in *."$z") add "$(rel "$h")" A "$ip" ;; esac; done
+  for n in $(site_names); do for d in $(site_get "$n" DOMAINS); do
+    case "$d" in "$z"|"www.$z") ;; *."$z") add "$(rel "$d")" A "$ip" ;; esac
+  done; done
+  if mail_on; then
+    h=$(mail_get HOST)
+    case "$h" in *."$z") add "$(rel "$h")" A "$ip" ;; esac
+    if [ "$(mail_data | jq --arg d "$z" '.domains | has($d)')" = true ]; then
+      add "@" MX "$h" 10
+      add "@" TXT "v=spf1 mx a:$h ~all"
+      [ -n "$(mail_dkim_value "$z")" ] && add "mp._domainkey" TXT "$(mail_dkim_value "$z")"
+      add "_dmarc" TXT "v=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:postmaster@$z"
+    fi
+  fi
+  add "@" CAA '0 issue "letsencrypt.org"'
+  jq -c 'unique_by([.name, .type, .value])' <<<"$recs"
+}
+dns_sync_zone(){ # substitui os registos automáticos pelos atuais (mantém os manuais)
+  local z=$1 j auto
+  j=$(dns_load "$z"); auto=$(dns_auto_records "$z")
+  j=$(jq --argjson a "$auto" '.records = ([.records[] | select(.auto != true)] + ($a | to_entries | map(.value + {id: ("auto" + (.key | tostring))})))' <<<"$j")
+  dns_bump "$z" "$j"
+}
+dns_autosync(){ # chamado quando muda um site ou o email: atualiza as zonas afetadas
+  dns_on || return 0
+  local z; for z in $(dns_zones); do dns_sync_zone "$z" >/dev/null 2>&1; done
+  return 0
+}
+
+cmd_dns_enable(){
+  local ns1="" ns2="" ip="" ip6="" hm="" a re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$'
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ns1) ns1="${2:-}"; shift 2 || shift ;; --ns2) ns2="${2:-}"; shift 2 || shift ;;
+      --ip) ip="${2:-}"; shift 2 || shift ;; --ip6) ip6="${2:-}"; shift 2 || shift ;;
+      --hostmaster) hm="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  ns1=${ns1:-$(dns_get NS1)}; ns2=${ns2:-$(dns_get NS2)}
+  [[ "$ns1" =~ $re ]] && [[ "$ns2" =~ $re ]] && [ "$ns1" != "$ns2" ] || die "Indica dois nameservers diferentes (ex.: --ns1 ns1.host.iddigital.pt --ns2 ns2.host.iddigital.pt)."
+  ip=${ip:-$(dns_get IP)}; [ -n "$ip" ] || ip=$(curl -s4 -m 6 https://api.ipify.org 2>/dev/null)
+  [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "Indica o IP público do servidor com --ip."
+  [ -z "$ip6" ] || fw_ip_valid "$ip6" || die "IPv6 inválido."
+  hm=${hm:-$(dns_get HOSTMASTER "$(srv_get EMAIL '')")}; [ -n "$hm" ] || hm="hostmaster@${ns1#*.}"
+  if ! command -v nsd >/dev/null 2>&1; then
+    echo "A instalar o NSD..."
+    if [ "$OS_FAMILY" = debian ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y -q nsd >/dev/null 2>&1; else dnf install -y -q nsd >/dev/null 2>&1; fi
+    command -v nsd >/dev/null 2>&1 || die "Falhou a instalação do NSD."
+  fi
+  dns_set ENABLED 1; dns_set NS1 "$ns1"; dns_set NS2 "$ns2"; dns_set IP "$ip"; dns_set IP6 "$ip6"; dns_set HOSTMASTER "$hm"
+  install -d -m 700 "$DNS_DIR"; install -d -o root -g nsd -m 750 "$NSD_ZONES"
+  [ -f /etc/nsd/nsd.conf.minipainel-orig ] || cp -p /etc/nsd/nsd.conf /etc/nsd/nsd.conf.minipainel-orig 2>/dev/null
+  {
+    echo "# IDDigital Hosting — servidor DNS autoritativo (gerado pelo painel; não editar à mão)"
+    echo "# Só responde pelas zonas do painel; nunca faz resolução recursiva."
+    echo "server:"
+    for a in $(dns_ips); do echo "    ip-address: $a"; done
+    echo "    hide-version: yes"
+    echo "    refuse-any: yes"
+    echo "    verbosity: 1"
+    echo "    round-robin: no"
+    echo "remote-control:"
+    echo "    control-enable: no"
+    echo 'include: "/etc/nsd/minipainel-zones.conf"'
+  } > /etc/nsd/nsd.conf
+  chmod 644 /etc/nsd/nsd.conf
+  touch /etc/nsd/minipainel-zones.conf
+  local z; for z in $(dns_zones); do dns_write_zone "$z" || warn "Zona $z com erros."; done
+  dns_apply || die "Não foi possível ativar o NSD."
+  systemctl enable --now nsd >/dev/null 2>&1; systemctl restart nsd >/dev/null 2>&1
+  fw_open 53 >/dev/null 2>&1
+  if systemctl is-active --quiet firewalld 2>/dev/null; then firewall-cmd -q --permanent --add-service=dns; firewall-cmd -q --add-service=dns
+  elif command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null)" == *"Status: active"* ]]; then ufw allow 53 >/dev/null 2>&1; fi
+  echo "DNS ativo: $ns1 e $ns2 → $ip."
+  echo "No registador do domínio de $ns1 cria os registos de cola (glue): $ns1 e $ns2 com o IP $ip."
+  return 0
+}
+dns_valid_rec(){ # nome tipo valor prioridade
+  local n=$1 t=$2 v=$3 re_n='^(@|\*|(\*\.)?[a-z0-9_]([a-z0-9_-]{0,62})(\.[a-z0-9_]([a-z0-9_-]{0,62}))*)$'
+  [[ "$n" =~ $re_n ]] || { echo "Nome inválido: $n (usa @ para o domínio, ou o nome sem o domínio, ex.: www)"; return 1; }
+  [ ${#v} -le 2000 ] && [[ "$v" != *[$'\n\r']* ]] || { echo "Valor inválido."; return 1; }
+  case "$t" in
+    A) [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "IPv4 inválido."; return 1; } ;;
+    AAAA) [[ "$v" =~ ^[0-9a-fA-F:]+$ ]] && [[ "$v" == *:* ]] || { echo "IPv6 inválido."; return 1; } ;;
+    CNAME|NS|MX) [[ "$v" =~ ^([a-z0-9_]([a-z0-9_-]{0,62})\.)*[a-z0-9_]([a-z0-9_-]{0,62})\.?$ ]] || { echo "Destino inválido: $v"; return 1; } ;;
+    TXT) [ -n "$v" ] || { echo "O texto não pode ficar vazio."; return 1; } ;;
+    SRV) [[ "$v" =~ ^[0-9]{1,5}\ [0-9]{1,5}\ [a-z0-9._-]+\.?$ ]] || { echo "SRV: usa 'peso porta destino' (ex.: 5 5060 sip.dominio.pt)."; return 1; } ;;
+    CAA) [[ "$v" =~ ^[0-9]{1,3}\ (issue|issuewild|iodef)\ \"[^\"]*\"$ ]] || { echo "CAA: usa ex. 0 issue \"letsencrypt.org\""; return 1; } ;;
+    *) echo "Tipo não suportado: $t (A, AAAA, CNAME, MX, TXT, NS, SRV, CAA)"; return 1 ;;
+  esac
+  [ "$t" = CNAME ] && [ "$n" = "@" ] && { echo "Não é possível um CNAME no próprio domínio (@)."; return 1; }
+  return 0
+}
+cmd_dns_zone_add(){
+  local z="${1:-}"; dns_need; z=$(printf '%s' "$z" | tr 'A-Z' 'a-z')
+  valid_domain "$z" || die "Domínio inválido: $z"
+  [ -f "$(dns_zone_json "$z")" ] && die "A zona $z já existe."
+  dns_save "$z" '{"serial":0,"records":[]}'
+  dns_sync_zone "$z" || { rm -f "$(dns_zone_json "$z")"; die "Não foi possível criar a zona."; }
+  echo "Zona $z criada com os registos automáticos (sites, email e nameservers). No registador, aponta os nameservers para $(dns_get NS1) e $(dns_get NS2)."
+  return 0
+}
+cmd_dns_zone_del(){
+  local z="${1:-}"; dns_need
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  rm -f "$(dns_zone_json "$z")" "$NSD_ZONES/$z.zone"; dns_apply
+  echo "Zona $z apagada."; return 0
+}
+cmd_dns_rec_add(){ # zona nome tipo valor [--ttl N] [--prio N]
+  local z="${1:-}" n="${2:-}" t="${3:-}" v="${4:-}" ttl=3600 pr=10 j why
+  dns_need; [ $# -ge 4 ] && shift 4
+  while [ $# -gt 0 ]; do case "$1" in --ttl) ttl="${2:-}"; shift 2 || shift ;; --prio) pr="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  n=$(printf '%s' "$n" | tr 'A-Z' 'a-z'); n=${n%."$z"}; n=${n%.}; [ "$n" = "$z" ] && n="@"; [ -n "$n" ] || n="@"
+  t=$(printf '%s' "$t" | tr 'a-z' 'A-Z')
+  [[ "$ttl" =~ ^[0-9]{2,6}$ ]] || die "TTL inválido."; [[ "$pr" =~ ^[0-9]{1,5}$ ]] || die "Prioridade inválida."
+  why=$(dns_valid_rec "$n" "$t" "$v") || die "$why"
+  j=$(dns_load "$z" | jq --arg n "$n" --arg t "$t" --arg v "$v" --argjson ttl "$ttl" --argjson p "$pr" --arg id "$(openssl rand -hex 6)" \
+      '.records += [{id:$id, name:$n, type:$t, value:$v, ttl:$ttl, prio:$p, auto:false}]')
+  dns_bump "$z" "$j" || die "Registo recusado pelo verificador de zonas; nada foi alterado."
+  echo "Registo $n $t $v acrescentado a $z."; return 0
+}
+cmd_dns_rec_del(){
+  local z="${1:-}" id="${2:-}" j; dns_need
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  [[ "$id" =~ ^[A-Za-z0-9]{6,16}$ ]] || die "Identificador inválido."
+  [ "$(dns_load "$z" | jq --arg id "$id" '[.records[] | select(.id == $id and .auto != true)] | length')" = 1 ] || die "Registo não encontrado (os automáticos atualizam-se com 'Sincronizar')."
+  j=$(dns_load "$z" | jq --arg id "$id" '.records |= map(select(.id != $id))')
+  dns_bump "$z" "$j" || die "Não foi possível atualizar a zona."
+  echo "Registo apagado de $z."; return 0
+}
+cmd_dns_sync(){ local z="${1:-all}"; dns_need
+  if [ "$z" = all ]; then dns_autosync; echo "Zonas sincronizadas."; return 0; fi
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  dns_sync_zone "$z" || die "Falhou."; echo "Zona $z sincronizada com os sites e o email."; return 0; }
+cmd_dns_check(){ # a delegação no registador já aponta para este servidor?
+  local z="${1:-}" got ours r f=$DATA/stats/dns-check.json
+  dns_need; [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  got=$(dig +short NS "$z" @8.8.8.8 2>/dev/null | sed 's/\.$//' | sort | tr '\n' ' ')
+  ours=$(printf '%s\n%s\n' "$(dns_get NS1)" "$(dns_get NS2)" | sort | tr '\n' ' ')
+  r=$(dig +short SOA "$z" @"$(dns_get IP)" 2>/dev/null | awk '{print $3}')
+  [ -s "$f" ] || echo '{}' > "$f"
+  jq --arg z "$z" --arg g "$got" --argjson ok "$([ "$got" = "$ours" ] && echo true || echo false)" --arg r "$r" --arg t "$EPOCHSECONDS" \
+    '.[$z] = {checked:($t|tonumber), delegated:$ok, found:$g, serial_public:$r}' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
+  if [ "$got" = "$ours" ]; then echo "Delegação de $z correta: os nameservers apontam para este servidor."
+  else echo "A delegação de $z ainda não aponta para este servidor (encontrado: ${got:-nada}). Altera os nameservers no registador para $(dns_get NS1) e $(dns_get NS2)."; fi
+  return 0
+}
+dns_state_json(){
+  dns_on || { echo '{"enabled":false}'; return 0; }
+  local z zs="[]" chk; chk=$(cat "$DATA/stats/dns-check.json" 2>/dev/null || echo '{}'); jq -e . >/dev/null 2>&1 <<<"$chk" || chk='{}'
+  for z in $(dns_zones); do zs=$(jq -c --arg z "$z" --argjson d "$(dns_load "$z")" --argjson c "$chk" '. + [{name:$z, serial:$d.serial, records:$d.records, check:($c[$z] // null)}]' <<<"$zs"); done
+  jq -n --arg ns1 "$(dns_get NS1)" --arg ns2 "$(dns_get NS2)" --arg ip "$(dns_get IP)" --arg ip6 "$(dns_get IP6)" --argjson zs "$zs" \
+    --arg act "$(systemctl is-active nsd 2>/dev/null)" '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, active:($act == "active"), zones:$zs}'
+}
+# ============================ LOGS DOS SITES =================================
+SITE_LOGS=/var/log/minipainel/sites          # access.log e error.log do nginx (lidos pelo painel)
+logs_days(){ local d; d=$(srv_get LOG_DAYS 90); [[ "$d" =~ ^[0-9]{1,3}$ ]] || d=90; echo "$d"; }
+logs_dir_site(){ install -d -o root -g "$PANEL_SYSUSER" -m 750 "$SITE_LOGS" "$SITE_LOGS/$1"; }
+logs_migrate_site(){ # move os logs antigos do nginx (/var/log/nginx/mp-<site>.*) para a pasta nova
+  local n=$1 t; logs_dir_site "$n"
+  for t in access error; do
+    if [ -f "/var/log/nginx/mp-$n.$t.log" ] && [ ! -e "$SITE_LOGS/$n/$t.log" ]; then mv -f "/var/log/nginx/mp-$n.$t.log" "$SITE_LOGS/$n/$t.log"; fi
+    for f in /var/log/nginx/mp-"$n".$t.log.*; do [ -f "$f" ] && mv -f "$f" "$SITE_LOGS/$n/$t.log${f##*.log}"; done
+  done
+}
+logs_rotate_conf(){ # rotação diária; os logs dentro da pasta do site são rodados com o utilizador do site
+  local d n; d=$(logs_days)
+  {
+    echo "# IDDigital Hosting — rotação dos logs dos sites (gerado pelo painel; guarda $d dias)"
+    printf '%s/*/access.log %s/*/error.log {\n    daily\n    rotate %s\n    maxage %s\n    missingok\n    notifempty\n    compress\n    delaycompress\n    dateext\n    sharedscripts\n    postrotate\n        [ -s /run/nginx.pid ] && kill -USR1 "$(cat /run/nginx.pid)" 2>/dev/null || true\n    endscript\n}\n' "$SITE_LOGS" "$SITE_LOGS" "$d" "$d"
+    for n in $(site_names); do
+      printf '%s/%s/logs/*.log {\n    su mp_%s mp_%s\n    daily\n    rotate %s\n    maxage %s\n    missingok\n    notifempty\n    compress\n    delaycompress\n    dateext\n    copytruncate\n}\n' "$WWW_ROOT" "$n" "$n" "$n" "$d" "$d"
+    done
+  } > /etc/logrotate.d/minipainel-sites
+  chmod 644 /etc/logrotate.d/minipainel-sites
+  # a rotação genérica antiga deixa de tocar nas pastas dos sites
+  [ -f /etc/logrotate.d/minipainel ] && sed -i 's|^/srv/www/\*/logs/\*\.log ||' /etc/logrotate.d/minipainel
+  return 0
+}
+cmd_logs_settings(){
+  local d=""
+  while [ $# -gt 0 ]; do case "$1" in --days) d="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
+  [[ "$d" =~ ^[0-9]{1,3}$ ]] && [ "$d" -ge 7 ] && [ "$d" -le 365 ] || die "Dias entre 7 e 365."
+  srv_set LOG_DAYS "$d"; logs_rotate_conf
+  echo "Os logs dos sites passam a ser guardados durante $d dias."; return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -10899,6 +11543,7 @@ write_state(){
     --argjson mail "$j_mail" \
     --argjson usnaps "$j_snaps" \
     --argjson fti "$(ftp_installed && echo true || echo false)" --arg ftpl "$(ftp_get PLAIN 0)" --arg ftip "$(ftp_get PASV_IP)" \
+    --argjson jdns "$(jv dns "$(dns_state_json 2>/dev/null)" '{"enabled":false}')" --arg ldays "$(logs_days)" \
     --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
     --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
     --arg prr "$(awk -v s=$(( EPOCHSECONDS - 86400 )) '$1 >= s' "$DATA/stats/ban-history.txt" 2>/dev/null | wc -l)" \
@@ -10914,6 +11559,7 @@ write_state(){
       updates:{snaps:$usnaps},
       ftp:{installed:$fti, plain:($ftpl == "1"), pasv_ip:$ftip},
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
+      dns:$jdns, log_days:($ldays|tonumber),
       protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
@@ -10947,7 +11593,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -10965,7 +11611,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.4.0 (mpanel)
+IDDigital Hosting — CLI v2.5.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -10998,6 +11644,15 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+DNS autoritativo (NSD; só responde pelas zonas do painel)
+  dns-enable --ns1 ns1.dominio.pt --ns2 ns2.dominio.pt [--ip IP] [--ip6 IPv6] [--hostmaster email]
+  dns-zone-add|dns-zone-del <domínio>       zona com registos automáticos (sites, email, nameservers)
+  dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
+  dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
+
+Logs dos sites (/var/log/minipainel/sites e /srv/www/<site>/logs)
+  logs-settings --days N               dias a guardar (7 a 365; omissão 90)
 
 Proteção contra força bruta (SSH, painel, email, webmail, FTP)
   protect-settings [--ssh on|off] [--ssh-fails N] [--panel-fails N] [--auth-fails N] [--window MIN]
@@ -11152,6 +11807,14 @@ dispatch(){
     ftp-settings)      cmd_ftp_settings "$@" ;;
     pma-settings)      cmd_pma_settings "$@" ;;
     protect-settings)  cmd_protect_settings "$@" ;;
+    dns-enable)        cmd_dns_enable "$@" ;;
+    dns-zone-add)      cmd_dns_zone_add "$@" ;;
+    dns-zone-del)      cmd_dns_zone_del "$@" ;;
+    dns-rec-add)       cmd_dns_rec_add "$@" ;;
+    dns-rec-del)       cmd_dns_rec_del "$@" ;;
+    dns-sync)          cmd_dns_sync "$@" ;;
+    dns-check)         cmd_dns_check "$@" ;;
+    logs-settings)     cmd_logs_settings "$@" ;;
     conf-lock)         conf_lock ;;
     update-check)      cmd_update_check ;;
     update-start)      cmd_update_start "$@" ;;
@@ -11244,7 +11907,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.4.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.5.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -11331,7 +11994,7 @@ update_traffic(){
   local n log pos ino size oino off req bytes hour now
   now=$EPOCHSECONDS; hour=$(( now / 3600 * 3600 ))
   for n in $(site_names); do
-    log=/var/log/nginx/mp-$n.access.log
+    log=/var/log/minipainel/sites/$n/access.log; [ -f "$log" ] || log=/var/log/nginx/mp-$n.access.log
     pos=$TDIR/$n.pos
     [ -f "$log" ] || continue
     ino=$(stat -c %i "$log" 2>/dev/null) || continue
@@ -11632,7 +12295,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.4.0
+#  mp-sendmail — IDDigital Hosting v2.5.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -11670,7 +12333,7 @@ fi
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.4.0
+#  mpanel-cron — IDDigital Hosting v2.5.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
