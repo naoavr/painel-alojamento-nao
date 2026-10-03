@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.3.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.4.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.3.0.sh [--php "8.2 8.3 8.4"] [--panel-port 2443] [--force]
-#  (por omissão só versões de PHP com suporte de segurança; 7.4/8.1 apenas com --php, se precisares)
+#    bash minipainel-install-v2.4.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
 #  versões de PHP com --php); sites, bases de dados, extensões e password do
@@ -17,8 +17,9 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.3.0"
-PHP_VERSIONS="8.2 8.3 8.4"
+MP_VERSION="2.4.0"
+PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
+PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
 PANEL_PORT_ARG=0
 PHP_ARG=0
@@ -173,15 +174,21 @@ ok "Pacotes base instalados."
 if [ "$UPGRADE" -eq 1 ] && [ "$PHP_ARG" -eq 0 ]; then
   CUR_PHP="$(php_installed | tr '\n' ' ')"
   [ -n "${CUR_PHP// /}" ] && PHP_VERSIONS="$CUR_PHP"
+  # ao passar para a v2.4.0 (uma só vez) acrescentam-se as versões do 7.0 ao 8.5 que faltem
+  if [ "$PREV_VERSION" != 0 ] && [ "$(printf '%s\n%s\n' "$PREV_VERSION" 2.4.0 | sort -V | head -1)" = "$PREV_VERSION" ] && [ "$PREV_VERSION" != 2.4.0 ]; then
+    PHP_VERSIONS="$(printf '%s\n' $CUR_PHP $PHP_ALL | sort -uV | tr '\n' ' ')"
+  fi
 fi
 say "A instalar versões de PHP: $PHP_VERSIONS"
 for v in $PHP_VERSIONS; do
   pkgs=()
   if [ "$OS_FAMILY" = debian ]; then
     for e in fpm cli common mysql curl gd mbstring xml zip intl bcmath opcache soap sqlite3 readline; do pkgs+=("php$v-$e"); done
+    case "$v" in 5.*|7.*) pkgs+=("php$v-json") ;; esac
   else
     vv="$(php_vv "$v")"
     for e in php-fpm php-cli php-common php-mysqlnd php-gd php-mbstring php-xml php-pecl-zip php-intl php-bcmath php-opcache php-soap php-pdo php-process; do pkgs+=("php$vv-$e"); done
+    case "$v" in 5.*|7.*) pkgs+=("php$vv-php-json") ;; esac
   fi
   pkg_install_soft "${pkgs[@]}"
   if [ -x "$(php_fpm_bin "$v")" ]; then ok "PHP $v instalado."; else warn "PHP $v não ficou instalado (indisponível nesta distribuição?)."; fi
@@ -190,6 +197,7 @@ done
 ALL_PHP="$(php_installed | tr '\n' ' ')"
 [ -n "${ALL_PHP// /}" ] || die "Nenhuma versão de PHP ficou instalada."
 HIGHEST_PHP="$(php_installed | tail -n1)"
+for c in 8.4 8.3 8.2; do if php_installed | grep -qx "$c"; then HIGHEST_PHP=$c; break; fi; done
 
 # ----------------------------------------------------------------------------
 # 2. Configuração do MiniPainel
@@ -522,7 +530,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.3.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.4.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -530,7 +538,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.3.0';
+const MP_VERSION = '2.4.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -616,6 +624,7 @@ function go(string $p, array $q = []): void {
 function audit(string $action, bool $ok = true, ?string $user = null): void {
     $line = json_encode(['ts' => time(), 'ip' => (string)($_SERVER['REMOTE_ADDR'] ?? ''), 'user' => substr((string)($user ?? ($_SESSION['user'] ?? '')), 0, 40), 'action' => substr($action, 0, 300), 'ok' => $ok], JSON_UNESCAPED_UNICODE);
     @file_put_contents(MP_DATA . '/logs/audit.log', $line . "\n", FILE_APPEND | LOCK_EX);
+    if (function_exists('openlog')) { @openlog('minipainel-audit', LOG_PID, LOG_AUTHPRIV); @syslog($ok ? LOG_NOTICE : LOG_WARNING, $line); @closelog(); }
 }
 function b32_encode(string $b): string {
     $a = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; $bits = ''; $o = '';
@@ -663,6 +672,16 @@ function recovery_use(array $auth, string $code): bool {
     $used[] = $h;
     @file_put_contents($uf, (string)json_encode($used), LOCK_EX);
     return true;
+}
+function reauth_ok(?array $auth): bool { // password atual e, com 2FA ativo, também o código
+    if ($auth === null || !password_verify(post_raw('atual'), (string)($auth['hash'] ?? ''))) return false;
+    if (!empty($auth['totp']) && !totp_ok($auth, post('code')) && !recovery_use($auth, post('code'))) return false;
+    return true;
+}
+function reauth_fields(?array $auth): string {
+    $h = '<label class="fld">Password do painel<input class="in" type="password" name="atual" required autocomplete="current-password"></label>';
+    if (!empty($auth['totp'])) $h .= '<label class="fld">Código de verificação<input class="in mono" name="code" required inputmode="numeric" autocomplete="one-time-code" maxlength="14"></label>';
+    return $h;
 }
 function ip_in(string $ip, string $net): bool {
     $p = explode('/', $net, 2);
@@ -1689,9 +1708,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             job_submit('update-check', [], 'Procurar atualizações do painel');
             break;
         case 'update_start':
+            if (post('unsigned') === '1' && !reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
             job_submit('update-start', post('unsigned') === '1' ? ['--allow-unsigned'] : [], 'Atualizar o painel' . (post('unsigned') === '1' ? ' (sem assinatura)' : ''));
             break;
         case 'update_key':
+            if (!reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
             if (post('op') === 'clear') { job_submit('update-key', ['clear'], 'Remover a chave das atualizações'); break; }
             $pem = trim(str_replace("\r", '', post_raw('pem')));
             if (!preg_match('/^-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+\/=\n]+\n-----END PUBLIC KEY-----$/', $pem) || strlen($pem) > 400) { $bad('Chave inválida: cola a chave pública completa (formato PEM).'); break; }
@@ -1700,6 +1721,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'update_rollback':
             $fn = post('file');
             if (!preg_match('/^\d{8}-\d{6}-v[0-9.]+\.tar\.gz$/', $fn)) { $bad('Cópia inválida.'); break; }
+            if (!reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
             job_submit('update-rollback', [$fn], 'Repor a cópia ' . $fn);
             break;
         case 'os_check':
@@ -1712,7 +1734,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             job_submit('os-auto', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desligar atualizações automáticas' : 'Ativar atualizações de segurança automáticas');
             break;
         case 'reboot':
-            if ($auth === null || !password_verify(post_raw('atual'), (string)($auth['hash'] ?? ''))) { $bad('A password está incorreta.'); break; }
+            if (!reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
             job_submit('reboot', [], 'Reiniciar o servidor');
             break;
 
@@ -1730,6 +1752,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $pi = post('pasv_ip');
             if ($pi !== '' && !filter_var($pi, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $bad('IP inválido.'); break; }
             job_submit('ftp-settings', ['--plain', post('plain') === '1' ? 'on' : 'off', '--pasv-ip', $pi === '' ? 'none' : $pi], 'Definições do FTP');
+            break;
+
+        case 'protect_settings':
+            foreach (['ssh_fails', 'panel_fails', 'auth_fails'] as $k) { $v = post($k); if (!ctype_digit($v) || (int)$v < 3 || (int)$v > 100) { $bad('O número de falhas tem de estar entre 3 e 100.'); break 2; } }
+            if (!ctype_digit(post('window')) || (int)post('window') < 1 || (int)post('window') > 1440) { $bad('A janela tem de estar entre 1 e 1440 minutos.'); break; }
+            foreach (['ban1', 'ban2', 'ban3'] as $k) { if (!in_array(post($k), ['15m', '1h', '6h', '24h', '7d', '30d', 'perm'], true)) { $bad('Duração inválida.'); break 2; } }
+            job_submit('protect-settings', ['--ssh', post('ssh') === 'off' ? 'off' : 'on', '--ssh-fails', post('ssh_fails'), '--panel-fails', post('panel_fails'), '--auth-fails', post('auth_fails'), '--window', post('window'), '--ban1', post('ban1'), '--ban2', post('ban2'), '--ban3', post('ban3')], 'Proteção contra força bruta');
             break;
 
         case 'pma_settings':
@@ -2275,7 +2304,7 @@ $titles = [
     'ligacoes' => 'Ligações abertas a este servidor, bloqueio de IPs e bloqueio automático.',
     'cron'     => 'Tarefas agendadas (cron) de cada site, como no cPanel.',
     'backups'  => 'Backups dos sites e das bases de dados, locais e remotos.',
-    'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
+    'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, proteção contra força bruta, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
@@ -2440,6 +2469,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
               <td data-label="Endereço">
                 <?php $mu = site_main_url($s); $nd = count(array_filter(explode(' ', (string)($s['domains'] ?? '')))); ?>
                 <?php if ($mu !== ''): ?>
+                <?php if (($s['ssl'] ?? 'none') !== 'none' && empty($s['https_ok'])): ?><div style="margin-bottom:4px"><button type="button" class="pill p-warn" data-open="dlg-dom-<?= h($n) ?>" style="border:0;cursor:pointer" title="O certificado não foi emitido (o domínio já aponta para este servidor?)">Sem certificado · pedir novamente</button></div><?php endif; ?>
                 <div class="links dom"><?= !empty($s['https_ok']) ? ic('lock', 'lock') : '' ?><?php if ($on): ?><a href="<?= h($mu) ?>" target="_blank" rel="noopener"><?= h(preg_replace('#^https?://|/$#', '', $mu)) ?><?= ic('ext') ?></a><?php else: ?><span><?= h(preg_replace('#^https?://|/$#', '', $mu)) ?></span><?php endif; ?><?= $nd > 1 ? ' <span class="mu">+' . ($nd - 1) . '</span>' : '' ?></div>
                 <?php endif; ?>
                 <div class="links"><span class="port">:<?= $port ?></span>
@@ -3214,6 +3244,30 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
       </div>
 
+      <section class="card">
+        <div class="card-h"><div><h2>Proteção contra força bruta</h2><p>Bloqueia na firewall os IPs com demasiadas passwords erradas. Os bloqueios aparecem e desbloqueiam-se na página Ligações.</p></div>
+          <?php $pr = is_array($state['protect'] ?? null) ? $state['protect'] : ['ssh' => true, 'ssh_fails' => 5, 'panel_fails' => 10, 'auth_fails' => 10, 'window' => 10, 'ban1' => '1h', 'ban2' => '24h', 'ban3' => '7d', 'recent' => 0]; ?>
+          <span class="pill p-ok"><?= (int)$pr['recent'] ?> bloqueio<?= (int)$pr['recent'] === 1 ? '' : 's' ?> nas últimas 24 h</span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('protect_settings') ?>
+          <div class="fgrid" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+            <label class="fld">SSH (falhas)<input class="in" name="ssh_fails" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)$pr['ssh_fails'] ?>"><small>Todas as contas, incluindo o root</small></label>
+            <label class="fld">Painel (falhas)<input class="in" name="panel_fails" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)$pr['panel_fails'] ?>"><small>Password ou código 2FA errados</small></label>
+            <label class="fld">Email, webmail e FTP (falhas)<input class="in" name="auth_fails" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)$pr['auth_fails'] ?>"></label>
+            <label class="fld">Janela (minutos)<input class="in" name="window" inputmode="numeric" pattern="[0-9]{1,4}" value="<?= (int)$pr['window'] ?>"><small>Período em que as falhas contam</small></label>
+          </div>
+          <?php $durs = ['15m' => '15 minutos', '1h' => '1 hora', '6h' => '6 horas', '24h' => '24 horas', '7d' => '7 dias', '30d' => '30 dias', 'perm' => 'Permanente']; $sel = function (string $cur, array $opts) use ($durs) { $o = ''; foreach ($opts as $k) $o .= '<option value="' . $k . '"' . ($cur === $k ? ' selected' : '') . '>' . $durs[$k] . '</option>'; return $o; }; ?>
+          <div class="fgrid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-top:14px">
+            <label class="fld">1.º bloqueio<select class="in" name="ban1"><?= $sel((string)$pr['ban1'], ['15m', '1h', '6h', '24h']) ?></select></label>
+            <label class="fld">2.º bloqueio (30 dias)<select class="in" name="ban2"><?= $sel((string)$pr['ban2'], ['6h', '24h', '7d']) ?></select></label>
+            <label class="fld">3.º e seguintes<select class="in" name="ban3"><?= $sel((string)$pr['ban3'], ['7d', '30d', 'perm']) ?></select></label>
+            <label class="fld">Vigiar o SSH<select class="in" name="ssh"><option value="on"<?= !empty($pr['ssh']) ? ' selected' : '' ?>>Sim</option><option value="off"<?= empty($pr['ssh']) ? ' selected' : '' ?>>Não</option></select></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+        <div class="card-f mu">Nunca são bloqueados o próprio servidor, os IPs de confiança (página Ligações) nem os IPs de onde usaste o painel nos últimos 7 dias. Quem volta a ser apanhado em 30 dias fica bloqueado mais tempo.</div>
+      </section>
+
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>phpMyAdmin</h2><p>Tempos e limites. Aumenta-os para importar ou exportar bases de dados grandes.</p></div></div>
@@ -3586,7 +3640,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <form method="post"><?= act_fields('update_check') ?><button class="btn sec" type="submit"><?= ic('reload') ?>Procurar atualizações</button></form>
             <?php if (!empty($up['newer'])): ?>
             <form method="post" data-confirm="Atualizar o painel para a v<?= h($up['latest']) ?>? É guardada uma cópia da versão atual e, se algo falhar, é reposta automaticamente."><?= act_fields('update_start') ?>
-              <?php if (!$hasKey): ?><label class="chk" style="margin-bottom:8px"><input type="checkbox" name="unsigned" value="1" required> Instalar sem verificação de assinatura (não recomendado)</label><?php endif; ?>
+              <?php if (!$hasKey): ?><label class="chk" style="margin-bottom:8px"><input type="checkbox" name="unsigned" value="1" required> Instalar sem verificação de assinatura (não recomendado)</label><div class="fgrid" style="margin-bottom:10px"><?= reauth_fields($auth) ?></div><?php endif; ?>
               <button class="btn" type="submit"><?= ic('download') ?>Atualizar para v<?= h($up['latest']) ?></button></form>
             <?php endif; ?>
           </div>
@@ -3599,9 +3653,10 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <form method="post" class="card-b">
           <?= act_fields('update_key', ['op' => 'set']) ?>
           <label class="fld">Chave pública (PEM)<textarea class="in mono cron-ta" name="pem" rows="4" required placeholder="-----BEGIN PUBLIC KEY-----&#10;MCowBQYDK2VwAyEA…&#10;-----END PUBLIC KEY-----"></textarea><small>Gerada no teu computador com <span class="mono">release.sh keygen</span>; a chave privada nunca vem para o servidor</small></label>
+          <div class="fgrid" style="margin-top:14px"><?= reauth_fields($auth) ?></div>
           <div style="display:flex;gap:8px;margin-top:14px"><button class="btn" type="submit"><?= $hasKey ? 'Substituir chave' : 'Guardar chave' ?></button></div>
         </form>
-        <?php if ($hasKey): ?><form method="post" class="card-f" data-confirm="Remover a chave? As atualizações deixam de ser verificadas."><?= act_fields('update_key', ['op' => 'clear']) ?><button class="btn sm sec" type="submit">Remover chave</button></form><?php endif; ?>
+        <?php if ($hasKey): ?><form method="post" class="card-f" data-confirm="Remover a chave? As atualizações deixam de ser verificadas."><?= act_fields('update_key', ['op' => 'clear']) ?><div class="fgrid" style="margin-bottom:10px"><?= reauth_fields($auth) ?></div><button class="btn sm sec" type="submit">Remover chave</button></form><?php endif; ?>
       </section>
       </div>
 
@@ -3643,7 +3698,12 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="row-list">
           <?php foreach ($snaps as $sn): $fn = (string)$sn['file']; ?>
             <div class="item"><span class="av t-vio"><?= ic('archive') ?></span><div class="grow"><div class="nm mono"><?= h($fn) ?></div><div class="mu"><?= h(fmt_bytes((float)$sn['size'])) ?></div></div>
-              <form method="post" data-confirm="Repor esta cópia do painel? A configuração volta ao estado dessa altura."><?= act_fields('update_rollback', ['file' => $fn]) ?><button class="btn sm sec" type="submit">Repor</button></form></div>
+              <button class="btn sm sec" type="button" data-open="dlg-rb-<?= md5($fn) ?>">Repor</button></div>
+              <dialog id="dlg-rb-<?= md5($fn) ?>"><form method="post"><?= act_fields('update_rollback', ['file' => $fn]) ?>
+                <div class="dlg-h"><h3>Repor <?= h($fn) ?></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+                <div class="dlg-b"><p style="margin:0">O painel e a configuração voltam ao estado dessa cópia. A conta de acesso (password e 2FA) não é alterada.</p><?= reauth_fields($auth) ?></div>
+                <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Repor</button></div>
+              </form></dialog>
           <?php endforeach; ?>
         </div>
       </section>
@@ -3652,7 +3712,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       <dialog id="dlg-reboot"><form method="post"><?= act_fields('reboot') ?>
         <div class="dlg-h"><h3>Reiniciar o servidor</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
         <div class="dlg-b"><p style="margin:0">O servidor reinicia dentro de 1 minuto. Os sites, o email e o painel ficam indisponíveis durante o arranque (normalmente 1 a 2 minutos).</p>
-          <label class="fld">Confirma com a password do painel<input class="in" type="password" name="atual" required autocomplete="current-password"></label></div>
+          <?= reauth_fields($auth) ?></div>
         <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Reiniciar</button></div>
       </form></dialog>
 
@@ -6836,7 +6896,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.3.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.4.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7243,11 +7303,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.3.0
+#  mpanel — IDDigital Hosting CLI v2.4.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.3.0"
+MP_VERSION="2.4.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -8948,16 +9008,22 @@ cmd_bk_remote_add(){ # nome tipo opções...
     sftp)
       [ -n "$host" ] && [ -n "$user" ] || die "Indica o servidor e o utilizador."
       [ -n "$pass" ] || [ -n "$key" ] || die "Indica a password ou a chave privada."
-      local args=(host="$host" port="$port" user="$user" shell_type=unix)
-      [ -n "$pass" ] && args+=(pass="$(rclone obscure "$pass")")
-      if [ -n "$key" ]; then install -d -m 700 /etc/minipainel/rclone-keys; printf '%s\n' "$key" | sed 's/\\n/\n/g' > "/etc/minipainel/rclone-keys/$n.key"; chmod 600 "/etc/minipainel/rclone-keys/$n.key"; args+=(key_file="/etc/minipainel/rclone-keys/$n.key"); fi
-      bk_rc config create "$n" sftp "${args[@]}" --non-interactive >/dev/null || die "O rclone recusou a configuração."
+      [[ "$port" =~ ^[0-9]{1,5}$ ]] || die "Porta inválida."
+      [[ "$host$user" != *[$'\n\r ']* ]] || die "Servidor ou utilizador inválido."
+      {
+        printf '\n[%s]\ntype = sftp\nhost = %s\nuser = %s\nport = %s\nshell_type = unix\n' "$n" "$host" "$user" "$port"
+        [ -n "$pass" ] && printf 'pass = %s\n' "$(printf '%s' "$pass" | rclone obscure -)"
+        if [ -n "$key" ]; then install -d -m 700 /etc/minipainel/rclone-keys; printf '%s\n' "$key" | sed 's/\\n/\n/g' > "/etc/minipainel/rclone-keys/$n.key"; chmod 600 "/etc/minipainel/rclone-keys/$n.key"; printf 'key_file = /etc/minipainel/rclone-keys/%s.key\n' "$n"; fi
+      } >> "$BK_RCLONE"
       root=${root:-backups} ;;
     s3)
       [ -n "$ak" ] && [ -n "$sk" ] && [ -n "$bucket" ] || die "Indica a chave de acesso, a chave secreta e o bucket."
-      local args=(provider="$prov" access_key_id="$ak" secret_access_key="$sk" no_check_bucket=true)
-      [ -n "$ep" ] && args+=(endpoint="$ep"); [ -n "$reg" ] && args+=(region="$reg")
-      bk_rc config create "$n" s3 "${args[@]}" --non-interactive >/dev/null || die "O rclone recusou a configuração."
+      [[ "$prov$ak$sk$ep$reg" != *[$'\n\r']* ]] || die "Valores inválidos."
+      {
+        printf '\n[%s]\ntype = s3\nprovider = %s\naccess_key_id = %s\nsecret_access_key = %s\nno_check_bucket = true\n' "$n" "$prov" "$ak" "$sk"
+        [ -n "$ep" ] && printf 'endpoint = %s\n' "$ep"
+        [ -n "$reg" ] && printf 'region = %s\n' "$reg"
+      } >> "$BK_RCLONE"
       root="$bucket${root:+/$root}" ;;
     rclone)
       [ -n "$raw" ] || die "Cola a secção de configuração do rclone."
@@ -8989,7 +9055,7 @@ cmd_bk_remote_del(){
   local n="${1:-}"
   [ -n "$(bk_remote_root "$n")" ] || die "O destino $n não existe."
   bk_rc config delete "$n" >/dev/null 2>&1; rm -f "/etc/minipainel/rclone-keys/$n.key"
-  jq --arg n "$n" 'map(select(.name != $n))' <<<"$(bk_remotes)" > "$BK_REMOTES.tmp" && mv -f "$BK_REMOTES.tmp" "$BK_REMOTES"
+  jq --arg n "$n" 'map(select(.name != $n))' <<<"$(bk_remotes)" > "$BK_REMOTES.tmp" && chmod 600 "$BK_REMOTES.tmp" && mv -f "$BK_REMOTES.tmp" "$BK_REMOTES"
   [ "$(bk_conf REMOTE '')" = "$n" ] && sed -i 's/^REMOTE=.*/REMOTE=/' "$BK_CONF"
   bk_write_state
   echo "Destino $n removido (os backups já enviados para lá não foram apagados)."
@@ -9016,7 +9082,7 @@ NGX_CONFD=/etc/nginx/minipainel/conf.d
 SELF_SSL=/etc/minipainel/ssl/sites
 srv_get(){ local v; v=$(grep -m1 "^$1=" "$SRV_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
 srv_set(){
-  touch "$SRV_CONF"; chmod 644 "$SRV_CONF"
+  touch "$SRV_CONF"; chmod 600 "$SRV_CONF"
   if grep -q "^$1=" "$SRV_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$SRV_CONF"; else echo "$1=$2" >> "$SRV_CONF"; fi
 }
 valid_domain(){ local re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$'; [ ${#1} -le 253 ] && [[ "$1" =~ $re ]]; }
@@ -9243,6 +9309,7 @@ PANEL_ALLOW_INC=/etc/nginx/minipainel/panel-allow.inc
 PORTS_ALLOW_INC=/etc/nginx/minipainel/ports-allow.inc
 audit_cli(){ # regista ações feitas diretamente na consola
   [ -t 0 ] || return 0
+  logger -t minipainel-audit -p authpriv.notice "consola root: $1" 2>/dev/null
   jq -cn --arg t "$EPOCHSECONDS" --arg a "$1" '{ts:($t|tonumber), ip:"consola", user:"root", action:$a, ok:true}' >> "$DATA/logs/audit.log" 2>/dev/null
   chown "$PANEL_SYSUSER:$PANEL_SYSUSER" "$DATA/logs/audit.log" 2>/dev/null; return 0
 }
@@ -9375,10 +9442,16 @@ RSPAMD_LOCAL=/etc/rspamd/local.d
 DKIM_DIR=/var/lib/rspamd/dkim
 mail_get(){ local v; v=$(grep -m1 "^$1=" "$MAIL_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
 mail_set(){
-  install -d -m 755 /etc/minipainel; touch "$MAIL_CONF"; chmod 644 "$MAIL_CONF"
+  install -d -m 755 /etc/minipainel; touch "$MAIL_CONF"; chmod 600 "$MAIL_CONF"
   if grep -q "^$1=" "$MAIL_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$MAIL_CONF"; else echo "$1=$2" >> "$MAIL_CONF"; fi
 }
 mail_on(){ [ "$(mail_get ENABLED 0)" = 1 ]; }
+conf_lock(){ # ficheiros de configuração sem segredos mas com informação útil a um atacante: só root
+  local f; for f in /etc/minipainel/minipainel.conf /etc/minipainel/server.conf /etc/minipainel/mail.conf /etc/minipainel/ftp.conf \
+    /etc/minipainel/pma.conf /etc/minipainel/firewall.conf /etc/minipainel/update.conf /etc/minipainel/backup-remotes.json; do [ -f "$f" ] && chmod 600 "$f"; done
+  if [ "$(mail_get ENABLED 0)" = 1 ]; then : > /etc/minipainel/mail-enabled; chmod 644 /etc/minipainel/mail-enabled; else rm -f /etc/minipainel/mail-enabled; fi
+  return 0
+}
 mail_need(){ mail_on || die "O email não está ativo. Ativa-o na página Email ou com: mpanel mail-enable --host mail.dominio.pt"; }
 mail_data(){ if [ -s "$MAIL_DATA" ]; then cat "$MAIL_DATA"; else echo '{"domains":{},"boxes":{},"aliases":{}}'; fi; }
 mail_data_save(){
@@ -9577,10 +9650,9 @@ mail_rspamd_config(){
   install -d -o _rspamd -g _rspamd -m 750 "$DKIM_DIR" 2>/dev/null || install -d -o rspamd -g rspamd -m 750 "$DKIM_DIR"
   printf 'bind_socket = "127.0.0.1:11332";\nmilter = yes;\ntimeout = 120s;\nupstream "local" {\n  default = yes;\n  self_scan = yes;\n}\n' > "$RSPAMD_LOCAL/worker-proxy.inc"
   printf 'bind_socket = "127.0.0.1:11333";\n' > "$RSPAMD_LOCAL/worker-normal.inc"
-  printf 'bind_socket = "127.0.0.1:11334";\n' > "$RSPAMD_LOCAL/worker-controller.inc"
   if mail_unbound_ok; then printf 'dns {\n  nameserver = ["127.0.0.1:53:10"];\n}\nlocal_addrs = "127.0.0.0/8, ::1";\n' > "$RSPAMD_LOCAL/options.inc"
   else printf 'local_addrs = "127.0.0.0/8, ::1";\n' > "$RSPAMD_LOCAL/options.inc"; fi
-  printf 'servers = "127.0.0.1";\n' > "$RSPAMD_LOCAL/redis.conf"
+  mail_secrets
   printf 'reject = 15;\nadd_header = 6;\ngreylist = 4;\n' > "$RSPAMD_LOCAL/actions.conf"
   printf 'enabled = true;\n' > "$RSPAMD_LOCAL/greylist.conf"
   printf 'path = "%s/$domain.$selector.key";\nselector = "mp";\nallow_username_mismatch = true;\nsign_local = true;\nsign_authenticated = true;\nuse_domain = "header";\nallow_hdrfrom_mismatch = false;\n' "$DKIM_DIR" > "$RSPAMD_LOCAL/dkim_signing.conf"
@@ -9610,19 +9682,47 @@ mail_rspamd_config(){
   fi
 }
 # Bloqueia a porta 25 de saída para tudo exceto o root e o Postfix: um site comprometido não envia spam diretamente.
+mail_rspamd_user(){ if id _rspamd >/dev/null 2>&1; then echo _rspamd; else echo rspamd; fi; }
 mail_fw_apply(){
   fw_has_nft || return 0
   nft delete table inet minipainel_mail >/dev/null 2>&1
   mail_on || return 0
-  local pu; pu=$(id -u postfix 2>/dev/null) || return 0
+  local pu ru vu du
+  pu=$(id -u postfix 2>/dev/null) || return 0
+  ru=$(id -u "$(mail_rspamd_user)" 2>/dev/null) || ru=$pu
+  vu=$(id -u vmail 2>/dev/null) || vu=$pu
+  du=$(id -u redis 2>/dev/null) || du=$ru
+  # porta 25: só o root e o Postfix (um site comprometido não envia spam diretamente)
+  # Redis e Rspamd: só os serviços de email lhes chegam (os sites não leem o histórico nem mexem no antispam)
   nft -f - <<EOF
 table inet minipainel_mail {
   chain output {
     type filter hook output priority 0; policy accept;
     tcp dport 25 meta skuid != { 0, $pu } counter reject with tcp reset
+    tcp dport 6379 meta skuid != { 0, $ru, $du } counter reject with tcp reset
+    tcp dport { 11332, 11333, 11334 } meta skuid != { 0, $pu, $ru, $vu } counter reject with tcp reset
   }
 }
 EOF
+}
+# passwords do Redis e do controlador do Rspamd (segunda barreira, além da firewall local)
+mail_secrets(){
+  local rp cp rc g
+  [ -s /etc/minipainel/redis.pw ] || ( umask 077; openssl rand -hex 24 > /etc/minipainel/redis.pw )
+  [ -s /etc/minipainel/rspamd-controller.pw ] || ( umask 077; openssl rand -hex 24 > /etc/minipainel/rspamd-controller.pw )
+  rp=$(cat /etc/minipainel/redis.pw); cp=$(cat /etc/minipainel/rspamd-controller.pw)
+  for rc in /etc/redis/redis.conf /etc/redis.conf; do
+    [ -f "$rc" ] || continue
+    if grep -qE '^\s*requirepass\s' "$rc"; then sed -i -E "s|^\s*requirepass\s.*|requirepass $rp|" "$rc"; else echo "requirepass $rp" >> "$rc"; fi
+    break
+  done
+  g=$(id -gn "$(mail_rspamd_user)" 2>/dev/null || echo root)
+  printf 'servers = "127.0.0.1";\npassword = "%s";\n' "$rp" > "$RSPAMD_LOCAL/redis.conf"
+  printf 'bind_socket = "127.0.0.1:11334";\npassword = "%s";\nenable_password = "%s";\nsecure_ip = "127.0.0.2";\n' "$cp" "$cp" > "$RSPAMD_LOCAL/worker-controller.inc"
+  chown root:"$g" "$RSPAMD_LOCAL/redis.conf" "$RSPAMD_LOCAL/worker-controller.inc"; chmod 640 "$RSPAMD_LOCAL/redis.conf" "$RSPAMD_LOCAL/worker-controller.inc"
+  # cabeçalho com a password para quem fala com o controlador (aprendizagem como vmail; estado como root)
+  printf 'Password: %s\n' "$cp" > /etc/minipainel/rspamd-controller.hdr
+  chown root:vmail /etc/minipainel/rspamd-controller.hdr 2>/dev/null; chmod 640 /etc/minipainel/rspamd-controller.hdr
 }
 mail_apply(){ # gera os mapas do Postfix e os utilizadores do Dovecot a partir de data.json
   local j; j=$(mail_data)
@@ -9662,7 +9762,7 @@ cmd_mail_enable(){
   id vmail >/dev/null 2>&1 || useradd -r -U -d "$VMAIL" -s "$(command -v nologin || echo /sbin/nologin)" -c "IDDigital Hosting mail" vmail
   install -d -o vmail -g vmail -m 750 "$VMAIL"
   install -d -m 711 "$MSPOOL"; install -d -m 700 "$MLIB" "$MLIB/held" "$MLIB/rejected" "$MLIB/sent"
-  mail_set ENABLED 1; mail_set HOST "$h"
+  mail_set ENABLED 1; mail_set HOST "$h"; conf_lock
   [ -n "$(mail_get DNSBL)" ] || mail_set DNSBL "dnsbl.3rhost.pt"
   [ -n "$(mail_get SITE_LIMIT)" ] || mail_set SITE_LIMIT 100
   [ -n "$(mail_get BOX_LIMIT)" ] || mail_set BOX_LIMIT 200
@@ -9810,7 +9910,8 @@ cmd_mail_settings(){
       --dnsbl) z="${2:-}"; [ "$z" = none ] && z=""; for x in $z; do valid_domain "$x" || die "Lista negra inválida: $x"; done; mail_set DNSBL "$z"; shift 2 || shift ;;
       --site-limit) [[ "${2:-}" =~ $re_n ]] || die "Limite inválido."; mail_set SITE_LIMIT "$2"; shift 2 || shift ;;
       --box-limit) [[ "${2:-}" =~ $re_n ]] || die "Limite inválido."; mail_set BOX_LIMIT "$2"; shift 2 || shift ;;
-      --auth-fails) [[ "${2:-}" =~ $re_n ]] && [ "$2" -ge 3 ] || die "Valor inválido (mínimo 3)."; mail_set AUTH_FAILS "$2"; shift 2 || shift ;;
+      --auth-fails) [[ "${2:-}" =~ $re_n ]] && [ "$2" -ge 3 ] || die "Valor inválido (mínimo 3)."; mail_set AUTH_FAILS "$2"
+                    if [ -f "$PROT_CONF" ]; then sed -i "s/^AUTH_FAILS=.*/AUTH_FAILS=$2/" "$PROT_CONF"; fi; shift 2 || shift ;;
       *) die "Opção desconhecida: $1" ;;
     esac
   done
@@ -9882,6 +9983,24 @@ mail_site_from_ok(){ # site from -> 0 se o remetente pertence ao site (domínios
   [[ " $(site_get "$s" DOMAINS) " == *" www.$d "* ]] && return 0
   return 1
 }
+mail_hdrs(){ awk 'BEGIN{h=""} /^\r?$/{exit} /^[ \t]/{h=h" "$0; next} {if(h!="")print h; h=$0} END{if(h!="")print h}' "$1"; }  # cabeçalhos, com linhas dobradas juntas
+mail_count_rcpt(){ # destinatários em To/Cc/Bcc (e Resent-*)
+  mail_hdrs "$1" | grep -iE '^(resent-)?(to|cc|bcc):' | sed -E 's/^[^:]*://' | grep -oE '[A-Za-z0-9._%+=-]+@[A-Za-z0-9.-]+' | sort -fu | wc -l
+}
+mail_fix_from(){ # msg site remetente: o From: tem de ser de um domínio do site; senão passa a ser o remetente validado
+  local f=$1 s=$2 env=$3 hf addr d disp tmp
+  hf=$(mail_hdrs "$f" | grep -im1 '^from:' | sed -E 's/^[^:]*:[ \t]*//')
+  addr=$(printf '%s' "$hf" | grep -oE '[A-Za-z0-9._%+=-]+@[A-Za-z0-9.-]+' | head -1 | tr 'A-Z' 'a-z'); d=${addr#*@}
+  if [ -n "$addr" ] && { [[ " $(site_get "$s" DOMAINS) " == *" $d "* ]] || [[ " $(site_get "$s" DOMAINS) " == *" www.$d "* ]]; }; then return 0; fi
+  disp=$(printf '%s' "$hf" | sed -nE 's/^"?([^"<]*[^" <])"?[ \t]*<.*/\1/p' | tr -d '\r\n' | cut -c1-80)
+  tmp=$(mktemp /var/tmp/mp-msg.XXXXXX)
+  awk -v nf="From: ${disp:+\"$disp\" }<$env>" -v rt="$addr" '
+    BEGIN{inh=1; skip=0; hasrt=0}
+    inh && /^\r?$/ { if (!hasrt && rt != "") print "Reply-To: " rt; inh=0; print; next }
+    inh && /^[ \t]/ { if (skip) next; print; next }
+    inh { skip=0; if (tolower($0) ~ /^from:/) { print nf; skip=1; next } if (tolower($0) ~ /^reply-to:/) hasrt=1; print; next }
+    { print }' "$f" > "$tmp" && mv -f "$tmp" "$f"
+}
 cmd_mail_spool(){
   mail_on || return 0
   exec 7>/run/minipainel-mailspool.lock; flock -n 7 || return 0
@@ -9899,8 +10018,13 @@ cmd_mail_spool(){
       runuser -u "$u" -- head -c 31457280 "$MSPOOL/$s/new/$f" > "$msg" 2>/dev/null
       from=$(runuser -u "$u" -- head -c 300 "$MSPOOL/$s/new/$base.from" 2>/dev/null | head -n 1 | tr -d '\r <>')
       mail_site_from_ok "$s" "$from" || from="$s@$(mail_get HOST)"
+      local nr maxr; maxr=$(mail_get MAX_RCPT 50)
+      nr=$(mail_count_rcpt "$msg")
+      mail_fix_from "$msg" "$s" "$from"
       res=$(rspamc -h 127.0.0.1:11333 --json -u "site-$s" -i 127.0.0.1 -F "$from" < "$msg" 2>/dev/null)
       act=$(jq -r '.action // "no action"' <<<"$res" 2>/dev/null); sc=$(jq -r '.score // 0' <<<"$res" 2>/dev/null)
+      if [ "$nr" -gt "$maxr" ] || [ "$nr" -eq 0 ]; then act=reject; sc="rcpt:$nr"; fi
+      if [ "$nr" -le "$maxr" ] && [ "$sent" -gt 0 ] && [ $(( sent + nr )) -gt "$lim" ] && [ "$act" != reject ]; then rm -f "$msg"; break; fi
       if [ "$act" = reject ]; then
         install -d -m 700 "$MLIB/rejected/$s"; mv -f "$msg" "$MLIB/rejected/$s/$base.eml"
         echo "$EPOCHSECONDS $sc" >> "$MLIB/rejected/$s.log"
@@ -9910,7 +10034,7 @@ cmd_mail_spool(){
           jq -cn --arg t "$EPOCHSECONDS" --arg a "Envio de email do site $s suspenso automaticamente: $rej mensagens com spam na última hora" '{ts:($t|tonumber), ip:"servidor", user:"automático", action:$a, ok:false}' >> "$DATA/logs/audit.log"
         fi
       else
-        { printf 'X-MP-Site: %s\n' "$s"; cat "$msg"; } | /usr/sbin/sendmail -t -i -f "$from" && { echo "$EPOCHSECONDS" >> "$MLIB/sent/$s"; sent=$((sent + 1)); }
+        { printf 'X-MP-Site: %s\n' "$s"; cat "$msg"; } | /usr/sbin/sendmail -t -i -f "$from" && { local k; for (( k = 0; k < nr; k++ )); do echo "$EPOCHSECONDS"; done >> "$MLIB/sent/$s"; sent=$(( sent + nr )); }
         rm -f "$msg"
       fi
       runuser -u "$u" -- rm -f "$MSPOOL/$s/new/$f" "$MSPOOL/$s/new/$base.from"
@@ -10155,8 +10279,8 @@ EOF
 # --- o Bayes aprende quando o utilizador move mensagens para o Lixo ou para fora dele ---
 mail_learning_config(){
   install -d -m 755 /etc/dovecot/sieve
-  printf '#!/bin/sh\nexec /usr/bin/rspamc -h 127.0.0.1:11334 learn_spam\n' > /etc/dovecot/sieve/mp-learn-spam.sh
-  printf '#!/bin/sh\nexec /usr/bin/rspamc -h 127.0.0.1:11334 learn_ham\n' > /etc/dovecot/sieve/mp-learn-ham.sh
+  printf '#!/bin/sh\nexec curl -s -m 30 -H @/etc/minipainel/rspamd-controller.hdr --data-binary @- http://127.0.0.1:11334/learnspam >/dev/null\n' > /etc/dovecot/sieve/mp-learn-spam.sh
+  printf '#!/bin/sh\nexec curl -s -m 30 -H @/etc/minipainel/rspamd-controller.hdr --data-binary @- http://127.0.0.1:11334/learnham >/dev/null\n' > /etc/dovecot/sieve/mp-learn-ham.sh
   chmod 755 /etc/dovecot/sieve/mp-learn-spam.sh /etc/dovecot/sieve/mp-learn-ham.sh
   printf 'require ["vnd.dovecot.pipe", "copy", "imapsieve"];\npipe :copy "mp-learn-spam.sh";\n' > /etc/dovecot/sieve/mp-learn-spam.sieve
   printf 'require ["vnd.dovecot.pipe", "copy", "imapsieve", "environment", "variables"];\nif environment :matches "imap.mailbox" "*" { set "mailbox" "${1}"; }\nif string "${mailbox}" "Trash" { stop; }\npipe :copy "mp-learn-ham.sh";\n' > /etc/dovecot/sieve/mp-learn-ham.sieve
@@ -10221,7 +10345,7 @@ mail_lists_json(){
   done; done | jq -R 'split(" ") | {list:.[0], type:.[1], value:(if .[1] == "domain" then "@" + .[2] else .[2] end)}' | jq -cs '.'
 }
 mail_history_json(){ # últimas mensagens rejeitadas ou marcadas como spam (histórico do Rspamd)
-  local r; r=$(curl -s -m 5 http://127.0.0.1:11334/history 2>/dev/null)
+  local r; r=$(curl -s -m 5 -H @/etc/minipainel/rspamd-controller.hdr http://127.0.0.1:11334/history 2>/dev/null)
   jq -e . >/dev/null 2>&1 <<<"$r" || { echo '[]'; return 0; }
   printf '%s' "$r" | jq -c '[(.rows // [])[] | select(.action == "reject" or .action == "add header" or .action == "rewrite subject") |
     {t:.unix_time, action:.action, score:((.score // 0) * 10 | floor / 10), from:(.sender_mime // .sender_smtp // ""), to:((.rcpt_mime // .rcpt_smtp // []) | if type == "array" then join(", ") else . end),
@@ -10275,13 +10399,13 @@ upd_snapshot(){ # cópia do painel antes de atualizar -> imprime o caminho
   local ts f
   ts=$(date '+%Y%m%d-%H%M%S'); install -d -m 700 "$UPD_SNAP"; f="$UPD_SNAP/$ts-v$MP_VERSION.tar.gz"
   local items=(etc/minipainel opt/minipainel usr/local/sbin/mpanel usr/local/sbin/mpanel-stats usr/local/sbin/mpanel-cron usr/local/sbin/mp-sendmail
-    etc/nginx/minipainel etc/nginx/nginx.conf var/lib/minipainel/auth.json) x
+    etc/nginx/minipainel etc/nginx/nginx.conf) x
   for x in /etc/php/*/fpm/pool.d /etc/opt/remi/*/php-fpm.d /etc/php-fpm.d /etc/systemd/system/minipainel-*; do [ -e "$x" ] && items+=("${x#/}"); done
   tar -C / -czf "$f" --ignore-failed-read "${items[@]}" 2>/dev/null
   chmod 600 "$f"; echo "$f"
 }
-upd_restore(){ # ficheiro
-  tar -C / -xzpf "$1" || return 1
+upd_restore(){ # ficheiro (a conta de acesso e o 2FA nunca são repostos a partir de uma cópia)
+  tar -C / -xzpf "$1" --exclude=var/lib/minipainel/auth.json --exclude=etc/minipainel/update.pub || return 1
   systemctl daemon-reload >/dev/null 2>&1
   local v; for v in $(php_installed); do systemctl restart "$(php_service "$v")" >/dev/null 2>&1; done
   nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1
@@ -10485,7 +10609,7 @@ PF_PASSWD=/etc/pure-ftpd/pureftpd.passwd
 PF_PDB=/etc/pure-ftpd/pureftpd.pdb
 SFTP_ROOT=/srv/sftp
 ftp_get(){ local v; v=$(grep -m1 "^$1=" "$FTP_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
-ftp_set(){ touch "$FTP_CONF"; chmod 644 "$FTP_CONF"; if grep -q "^$1=" "$FTP_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$FTP_CONF"; else echo "$1=$2" >> "$FTP_CONF"; fi; }
+ftp_set(){ touch "$FTP_CONF"; chmod 600 "$FTP_CONF"; if grep -q "^$1=" "$FTP_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$FTP_CONF"; else echo "$1=$2" >> "$FTP_CONF"; fi; }
 ftp_svc(){ systemctl list-unit-files pure-ftpd.service >/dev/null 2>&1 && echo pure-ftpd || echo pure-ftpd; }
 ssh_svc(){ if systemctl list-unit-files ssh.service 2>/dev/null | grep -q '^ssh.service'; then echo ssh; else echo sshd; fi; }
 ftp_installed(){ command -v pure-pw >/dev/null 2>&1; }
@@ -10670,9 +10794,39 @@ cmd_pma_settings(){
   [[ "$s" =~ $re ]] && [ "$s" -ge 5 ] && [ "$s" -le 1440 ] || die "Sessão: entre 5 e 1440 minutos."
   [[ "$e" =~ $re ]] && [ "$e" -ge 30 ] && [ "$e" -le 7200 ] || die "Tempo por operação: entre 30 e 7200 segundos."
   [[ "$u" =~ $re ]] && [ "$u" -ge 8 ] && [ "$u" -le 4096 ] || die "Importação: entre 8 e 4096 MB."
-  printf 'SESSION=%s\nEXEC=%s\nUPLOAD=%s\n' "$s" "$e" "$u" > "$PMA_SET"; chmod 644 "$PMA_SET"
+  printf 'SESSION=%s\nEXEC=%s\nUPLOAD=%s\n' "$s" "$e" "$u" > "$PMA_SET"; chmod 600 "$PMA_SET"
   pma_settings_apply
   echo "phpMyAdmin: sessão de $s min, operações até $e s, importações até $u MB."
+  return 0
+}
+
+# ============================ PROTEÇÃO CONTRA FORÇA BRUTA ====================
+PROT_CONF=/etc/minipainel/protect.conf
+pget(){ local v; v=$(grep -m1 "^$1=" "$PROT_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+cmd_protect_settings(){
+  local ssh sshf panf authf win b1 b2 b3 re='^[0-9]{1,4}$' rd='^([0-9]{1,4}[mhd]|perm)$'
+  ssh=$(pget SSH 1); sshf=$(pget SSH_FAILS 5); panf=$(pget PANEL_FAILS 10); authf=$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")
+  win=$(pget WINDOW 10); b1=$(pget BAN1 1h); b2=$(pget BAN2 24h); b3=$(pget BAN3 7d)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ssh) case "${2:-}" in on) ssh=1 ;; off) ssh=0 ;; *) die "--ssh on|off" ;; esac; shift 2 || shift ;;
+      --ssh-fails) sshf="${2:-}"; shift 2 || shift ;;
+      --panel-fails) panf="${2:-}"; shift 2 || shift ;;
+      --auth-fails) authf="${2:-}"; shift 2 || shift ;;
+      --window) win="${2:-}"; shift 2 || shift ;;
+      --ban1) b1="${2:-}"; shift 2 || shift ;;
+      --ban2) b2="${2:-}"; shift 2 || shift ;;
+      --ban3) b3="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  for v in "$sshf" "$panf" "$authf"; do [[ "$v" =~ $re ]] && [ "$v" -ge 3 ] && [ "$v" -le 100 ] || die "Número de falhas entre 3 e 100."; done
+  [[ "$win" =~ $re ]] && [ "$win" -ge 1 ] && [ "$win" -le 1440 ] || die "Janela entre 1 e 1440 minutos."
+  for v in "$b1" "$b2" "$b3"; do [[ "$v" =~ $rd ]] || die "Duração inválida: $v (ex.: 15m, 1h, 24h, 7d ou perm)."; done
+  printf 'SSH=%s\nSSH_FAILS=%s\nPANEL_FAILS=%s\nAUTH_FAILS=%s\nWINDOW=%s\nBAN1=%s\nBAN2=%s\nBAN3=%s\n' "$ssh" "$sshf" "$panf" "$authf" "$win" "$b1" "$b2" "$b3" > "$PROT_CONF"
+  chmod 600 "$PROT_CONF"
+  mail_on && mail_set AUTH_FAILS "$authf"
+  echo "Proteção: SSH $([ "$ssh" = 1 ] && echo "ativa ($sshf falhas)" || echo desligada), painel $panf falhas, email/FTP $authf falhas, em $win min; bloqueio $b1, reincidentes $b2, a partir da 3.ª vez $b3."
   return 0
 }
 
@@ -10745,6 +10899,9 @@ write_state(){
     --argjson mail "$j_mail" \
     --argjson usnaps "$j_snaps" \
     --argjson fti "$(ftp_installed && echo true || echo false)" --arg ftpl "$(ftp_get PLAIN 0)" --arg ftip "$(ftp_get PASV_IP)" \
+    --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
+    --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
+    --arg prr "$(awk -v s=$(( EPOCHSECONDS - 86400 )) '$1 >= s' "$DATA/stats/ban-history.txt" 2>/dev/null | wc -l)" \
     --arg pss "$(pma_get SESSION 120)" --arg pse "$(pma_get EXEC 600)" --arg psu "$(pma_get UPLOAD 512)" \
     --arg spa "$(srv_get PORTS_ACCESS all)" --arg spal "$(srv_get PANEL_ALLOW '')" \
     --arg smode "$(srv_get MODE lan)" --arg semail "$(srv_get EMAIL '')" --arg spd "$(srv_get PANEL_DOMAIN '')" --arg spssl "$(srv_get PANEL_SSL le)" --arg spexp "$( [ -n "$(srv_get PANEL_DOMAIN '')" ] && cert_expiry mp-painel)" \
@@ -10757,6 +10914,7 @@ write_state(){
       updates:{snaps:$usnaps},
       ftp:{installed:$fti, plain:($ftpl == "1"), pasv_ip:$ftip},
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
+      protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
               load:$load, cpus:($cpus|tonumber), panel_port:($pport|tonumber), panel_php:$pphp}}' > "$STATE.tmp" || { rm -f "$STATE.tmp"; return 1; }
@@ -10789,7 +10947,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -10807,7 +10965,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.3.0 (mpanel)
+IDDigital Hosting — CLI v2.4.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -10840,6 +10998,10 @@ phpMyAdmin (https://IP:PORTA-DO-PAINEL/phpmyadmin/, requer sessão no painel)
 Serviços
   service <nginx|mariadb|php-X.Y> <reload|restart|start|stop>
   stats                 utilização atual do servidor e de cada site
+
+Proteção contra força bruta (SSH, painel, email, webmail, FTP)
+  protect-settings [--ssh on|off] [--ssh-fails N] [--panel-fails N] [--auth-fails N] [--window MIN]
+                   [--ban1 1h] [--ban2 24h] [--ban3 7d|perm]   bloqueio; reincidentes em 30 dias: 2.ª e 3.ª+ vez
 
 FTP / SFTP (uma conta por site; a mesma password nos dois)
   site-ftp <site> [--password P]       ativa ou muda a password (FTPS: utilizador <site>; SFTP: mp_<site>)
@@ -10989,6 +11151,8 @@ dispatch(){
     site-ftp)          cmd_site_ftp "$@" ;;
     ftp-settings)      cmd_ftp_settings "$@" ;;
     pma-settings)      cmd_pma_settings "$@" ;;
+    protect-settings)  cmd_protect_settings "$@" ;;
+    conf-lock)         conf_lock ;;
     update-check)      cmd_update_check ;;
     update-start)      cmd_update_start "$@" ;;
     update-rollback)   cmd_update_rollback "$@" ;;
@@ -11080,7 +11244,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.3.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.4.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -11304,28 +11468,68 @@ mail_spool_kick(){
   compgen -G "/var/spool/mp-mail/*/new/*.eml" >/dev/null 2>&1 || return 0
   ( setsid /usr/local/sbin/mpanel mail-spool >/dev/null 2>&1 & )
 }
-mail_authfail(){
-  mail_enabled || [ -s /etc/pure-ftpd/pureftpd.passwd ] || return 0
-  local lim f=$DIR/mail-authfail.txt now=$EPOCHSECONDS
-  lim=$(grep -m1 '^AUTH_FAILS=' /etc/minipainel/mail.conf | cut -d= -f2); lim=${lim:-10}
-  touch "$f"
-  journalctl -q --since "-65s" -o cat -t sshd -t pure-ftpd 2>/dev/null \
-    | sed -nE 's/.*Failed password for (invalid user )?mp_[a-z0-9-]+ from ([0-9a-fA-F:.]+) .*/\2/p; s/^\(\?@([0-9a-fA-F:.]+)\) \[WARNING\] Authentication failed.*/\1/p' \
-    | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
-  journalctl -q --since "-65s" -o cat -t postfix/submission/smtpd -t postfix/smtps/smtpd -t postfix/smtpd -t dovecot 2>/dev/null \
-    | grep -E 'SASL [A-Z0-9-]+ authentication failed|auth failed' \
-    | sed -nE 's/.*rip=([0-9a-fA-F:.]+).*/\1/p; s/.*SASL [A-Z0-9-]+ authentication failed.*/&/; s/^[^[]*\[([0-9a-fA-F:.]+)\]: SASL.*/\1/p' \
-    | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
-  local wl=/var/lib/minipainel-webmail/logs/userlogins.log wp=$DIR/webmail-log.pos sz p
-  if [ -f "$wl" ]; then
-    sz=$(stat -c %s "$wl"); p=$(cat "$wp" 2>/dev/null || echo 0); [ "$sz" -lt "$p" ] && p=0
-    tail -c +$(( p + 1 )) "$wl" | grep -a 'Failed login' | sed -nE 's/.* from ([0-9a-fA-F:.]+).*/\1/p' | grep -E '^[0-9a-fA-F:.]+$' | while read -r ip; do echo "$now $ip"; done >> "$f"
-    echo "$sz" > "$wp"
+# ---------- proteção contra força bruta (SSH, painel, email, webmail, FTP) ----------
+PROT_CONF=/etc/minipainel/protect.conf
+pget(){ local v; v=$(grep -m1 "^$1=" "$PROT_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+jlog(){ # linhas do journal do último minuto para os identificadores dados (MP_TEST_JOURNAL só nos testes)
+  if [ -n "${MP_TEST_JOURNAL:-}" ]; then cat "$MP_TEST_JOURNAL"; return 0; fi
+  local a=() t; for t in "$@"; do a+=(-t "$t"); done
+  journalctl -q --since "-65s" -o cat "${a[@]}" 2>/dev/null
+}
+auth_guard(){
+  local f=$DIR/authfail.txt hist=$DIR/ban-history.txt now=$EPOCHSECONDS ipre='^[0-9a-fA-F:.]+$'
+  touch "$f" "$hist"
+  # SSH (todas as contas: root, utilizadores inexistentes, chaves recusadas, SFTP dos sites)
+  if [ "$(pget SSH 1)" = 1 ]; then
+    jlog sshd sshd-session | sed -nE \
+      -e 's/.*Failed (password|publickey|keyboard-interactive\/pam|none) for (invalid user )?[^ ]* from ([0-9a-fA-F:.]+) port.*/\3/p' \
+      -e 's/.*Invalid user [^ ]* from ([0-9a-fA-F:.]+) port.*/\1/p' \
+      -e 's/.*maximum authentication attempts exceeded for (invalid user )?[^ ]* from ([0-9a-fA-F:.]+) port.*/\2/p' \
+      -e 's/.*Connection closed by (invalid|authenticating) user [^ ]* ([0-9a-fA-F:.]+) port [0-9]+ \[preauth\].*/\2/p' \
+      | grep -E "$ipre" | while read -r ip; do echo "$now $ip ssh"; done >> "$f"
   fi
-  awk -v s=$(( now - 600 )) '$1 >= s' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
-  awk '{ c[$2]++ } END { for (i in c) print c[i], i }' "$f" | while read -r n ip; do
+  # FTP (Pure-FTPd)
+  if [ -s /etc/pure-ftpd/pureftpd.passwd ]; then
+    jlog pure-ftpd | sed -nE 's/^\(\?@([0-9a-fA-F:.]+)\) \[WARNING\] Authentication failed.*/\1/p' \
+      | grep -E "$ipre" | while read -r ip; do echo "$now $ip auth"; done >> "$f"
+  fi
+  # Email (SMTP, IMAP, POP3) e webmail
+  if grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null || [ -f /etc/minipainel/mail-enabled ]; then
+    jlog postfix/submission/smtpd postfix/smtps/smtpd postfix/smtpd dovecot \
+      | grep -E 'SASL [A-Z0-9-]+ authentication failed|auth failed' \
+      | sed -nE 's/.*rip=([0-9a-fA-F:.]+).*/\1/p; s/^[^[]*\[([0-9a-fA-F:.]+)\]: SASL.*/\1/p' \
+      | grep -E "$ipre" | while read -r ip; do echo "$now $ip auth"; done >> "$f"
+    local wl=/var/lib/minipainel-webmail/logs/userlogins.log wp=$DIR/webmail-log.pos sz p
+    if [ -f "$wl" ]; then
+      sz=$(stat -c %s "$wl"); p=$(cat "$wp" 2>/dev/null || echo 0); [ "$sz" -lt "$p" ] && p=0
+      tail -c +$(( p + 1 )) "$wl" | grep -a 'Failed login' | sed -nE 's/.* from ([0-9a-fA-F:.]+).*/\1/p' \
+        | grep -E "$ipre" | while read -r ip; do echo "$now $ip auth"; done >> "$f"
+      echo "$sz" > "$wp"
+    fi
+  fi
+  # Painel (password ou código 2FA errados; lidos do registo de auditoria)
+  local al=/var/lib/minipainel/logs/audit.log ap=$DIR/audit-log.pos
+  if [ -f "$al" ]; then
+    sz=$(stat -c %s "$al"); p=$(cat "$ap" 2>/dev/null || echo 0); [ "$sz" -lt "$p" ] && p=0
+    tail -c +$(( p + 1 )) "$al" | jq -r 'select(.ok == false and ((.action // "") | test("^(Falha de início de sessão|Código de verificação em dois passos errado)"))) | .ip' 2>/dev/null \
+      | grep -E "$ipre" | while read -r ip; do echo "$now $ip panel"; done >> "$f"
+    echo "$sz" > "$ap"
+  fi
+  # contagem dentro da janela e bloqueio (mais longo para quem reincide em 30 dias)
+  local win sshl panl authl
+  win=$(( $(pget WINDOW 10) * 60 )); sshl=$(pget SSH_FAILS 5); panl=$(pget PANEL_FAILS 10); authl=$(pget AUTH_FAILS 10)
+  awk -v s=$(( now - win )) '$1 >= s' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  awk -v s=$(( now - 2592000 )) '$1 >= s' "$hist" > "$hist.tmp" && mv -f "$hist.tmp" "$hist"
+  awk '{ c[$2" "$3]++ } END { for (k in c) print c[k], k }' "$f" | while read -r n ip svc; do
+    local lim=$authl name="email/FTP"
+    case "$svc" in ssh) lim=$sshl; name="SSH" ;; panel) lim=$panl; name="painel" ;; esac
     [ "$n" -ge "$lim" ] || continue
-    ( setsid /usr/local/sbin/mpanel block "$ip" --for 1h --by auto --reason "Força bruta no email ($n falhas em 10 min)" >/dev/null 2>&1 & )
+    local prev dur
+    prev=$(awk -v ip="$ip" '$2 == ip' "$hist" | wc -l)
+    if [ "$prev" -ge 2 ]; then dur=$(pget BAN3 7d); elif [ "$prev" -eq 1 ]; then dur=$(pget BAN2 24h); else dur=$(pget BAN1 1h); fi
+    if /usr/local/sbin/mpanel block "$ip" --for "$dur" --by auto --reason "Força bruta: $name ($n falhas)$([ "$prev" -gt 0 ] && echo ", reincidência $(( prev + 1 ))")" >/dev/null 2>&1; then
+      echo "$now $ip" >> "$hist"
+    fi
     awk -v ip="$ip" '$2 != ip' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
   done
 }
@@ -11390,7 +11594,7 @@ while :; do
     read_fw_conf
     fw_selfheal
     update_crons
-    mail_authfail
+    auth_guard
     h=$(( EPOCHSECONDS / 3600 ))
     if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
     write_sites_json
@@ -11428,7 +11632,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.3.0
+#  mp-sendmail — IDDigital Hosting v2.4.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -11438,7 +11642,7 @@ site=${1:-}; [ $# -gt 0 ] && shift
 re='^[a-z][a-z0-9-]{0,23}$'
 [[ "$site" =~ $re ]] || exit 75
 [ "$(id -un)" = "mp_$site" ] || exit 77
-grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null || { echo "O envio de email não está ativo neste servidor." >&2; exit 69; }
+[ -f /etc/minipainel/mail-enabled ] || { echo "O envio de email não está ativo neste servidor." >&2; exit 69; }
 from=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -11466,7 +11670,7 @@ fi
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.3.0
+#  mpanel-cron — IDDigital Hosting v2.4.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -11635,6 +11839,8 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel bk-init >/dev/null || warn "Não foi possível configurar os backups (mpanel bk-init)."
 /usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
 /usr/local/sbin/mpanel pma-settings --apply >/dev/null 2>&1 || true
+/usr/local/sbin/mpanel conf-lock >/dev/null 2>&1 || true
+[ -f /etc/minipainel/protect.conf ] || /usr/local/sbin/mpanel protect-settings >/dev/null 2>&1 || true
 command -v pure-pw >/dev/null 2>&1 && { /usr/local/sbin/mpanel ftp-settings >/dev/null 2>&1 || warn "Não foi possível reaplicar a configuração do FTP."; }
 
 # --- migrações numeradas: cada passo corre uma vez, por ordem, só se a versão anterior for mais antiga ---
