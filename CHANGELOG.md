@@ -1,0 +1,37 @@
+# Registo de alterações
+
+## 2.13.0
+- DNS refeito como no Cloudflare: editar registos (também os do painel), modelos de email (este servidor, Google Workspace, Microsoft 365), importar e exportar zonas BIND, verificar propagação, repor predefinidos, TTL "Auto".
+- Separador Servidor DNS: estado, verificação de saúde (nameservers na Internet, UDP/TCP, transferência de zona, resolver aberto), nameservers e valores do SOA.
+- Correção: o gerador de zonas deslocava colunas com TTL automático (as zonas eram recusadas, nunca ativadas).
+
+## 2.12.4
+- Remove as zonas DNS falsas (bin, boot, dev…) criadas por um erro antigo; a sincronização nunca cria zonas. Página DNS mais clara.
+
+## 2.12.3
+- Sentinela: resumo "O que precisa de atenção" e separadores por grupo. Correções: zonas fantasma no Sentinela, teste dos backups.
+- Layout: tabelas sem texto fora dos cartões em todas as páginas (verificado a 1440, 1280 e 1100 px).
+
+## 2.12.2
+- Manual do utilizador dentro do painel (índice, pesquisa, descarregar .md).
+
+## 2.12.1
+- Páginas de Sistema passam para o menu "Sistema" no canto superior direito.
+
+## 2.12.0
+- Redis por site (isolado), cache no browser, WebP automático e conversão, Brotli, TCP BBR.
+
+## 2.11.2
+- Correção: tarefas do cron sem `PATH` completo (Sentinela e IPs de confiança não encontravam `nft`); terminal preso em "A iniciar".
+
+## 2.11.1
+- Atualizações a partir de repositório privado (token só de leitura); `version.json` e assinatura opcionais.
+
+## 2.11.0
+- Cache de página (FastCGI), processos PHP "sempre prontos", OPcache, MariaDB afinado, consultas lentas, páginas e scripts PHP lentos.
+
+## 2.10.0
+- Sentinela: testa todos os serviços a cada minuto, repara e alerta.
+
+## 2.9.0 e anteriores
+- Processos, alertas por SMS/email, países e limite de ligações, terminal no browser, DNS autoritativo, logs, proteção contra força bruta, PHP 7.0–8.5, FTP/SFTP, email completo, backups, painel e CLI.

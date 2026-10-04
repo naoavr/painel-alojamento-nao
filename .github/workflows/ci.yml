@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  verificar:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ferramentas
+        run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck php-cli
+      - name: install.sh corresponde a src/ (corre "bash build.sh" antes de enviar)
+        run: bash build.sh /tmp/install.sh && cmp install.sh /tmp/install.sh
+      - name: Sintaxe bash
+        run: |
+          cat src/cli/*.sh > /tmp/mpanel
+          bash -n install.sh
+          bash -n /tmp/mpanel
+          for f in src/stats/*.sh src/helpers/*.sh; do bash -n "$f"; done
+      - name: Sintaxe PHP
+        run: for f in src/panel/*.php src/helpers/*.php; do php -l "$f"; done
+      - name: ShellCheck
+        run: shellcheck -S warning -e SC1091,SC2034,SC2194 install.sh /tmp/mpanel src/stats/*.sh src/helpers/*.sh

@@ -1,0 +1,2 @@
+# Fins de linha sempre LF (o install.sh tem de ser igual byte a byte ao gerado)
+* text=auto eol=lf
