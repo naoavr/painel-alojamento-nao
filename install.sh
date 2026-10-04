@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.7.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.8.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.7.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.8.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.7.0"
+MP_VERSION="2.8.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -544,7 +544,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.7.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.8.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -552,7 +552,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.7.0';
+const MP_VERSION = '2.8.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -900,6 +900,7 @@ const ICONS = [
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
     'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'bell'   => '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
     'term'   => '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
     'logs'   => '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
     'dns'    => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/><circle cx="12" cy="12" r="2"/>',
@@ -1530,6 +1531,7 @@ $pages = [
     'auditoria'=> ['Auditoria', 'file'],
     'atualizacoes' => ['Atualizações', 'download'],
     'terminal' => ['Terminal', 'term'],
+    'alertas'  => ['Alertas', 'bell'],
     'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
@@ -1976,6 +1978,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'mail_av':
             job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
             $back = ['t' => 'antispam'];
+            break;
+
+        case 'alerts_settings':
+            $args = ['--sms', post('sms') === 'on' ? 'on' : 'off', '--email', post('email') === 'on' ? 'on' : 'off'];
+            $tel = str_replace(' ', '', post('sms_to'));
+            if ($tel !== '') { if (!preg_match('/^\+?[0-9]{9,15}(,\+?[0-9]{9,15})*$/', $tel)) { $bad('Número inválido (ex.: +351912345678).'); break; } array_push($args, '--sms-to', $tel); }
+            if (post('sms_id') !== '') { if (!preg_match('/^[A-Za-z0-9_-]{4,80}$/', post('sms_id'))) { $bad('Token ID inválido.'); break; } array_push($args, '--sms-id', post('sms_id')); }
+            if (post_raw('sms_secret') !== '') { if (!preg_match('/^[A-Za-z0-9_.+\/=-]{4,200}$/', post_raw('sms_secret'))) { $bad('Token secreto inválido.'); break; } array_push($args, '--sms-secret', post_raw('sms_secret')); }
+            if (post('email_to') !== '') { if (!filter_var(post('email_to'), FILTER_VALIDATE_EMAIL)) { $bad('Email inválido.'); break; } array_push($args, '--email-to', post('email_to')); }
+            foreach (['cpu' => [10, 100], 'cpu_min' => [1, 120], 'ram' => [10, 100], 'disk' => [10, 100], 'conn' => [10, 100], 'mail_pct' => [5, 500], 'mail_min' => [1, 999999]] as $k => $lim) {
+                $v = post($k); if (!ctype_digit($v) || (int)$v < $lim[0] || (int)$v > $lim[1]) { $bad('Valor fora dos limites em ' . $k . ' (' . $lim[0] . ' a ' . $lim[1] . ').'); break 2; }
+                array_push($args, '--' . str_replace('_', '-', $k), $v);
+            }
+            if (post('sms') === 'on' && $tel === '' && empty($state['alerts']['sms_to'])) { $bad('Indica o número para os SMS.'); break; }
+            job_submit('alerts-settings', $args, 'Configuração dos alertas');
+            break;
+        case 'alerts_test':
+            job_submit('alerts-test', [], 'Teste de alertas');
             break;
 
         case 'geo_block':
@@ -2557,12 +2577,13 @@ $titles = [
     'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, proteção contra força bruta, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
+    'alertas'  => 'Alertas por SMS e email: CPU, RAM, disco, ligações e volume de email.',
     'terminal' => 'Terminal do servidor (root) no browser. Exige a verificação em dois passos; as sessões ficam gravadas.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
     'dns'      => 'DNS autoritativo: zonas dos domínios alojados neste servidor.',
     'logs'     => 'Acessos e erros de cada site: servidor web, PHP e tarefas agendadas.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'alertas', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
 $section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -4249,6 +4270,107 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </table>
         <?php endif; ?>
       </section>
+
+<?php elseif ($page === 'alertas'):
+    $al = is_array($state['alerts'] ?? null) ? $state['alerts'] : [];
+    $atab = in_array(qget('t'), ['config', 'historico', 'email'], true) ? qget('t') : 'config';
+    $tza = tz_off(live_stats());
+?>
+      <nav class="tabs" aria-label="Secções">
+        <?php foreach (['config' => 'Configuração', 'historico' => 'Histórico', 'email' => 'Volume de email'] as $tk => $tl): ?>
+          <a class="chip<?= $atab === $tk ? ' prim' : '' ?>" href="?p=alertas&amp;t=<?= $tk ?>"><?= $tl ?></a>
+        <?php endforeach; ?>
+      </nav>
+  <?php if ($atab === 'config'): ?>
+      <form method="post">
+      <?= act_fields('alerts_settings') ?>
+      <div class="grid2e" style="align-items:stretch">
+        <section class="card">
+          <div class="card-h"><div><h2>SMS (bulksms.com)</h2><p>Credenciais em bulksms.com → Settings → API Tokens. Um alerta por problema, um aviso quando volta ao normal e um lembrete a cada 6 horas se continuar.</p></div><span class="pill <?= !empty($al['sms_on']) ? 'p-ok' : 'p-off' ?>"><?= !empty($al['sms_on']) ? 'Ativo' : 'Desligado' ?></span></div>
+          <div class="card-b">
+            <div class="fgrid">
+              <label class="fld">Estado<select class="in" name="sms"><option value="on"<?= !empty($al['sms_on']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($al['sms_on']) ? ' selected' : '' ?>>Desligado</option></select></label>
+              <label class="fld">Números<input class="in mono" name="sms_to" value="<?= h((string)($al['sms_to'] ?? '')) ?>" placeholder="+351912345678"><small>Formato internacional; vários separados por vírgulas</small></label>
+              <label class="fld">Token ID<input class="in mono" name="sms_id" value="<?= h((string)($al['sms_id'] ?? '')) ?>" autocomplete="off"></label>
+              <label class="fld">Token secreto<input class="in mono" type="password" name="sms_secret" autocomplete="new-password" placeholder="<?= !empty($al['sms_secret']) ? '•••••••• (guardado)' : '' ?>"><small><?= !empty($al['sms_secret']) ? 'Vazio = manter o atual' : 'Fica guardado só no servidor' ?></small></label>
+            </div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-h"><div><h2>Email</h2><p>Enviado pelo servidor de email deste servidor<?= empty($al['mail_on']) ? ' (o email não está ativo: ativa-o na página Email para usar este canal)' : '' ?>.</p></div><span class="pill <?= !empty($al['email_on']) && !empty($al['mail_on']) ? 'p-ok' : 'p-off' ?>"><?= !empty($al['email_on']) && !empty($al['mail_on']) ? 'Ativo' : 'Desligado' ?></span></div>
+          <div class="card-b">
+            <div class="fgrid">
+              <label class="fld">Estado<select class="in" name="email"><option value="on"<?= !empty($al['email_on']) ? ' selected' : '' ?>>Ativo</option><option value="off"<?= empty($al['email_on']) ? ' selected' : '' ?>>Desligado</option></select></label>
+              <label class="fld">Enviar para<input class="in" type="email" name="email_to" value="<?= h((string)($al['email_to'] ?? '')) ?>" placeholder="alertas@iddigital.pt"></label>
+            </div>
+          </div>
+        </section>
+      </div>
+      <section class="card">
+        <div class="card-h"><div><h2>Limites</h2><p>Quando um limite é ultrapassado é enviado um alerta pelos canais ativos.</p></div></div>
+        <div class="card-b">
+          <div class="fgrid" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+            <label class="fld">CPU (%)<input class="in" name="cpu" inputmode="numeric" value="<?= (int)($al['cpu'] ?? 90) ?>"></label>
+            <label class="fld">Durante (minutos)<input class="in" name="cpu_min" inputmode="numeric" value="<?= (int)($al['cpu_min'] ?? 5) ?>"></label>
+            <label class="fld">RAM (%, durante 5 min)<input class="in" name="ram" inputmode="numeric" value="<?= (int)($al['ram'] ?? 90) ?>"></label>
+            <label class="fld">Disco (%)<input class="in" name="disk" inputmode="numeric" value="<?= (int)($al['disk'] ?? 90) ?>"></label>
+            <label class="fld">Ligações (% da capacidade)<input class="in" name="conn" inputmode="numeric" value="<?= (int)($al['conn'] ?? 70) ?>"></label>
+            <label class="fld">Email acima do normal (%)<input class="in" name="mail_pct" inputmode="numeric" value="<?= (int)($al['mail_pct'] ?? 20) ?>"></label>
+            <label class="fld">Mínimo (mensagens/hora)<input class="in" name="mail_min" inputmode="numeric" value="<?= (int)($al['mail_min'] ?? 50) ?>"><small>Evita alertas com volumes pequenos</small></label>
+            <div class="fld" style="justify-content:flex-end"><span class="mu">O modo de proteção de ligações envia sempre alerta ao ativar e desativar.</span></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </div>
+      </section>
+      </form>
+      <form method="post" class="card" style="padding:18px 24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap"><?= act_fields('alerts_test') ?><span class="grow mu">Depois de guardar, confirma que as mensagens chegam.</span><button class="btn sec" type="submit">Enviar mensagem de teste</button></form>
+
+  <?php elseif ($atab === 'historico'):
+      $hist = [];
+      foreach (array_reverse(log_tail(MP_STATS . '/alerts.log', 2000)) as $ln) { $j = json_decode($ln, true); if (is_array($j)) $hist[] = $j; }
+      [$hl, $hpg, $hpages, $htot] = paginate($hist, 50);
+      $chan = function (string $v): string { return $v === 'ok' ? '<span class="pill p-ok">Enviado</span>' : ($v === 'falhou' ? '<span class="pill p-err">Falhou</span>' : '<span class="mu">—</span>'); };
+  ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Histórico de alertas</h2><p>Últimos 2000 alertas.</p></div></div>
+        <?php if (!$hist): ?><div class="empty">Ainda não houve alertas.</div><?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Data</th><th>Alerta</th><th>SMS</th><th>Email</th></tr></thead>
+          <tbody><?php foreach ($hl as $a): ?>
+            <tr><td class="first mono" data-label="Data"><?= h(gmdate('d/m/Y H:i', (int)$a['ts'] + $tza)) ?></td>
+              <td data-label="Alerta"><span class="pill <?= ($a['level'] ?? '') === 'crit' ? 'p-err' : (($a['level'] ?? '') === 'ok' ? 'p-ok' : 'p-warn') ?>" style="margin-right:6px"><?= ($a['level'] ?? '') === 'crit' ? 'Alerta' : (($a['level'] ?? '') === 'ok' ? 'Resolvido' : 'Aviso') ?></span><?= h((string)($a['msg'] ?? '')) ?></td>
+              <td data-label="SMS"><?= $chan((string)($a['sms'] ?? '')) ?></td><td data-label="Email"><?= $chan((string)($a['email'] ?? '')) ?></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <div class="card-f"><?= pager($hpg, $hpages, $htot, 'pg', 'alertas') ?></div>
+        <?php endif; ?>
+      </section>
+
+  <?php else:
+      $rows = [];
+      foreach (log_tail(MP_STATS . '/mail-vol.csv', 1500) as $ln) { $p = explode(',', $ln); if (count($p) === 3 && ctype_digit($p[0])) $rows[] = [(int)$p[0], (int)$p[1], (int)$p[2]]; }
+      $first = (int)($al['learn_start'] ?? 0); $days = (int)($al['learn_days'] ?? 0); $ready = $first > 0 && $days >= 30;
+      $norm = [];
+      foreach ($rows as $r) { if ($r[0] < time() - 30 * 86400) continue; $hd = intdiv($r[0] % 86400, 3600); $norm[$hd][0] = ($norm[$hd][0] ?? 0) + $r[1]; $norm[$hd][1] = ($norm[$hd][1] ?? 0) + $r[2]; $norm[$hd][2] = ($norm[$hd][2] ?? 0) + 1; }
+      $last = array_slice(array_reverse($rows), 0, 24);
+  ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Aprendizagem do volume de email</h2><p>Durante 30 dias o servidor só regista o email que entra e sai, hora a hora, para saber o que é normal. Depois disso, cada hora acima do normal em mais de <?= (int)($al['mail_pct'] ?? 20) ?>% (e com pelo menos <?= (int)($al['mail_min'] ?? 50) ?> mensagens a mais) dispara um alerta por SMS e email.</p></div>
+          <span class="pill <?= $ready ? 'p-ok' : 'p-warn' ?>"><?= $ready ? 'A vigiar' : ($first ? 'A aprender: dia ' . min(30, $days + 1) . ' de 30' : 'À espera do primeiro registo') ?></span></div>
+        <?php if (!$ready): ?><div class="card-b"><div class="cbar" style="height:10px"><span style="width:<?= (int)min(100, $days * 100 / 30) ?>%"></span></div><p class="mu" style="margin:8px 0 0"><?= empty($al['mail_on']) ? 'O email deste servidor não está ativo; o registo começa quando for ativado.' : 'Faltam ' . max(0, 30 - $days) . ' dias para os alertas de volume ficarem ativos.' ?></p></div><?php endif; ?>
+        <?php if ($last): ?>
+        <table class="list cards">
+          <thead><tr><th>Hora</th><th class="r">Recebidos</th><th class="r">Normal</th><th class="r">Enviados</th><th class="r">Normal</th></tr></thead>
+          <tbody><?php foreach ($last as $r): $hd = intdiv($r[0] % 86400, 3600); $n = $norm[$hd] ?? [0, 0, 1]; $ni = $n[0] / max(1, $n[2]); $no = $n[1] / max(1, $n[2]);
+            $hiI = $ready && $r[1] > $ni * (1 + ($al['mail_pct'] ?? 20) / 100) && $r[1] - $ni >= ($al['mail_min'] ?? 50); $hiO = $ready && $r[2] > $no * (1 + ($al['mail_pct'] ?? 20) / 100) && $r[2] - $no >= ($al['mail_min'] ?? 50); ?>
+            <tr><td class="first mono" data-label="Hora"><?= h(gmdate('d/m H:00', $r[0] + $tza)) ?></td>
+              <td class="r" data-label="Recebidos"><b style="<?= $hiI ? 'color:var(--err)' : '' ?>"><?= $r[1] ?></b></td><td class="r mu" data-label="Normal"><?= $ready ? (int)round($ni) : '—' ?></td>
+              <td class="r" data-label="Enviados"><b style="<?= $hiO ? 'color:var(--err)' : '' ?>"><?= $r[2] ?></b></td><td class="r mu" data-label="Normal"><?= $ready ? (int)round($no) : '—' ?></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+  <?php endif; ?>
 
 <?php elseif ($page === 'auditoria'):
     $alog = [];
@@ -7495,7 +7617,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.7.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.8.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -7935,11 +8057,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.7.0
+#  mpanel — IDDigital Hosting CLI v2.8.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.7.0"
+MP_VERSION="2.8.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -11904,6 +12026,85 @@ geo_state_json(){
        ovl:{on:($on == "1"), max:$mx, capacity:($cap|tonumber), start:($st|tonumber), stop:($sp|tonumber)}}'
 }
 
+# ============================ ALERTAS (SMS bulksms.com e email) ==============
+ALERT_CONF=/etc/minipainel/alerts.conf
+ALERT_LOG=$DATA/stats/alerts.log
+aget(){ local v; v=$(grep -m1 "^$1=" "$ALERT_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
+aset(){ touch "$ALERT_CONF"; chmod 600 "$ALERT_CONF"; if grep -q "^$1=" "$ALERT_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$ALERT_CONF"; else echo "$1=$2" >> "$ALERT_CONF"; fi; }
+sms_send(){ # texto -> 0 enviado
+  local id sec to body tmp code
+  id=$(aget SMS_ID); sec=$(aget SMS_SECRET); to=$(aget SMS_TO)
+  [ -n "$id" ] && [ -n "$sec" ] && [ -n "$to" ] || return 2
+  body=$(printf '%s' "$1" | cut -c1-450)
+  tmp=$(mktemp); chmod 600 "$tmp"
+  jq -n --arg t "$to" --arg b "$body" '{to: ($t | split(",") | map(gsub("\\s"; ""))), body: $b, encoding: "UNICODE"}' > "$tmp"
+  # credenciais lidas de um descritor (nunca na linha de comandos)
+  code=$(curl -sS -m 25 -o /dev/null -w '%{http_code}' -K <(printf 'user = "%s:%s"\n' "$id" "$sec") \
+        -H 'Content-Type: application/json' --data-binary @"$tmp" "${MP_BULKSMS_URL:-https://api.bulksms.com/v1/messages}" 2>/dev/null)
+  rm -f "$tmp"
+  [ "$code" = 201 ] || [ "$code" = 200 ]
+}
+alert_mail_send(){ # assunto texto -> 0 enviado
+  local to from; to=$(aget EMAIL_TO)
+  [ -n "$to" ] && mail_on || return 2
+  from="alertas@$(mail_get HOST)"
+  { printf 'From: IDDigital Hosting <%s>\nTo: %s\nSubject: =?UTF-8?B?%s?=\nMIME-Version: 1.0\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\nX-MP-Alert: 1\n\n' \
+      "$from" "$to" "$(printf '%s' "$1" | base64 -w0)"
+    printf '%s\n\n-- \nServidor %s (%s)\n' "$2" "$(hostname -f 2>/dev/null || hostname)" "$(date '+%d/%m/%Y %H:%M')"; } | /usr/sbin/sendmail -t -i -f "$from"
+}
+cmd_alert_send(){ # "texto" [--level crit|warn|ok] [--key chave]
+  local msg="${1:-}" lvl=warn key=manual s="off" e="off" host
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do case "$1" in --level) lvl="${2:-warn}"; shift 2 || shift ;; --key) key="${2:-manual}"; shift 2 || shift ;; *) shift ;; esac; done
+  [ -n "$msg" ] || die "Indica o texto do alerta."
+  host=$(hostname -s)
+  if [ "$(aget SMS_ON 0)" = 1 ]; then if sms_send "[$host] $msg"; then s=ok; else s=falhou; fi; fi
+  if [ "$(aget EMAIL_ON 0)" = 1 ]; then if alert_mail_send "[$host] $(printf '%s' "$msg" | cut -c1-80)" "$msg"; then e=ok; else e=falhou; fi; fi
+  install -d -o root -g "$PANEL_SYSUSER" -m 750 "$DATA/stats"
+  jq -cn --arg m "$msg" --arg l "$lvl" --arg k "$key" --arg s "$s" --arg e "$e" --argjson t "$EPOCHSECONDS" '{ts:$t, key:$k, level:$l, msg:$m, sms:$s, email:$e}' >> "$ALERT_LOG"
+  chown root:"$PANEL_SYSUSER" "$ALERT_LOG"; chmod 640 "$ALERT_LOG"
+  tail -n 2000 "$ALERT_LOG" > "$ALERT_LOG.tmp" && mv -f "$ALERT_LOG.tmp" "$ALERT_LOG"; chown root:"$PANEL_SYSUSER" "$ALERT_LOG"; chmod 640 "$ALERT_LOG"
+  echo "Alerta registado (SMS: $s; email: $e)."
+  return 0
+}
+cmd_alerts_settings(){
+  local k v re_n='^[0-9]{1,3}$' re_tel='^\+?[0-9]{9,15}(,\+?[0-9]{9,15})*$'
+  while [ $# -gt 0 ]; do
+    k=$1; v="${2:-}"
+    case "$k" in
+      --sms) case "$v" in on) aset SMS_ON 1 ;; off) aset SMS_ON 0 ;; *) die "--sms on|off" ;; esac ;;
+      --email) case "$v" in on) aset EMAIL_ON 1 ;; off) aset EMAIL_ON 0 ;; *) die "--email on|off" ;; esac ;;
+      --sms-id) [[ "$v" =~ ^[A-Za-z0-9_-]{4,80}$ ]] || die "Token ID inválido."; aset SMS_ID "$v" ;;
+      --sms-secret) [[ "$v" =~ ^[A-Za-z0-9_.+/=-]{4,200}$ ]] || die "Token secreto inválido."; aset SMS_SECRET "$v" ;;
+      --sms-to) v=${v// /}; [[ "$v" =~ $re_tel ]] || die "Número inválido (formato internacional, ex.: +351912345678; vários separados por vírgulas)."; aset SMS_TO "$v" ;;
+      --email-to) [[ "$v" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$ ]] || die "Email inválido."; aset EMAIL_TO "$v" ;;
+      --cpu|--ram|--disk|--conn) [[ "$v" =~ $re_n ]] && [ "$v" -ge 10 ] && [ "$v" -le 100 ] || die "$k: percentagem entre 10 e 100."; aset "$(printf '%s' "${k#--}" | tr a-z A-Z)" "$v" ;;
+      --cpu-min) [[ "$v" =~ $re_n ]] && [ "$v" -ge 1 ] && [ "$v" -le 120 ] || die "Minutos entre 1 e 120."; aset CPU_MIN "$v" ;;
+      --mail-pct) [[ "$v" =~ $re_n ]] && [ "$v" -ge 5 ] && [ "$v" -le 500 ] || die "Percentagem entre 5 e 500."; aset MAIL_PCT "$v" ;;
+      --mail-min) [[ "$v" =~ ^[0-9]{1,6}$ ]] && [ "$v" -ge 1 ] || die "Mínimo inválido."; aset MAIL_MIN "$v" ;;
+      *) die "Opção desconhecida: $k" ;;
+    esac
+    shift 2 || shift
+  done
+  echo "Alertas guardados."; return 0
+}
+cmd_alerts_test(){
+  [ "$(aget SMS_ON 0)" = 1 ] || [ "$(aget EMAIL_ON 0)" = 1 ] || die "Ativa primeiro o SMS ou o email."
+  cmd_alert_send "Teste de alertas do IDDigital Hosting: se recebeste esta mensagem, os alertas estão a funcionar." --level ok --key teste
+}
+alerts_state_json(){
+  local first n=0
+  first=$(head -n1 "$DATA/stats/mail-vol.csv" 2>/dev/null | cut -d, -f1); [[ "$first" =~ ^[0-9]+$ ]] || first=0
+  [ "$first" -gt 0 ] && n=$(( (EPOCHSECONDS - first) / 86400 ))
+  jq -n --arg so "$(aget SMS_ON 0)" --arg sid "$(aget SMS_ID)" --arg ss "$([ -n "$(aget SMS_SECRET)" ] && echo 1 || echo 0)" --arg st "$(aget SMS_TO)" \
+     --arg eo "$(aget EMAIL_ON 0)" --arg et "$(aget EMAIL_TO "$(srv_get EMAIL '')")" --arg mo "$(mail_on && echo 1 || echo 0)" \
+     --arg cpu "$(aget CPU 90)" --arg cm "$(aget CPU_MIN 5)" --arg ram "$(aget RAM 90)" --arg disk "$(aget DISK 90)" --arg conn "$(aget CONN 70)" \
+     --arg mp "$(aget MAIL_PCT 20)" --arg mm "$(aget MAIL_MIN 50)" --arg f "$first" --arg n "$n" \
+     '{sms_on:($so=="1"), sms_id:$sid, sms_secret:($ss=="1"), sms_to:$st, email_on:($eo=="1"), email_to:$et, mail_on:($mo=="1"),
+       cpu:($cpu|tonumber), cpu_min:($cm|tonumber), ram:($ram|tonumber), disk:($disk|tonumber), conn:($conn|tonumber),
+       mail_pct:($mp|tonumber), mail_min:($mm|tonumber), learn_start:($f|tonumber), learn_days:($n|tonumber)}'
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -11975,6 +12176,7 @@ write_state(){
     --argjson fti "$(ftp_installed && echo true || echo false)" --arg ftpl "$(ftp_get PLAIN 0)" --arg ftip "$(ftp_get PASV_IP)" \
     --argjson jdns "$(jv dns "$(dns_state_json 2>/dev/null)" '{"enabled":false}')" --arg ldays "$(logs_days)" \
     --argjson jgeo "$(jv geo "$(geo_state_json 2>/dev/null)" '{}')" \
+    --argjson jal "$(jv alerts "$(alerts_state_json 2>/dev/null)" '{}')" \
     --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
     --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
     --arg prr "$(awk -v s=$(( EPOCHSECONDS - 86400 )) '$1 >= s' "$DATA/stats/ban-history.txt" 2>/dev/null | wc -l)" \
@@ -11990,7 +12192,7 @@ write_state(){
       updates:{snaps:$usnaps},
       ftp:{installed:$fti, plain:($ftpl == "1"), pasv_ip:$ftip},
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
-      dns:$jdns, log_days:($ldays|tonumber), geo:$jgeo,
+      dns:$jdns, log_days:($ldays|tonumber), geo:$jgeo, alerts:$jal,
       protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
@@ -12024,7 +12226,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -12042,7 +12244,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.7.0 (mpanel)
+IDDigital Hosting — CLI v2.8.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -12081,6 +12283,12 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
   dns-zone-add|dns-zone-del <domínio>       zona com registos automáticos (sites, email, nameservers)
   dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
   dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
+
+Alertas (SMS por bulksms.com e email pelo servidor de email deste servidor)
+  alerts-settings [--sms on|off] [--sms-id ID] [--sms-secret S] [--sms-to +351…] [--email on|off] [--email-to x@y]
+                  [--cpu 90] [--cpu-min 5] [--ram 90] [--disk 90] [--conn 70] [--mail-pct 20] [--mail-min 50]
+  alerts-test                          envia uma mensagem de teste
+  alert-send "texto"                   envia um alerta pelos canais ativos
 
 Países e limite de ligações
   geoip-update                         atualiza a base de países (DB-IP Lite, CC BY 4.0; todos os meses sozinha)
@@ -12258,6 +12466,8 @@ dispatch(){
     terminal-start)    cmd_terminal_start "$@" ;;
     terminal-stop)     cmd_terminal_stop ;;
     geoip-update)      cmd_geoip_update ;;
+    alerts-settings)   cmd_alerts_settings "$@" ;;
+    alerts-test)       cmd_alerts_test ;;
     geo-block)         cmd_geo_block "$@" ;;
     overload-settings) cmd_overload_settings "$@" ;;
     trust-sync)        trust_apply; echo "IPs de confiança atualizados na firewall." ;;
@@ -12300,6 +12510,8 @@ esac
 # o backup usa o seu próprio bloqueio, para não impedir as outras operações do painel
 if [ "$cmd" = backup-run ]; then shift; cmd_backup_run "$@"; exit $?; fi
 if [ "$cmd" = mail-spool ]; then cmd_mail_spool; exit $?; fi
+# o envio de alertas só lê a configuração e escreve o histórico: nunca espera por outra operação
+if [ "$cmd" = alert-send ]; then shift; cmd_alert_send "$@"; exit $?; fi
 # as atualizações têm bloqueio próprio: o instalador volta a chamar o mpanel durante a instalação
 if [ "$cmd" = update-run ]; then shift; cmd_update_run "$@"; exit $?; fi
 if [ "$cmd" = os-run ]; then shift; cmd_os_run "$@"; exit $?; fi
@@ -12353,7 +12565,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.7.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.8.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -12694,6 +12906,82 @@ overload_check(){
   put "$OVL_STATE" "{\"active\":$act,\"since\":$since,\"below\":$below,\"total\":$tot,\"capacity\":$cap,\"start\":$st,\"stop\":$sp,\"home\":\"$home\",\"ts\":$now}"
 }
 
+# ---------- alertas (CPU, RAM, disco, ligações, modo de proteção, volume de email) ----------
+al_get(){ local v; v=$(grep -m1 "^$1=" /etc/minipainel/alerts.conf 2>/dev/null | cut -d= -f2-); echo "${v:-$2}"; }
+al_on(){ [ "$(al_get SMS_ON 0)" = 1 ] || [ "$(al_get EMAIL_ON 0)" = 1 ]; }
+al_send(){ # chave nível texto (em segundo plano: o envio nunca atrasa a recolha)
+  ( setsid /usr/local/sbin/mpanel alert-send "$3" --level "$2" --key "$1" >/dev/null 2>&1 < /dev/null & )
+}
+al_cond(){ # chave ativo(0/1) mensagem_disparo mensagem_resolvido
+  local k=$1 on=$2 f=$DIR/alerts-state.json st fir sent now=$EPOCHSECONDS
+  [ -s "$f" ] || echo '{}' > "$f"
+  st=$(jq -c --arg k "$k" '.[$k] // {firing:false, sent:0}' "$f" 2>/dev/null) || st='{"firing":false,"sent":0}'
+  fir=$(jq -r '.firing' <<<"$st"); sent=$(jq -r '.sent' <<<"$st")
+  if [ "$on" = 1 ]; then
+    if [ "$fir" != true ]; then al_send "$k" crit "$3"; fir=true; sent=$now
+    elif [ $(( now - sent )) -ge 21600 ]; then al_send "$k" crit "Continua: $3"; sent=$now; fi   # lembrete a cada 6 h
+  elif [ "$fir" = true ]; then al_send "$k" ok "$4"; fir=false; fi
+  jq --arg k "$k" --argjson fr "$fir" --argjson s "$sent" '.[$k] = {firing:$fr, sent:$s}' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+alerts_tick(){ # médias do último minuto em milésimos: cpu ram disco
+  al_on || return 0
+  local f=$DIR/alerts-run.json cpu=$1 ram=$2 dsk=$3 lc lr lcn n_c n_r n_n tot cap pct ev p sz
+  [ -s "$f" ] || echo '{"c":0,"r":0,"n":0}' > "$f"
+  lc=$(al_get CPU 90); lr=$(al_get RAM 90); lcn=$(al_get CONN 70)
+  n_c=$(jq -r '.c' "$f"); n_r=$(jq -r '.r' "$f"); n_n=$(jq -r '.n' "$f")
+  if [ "$cpu" -ge $(( lc * 10 )) ]; then n_c=$(( n_c + 1 )); elif [ "$cpu" -lt $(( (lc - 10) * 10 )) ]; then n_c=0; fi
+  if [ "$ram" -ge $(( lr * 10 )) ]; then n_r=$(( n_r + 1 )); elif [ "$ram" -lt $(( (lr - 5) * 10 )) ]; then n_r=0; fi
+  tot=$(jq -r '.total // 0' "$DIR/overload.json" 2>/dev/null); cap=$(jq -r '.capacity // 0' "$DIR/overload.json" 2>/dev/null)
+  [[ "$tot" =~ ^[0-9]+$ ]] || tot=0; [[ "$cap" =~ ^[0-9]+$ ]] && [ "$cap" -gt 0 ] || cap=0
+  pct=0; [ "$cap" -gt 0 ] && pct=$(( tot * 100 / cap ))
+  if [ "$cap" -gt 0 ] && [ "$pct" -ge "$lcn" ]; then n_n=$(( n_n + 1 )); elif [ "$pct" -lt $(( lcn - 10 )) ]; then n_n=0; fi
+  printf '{"c":%d,"r":%d,"n":%d}' "$n_c" "$n_r" "$n_n" > "$f"
+  al_cond cpu "$([ "$n_c" -ge "$(al_get CPU_MIN 5)" ] && echo 1 || echo 0)" "CPU acima de ${lc}% há ${n_c} min (agora $(( cpu / 10 ))%)" "CPU normalizado ($(( cpu / 10 ))%)"
+  al_cond ram "$([ "$n_r" -ge 5 ] && echo 1 || echo 0)" "RAM acima de ${lr}% há ${n_r} min (agora $(( ram / 10 ))%)" "RAM normalizada ($(( ram / 10 ))%)"
+  al_cond disk "$([ "$dsk" -ge $(( $(al_get DISK 90) * 10 )) ] && echo 1 || { [ "$dsk" -ge $(( ($(al_get DISK 90) - 5) * 10 )) ] && jq -e '.disk.firing' "$DIR/alerts-state.json" >/dev/null 2>&1 && echo 1 || echo 0; })" \
+    "Disco a $(( dsk / 10 ))% (limite $(al_get DISK 90)%)" "Disco normalizado ($(( dsk / 10 ))%)"
+  al_cond conn "$([ "$n_n" -ge 2 ] && echo 1 || echo 0)" "Ligações a ${pct}% da capacidade ($tot de $cap)" "Ligações normalizadas (${pct}%)"
+  # mudanças do modo de proteção: alerta imediato
+  ev=$DIR/events.log; p=$DIR/events.pos
+  if [ -f "$ev" ]; then
+    sz=$(stat -c %s "$ev"); local op; op=$(cat "$p" 2>/dev/null || echo 0); [ "$sz" -lt "$op" ] && op=0
+    tail -c +$(( op + 1 )) "$ev" | cut -d' ' -f2- | while read -r m; do [ -n "$m" ] && al_send ovl "$([[ "$m" == *desativado* ]] && echo ok || echo crit)" "$m"; done
+    echo "$sz" > "$p"
+  fi
+}
+# volume de email: 30 dias a aprender o normal; depois alerta acima de +MAIL_PCT%
+mail_vol_tick(){
+  grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null || [ -f /etc/minipainel/mail-enabled ] || return 0
+  local vcur=$DIR/mail-vol-cur csv=$DIR/mail-vol.csv h=$(( EPOCHSECONDS / 3600 * 3600 )) ch ci co ni no
+  read -r ch ci co < "$vcur" 2>/dev/null || { ch=$h; ci=0; co=0; }
+  ni=0; no=0
+  if command -v journalctl >/dev/null 2>&1; then
+    while read -r t; do case "$t" in in) ni=$(( ni + 1 )) ;; out) no=$(( no + 1 )) ;; esac; done < <(
+      journalctl -q --cursor-file="$DIR/mail-vol.cursor" -o cat -t postfix/lmtp -t postfix/smtp -t postfix/local -t postfix/virtual 2>/dev/null |
+      awk '/status=sent/ { if ($0 ~ /relay=(private\/dovecot-lmtp|local|virtual|dovecot)/) print "in"; else print "out" }')
+  fi
+  if [ "$ch" != "$h" ]; then
+    echo "$ch,$ci,$co" >> "$csv"; mail_vol_eval "$ch" "$ci" "$co"
+    awk -F, -v s=$(( EPOCHSECONDS - 60 * 86400 )) 'NR == 1 || $1 >= s' "$csv" > "$csv.tmp" && mv -f "$csv.tmp" "$csv"   # 60 dias (a 1.ª linha marca o início)
+    ch=$h; ci=0; co=0
+  fi
+  echo "$ch $(( ci + ni )) $(( co + no ))" > "$vcur"
+  perm "$csv" 2>/dev/null
+}
+mail_vol_eval(){ # hora entrada saída
+  local csv=$DIR/mail-vol.csv first pc mn hod r ai ao
+  first=$(head -n1 "$csv" | cut -d, -f1)
+  [ $(( EPOCHSECONDS - first )) -ge $(( 30 * 86400 )) ] || return 0   # ainda a aprender
+  pc=$(al_get MAIL_PCT 20); mn=$(al_get MAIL_MIN 50); hod=$(( $1 % 86400 / 3600 ))
+  r=$(awk -F, -v hod="$hod" -v cur="$1" -v s=$(( $1 - 30 * 86400 )) '$1 >= s && $1 < cur && int(($1 % 86400) / 3600) == hod { n++; i += $2; o += $3 } END { if (n) printf "%.1f %.1f", i / n, o / n; else print "0 0" }' "$csv")
+  read -r ai ao <<<"$r"
+  local fi_ fo hh; hh=$(date -d "@$1" '+%Hh')
+  fi_=$(awk -v v="$2" -v a="$ai" -v p="$pc" -v m="$mn" 'BEGIN { print (v > a * (1 + p / 100) && v - a >= m) ? 1 : 0 }')
+  fo=$(awk -v v="$3" -v a="$ao" -v p="$pc" -v m="$mn" 'BEGIN { print (v > a * (1 + p / 100) && v - a >= m) ? 1 : 0 }')
+  al_cond mail_in "$fi_" "Email recebido acima do normal: $2 mensagens entre as $hh e a hora seguinte (normal ${ai%.*}; +$(awk -v v="$2" -v a="$ai" 'BEGIN { printf "%d", (a > 0 ? (v - a) * 100 / a : 100) }')%)" "Email recebido de volta ao normal ($2 mensagens na última hora)"
+  al_cond mail_out "$fo" "Email enviado acima do normal: $3 mensagens entre as $hh e a hora seguinte (normal ${ao%.*}; +$(awk -v v="$3" -v a="$ao" 'BEGIN { printf "%d", (a > 0 ? (v - a) * 100 / a : 100) }')%)" "Email enviado de volta ao normal ($3 mensagens na última hora)"
+}
+
 # ---------- ciclo principal ----------
 for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
 read -r p_tot p_idle <<<"$(read_cpu)"
@@ -12756,6 +13044,8 @@ while :; do
     fw_selfheal
     update_crons
     auth_guard
+    alerts_tick $(( a_cpu / acc_n )) $(( a_mem / acc_n )) $(( a_disk / acc_n ))
+    mail_vol_tick
     h=$(( EPOCHSECONDS / 3600 ))
     if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
     write_sites_json
@@ -12793,7 +13083,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.7.0
+#  mp-sendmail — IDDigital Hosting v2.8.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -12865,7 +13155,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.7.0
+#  mpanel-term — IDDigital Hosting v2.8.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -12887,7 +13177,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.7.0
+#  mpanel-cron — IDDigital Hosting v2.8.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
