@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Gestão de DNS refeita (como no Cloudflare): editar registos, modelos de email, importar/exportar BIND, propagação e saúde do servidor DNS.
+# NOTAS: Interface: cabeçalho em dois níveis (ferramentas em cima; título e ação da página por baixo) e separadores corrigidos no telemóvel.
 # =============================================================================
-#  IDDigital Hosting v2.13.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.13.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.13.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.13.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.13.0"
+MP_VERSION="2.13.1"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -1492,7 +1492,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.13.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.13.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1500,7 +1500,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.0';
+const MP_VERSION = '2.13.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2093,6 +2093,21 @@ svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .top-actions{display:flex;align-items:center;gap:8px}
 .top-actions form{margin:0}
 .burger{display:none}
+/* cabeçalho em dois níveis: ferramentas globais em cima, título e ação da página por baixo */
+.top{display:block}
+.top-bar{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.page-h{display:flex;align-items:flex-end;gap:16px;margin-top:14px}
+.page-h .grow{flex:1;min-width:0}
+.page-act{flex:none}
+.page-act:empty{display:none}
+@media (max-width:900px){
+  .top-bar{justify-content:space-between;gap:6px}
+  .top-bar .top-actions{order:0;width:auto;flex-wrap:nowrap;gap:6px;justify-content:flex-end}
+  .top-tools .chip{height:38px;min-width:38px;padding:0 9px}
+  .page-h{margin-top:12px;align-items:center;gap:12px}
+  .page-h .page-act{order:0;width:auto;flex-wrap:nowrap}
+  .tabs .chip,.tabs .chip.prim{width:auto!important;min-width:0;padding:0 14px!important}   /* separadores: nunca em forma de botão-ícone */
+}
 .content{padding:18px 32px 36px;display:flex;flex-direction:column;gap:20px}
 .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;align-items:center;gap:14px;box-shadow:var(--shadow);min-width:0}
@@ -3946,24 +3961,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 
   <div class="main">
     <header class="top">
-      <button class="iconbtn burger" type="button" data-nav-open aria-label="Abrir menu"><?= ic('menu') ?></button>
-      <div class="grow">
-        <div class="crumb"><?= h($section) ?></div>
-        <h1><?= h($pages[$page][0]) ?></h1>
-        <p><?= h($titles[$page]) ?></p>
-      </div>
-      <div class="top-actions">
-        <?php if ($page === 'sites' || $page === 'resumo'): ?>
-          <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
-        <?php elseif ($page === 'bd'): ?>
-          <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
-        <?php elseif ($page === 'cron' && $sites): ?>
-          <button class="chip prim" type="button" data-cron-new aria-label="Nova tarefa"><?= ic('plus') ?><span class="lbl">Nova tarefa</span></button>
-        <?php elseif ($page === 'backups'): ?>
-          <button class="chip prim" type="button" data-open="dlg-bk-now" aria-label="Fazer backup agora"><?= ic('archive') ?><span class="lbl">Fazer backup</span></button>
-        <?php elseif ($page === 'ligacoes'): ?>
-          <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
-        <?php endif; ?>
+      <div class="top-bar">
+        <button class="iconbtn burger" type="button" data-nav-open aria-label="Abrir menu"><?= ic('menu') ?></button>
+        <div class="top-actions top-tools">
         <form method="post" style="margin:0"><?= act_fields('refresh') ?><button class="chip" type="submit" title="Atualizar estado" aria-label="Atualizar estado"><?= ic('reload') ?><span class="lbl">Atualizar</span></button></form>
         <span class="chip sm hide-m">v<?= h(MP_VERSION) ?></span>
         <span class="chip ghost hide-m"><?= h($today) ?></span>
@@ -3986,6 +3986,27 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <form method="post"><?= act_fields('sair') ?><button type="submit"><?= ic('out') ?>Sair</button></form>
           </div>
         </details>
+        </div>
+      </div>
+      <div class="page-h">
+        <div class="grow">
+          <div class="crumb"><?= h($section) ?></div>
+          <h1><?= h($pages[$page][0]) ?></h1>
+          <p><?= h($titles[$page]) ?></p>
+        </div>
+        <div class="top-actions page-act">
+        <?php if ($page === 'sites' || $page === 'resumo'): ?>
+          <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
+        <?php elseif ($page === 'bd'): ?>
+          <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
+        <?php elseif ($page === 'cron' && $sites): ?>
+          <button class="chip prim" type="button" data-cron-new aria-label="Nova tarefa"><?= ic('plus') ?><span class="lbl">Nova tarefa</span></button>
+        <?php elseif ($page === 'backups'): ?>
+          <button class="chip prim" type="button" data-open="dlg-bk-now" aria-label="Fazer backup agora"><?= ic('archive') ?><span class="lbl">Fazer backup</span></button>
+        <?php elseif ($page === 'ligacoes'): ?>
+          <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
+        <?php endif; ?>
+        </div>
       </div>
     </header>
 
@@ -9512,7 +9533,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.13.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.13.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -9952,12 +9973,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.13.0
+#  mpanel — IDDigital Hosting CLI v2.13.1
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.13.0"
+MP_VERSION="2.13.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -14920,7 +14941,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.13.0 (mpanel)
+IDDigital Hosting — CLI v2.13.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -15297,7 +15318,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.13.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.13.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -15845,7 +15866,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.13.0
+#  mp-sendmail — IDDigital Hosting v2.13.1
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -15917,7 +15938,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.13.0
+#  mpanel-term — IDDigital Hosting v2.13.1
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -15942,7 +15963,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.13.0
+#  mpanel-cron — IDDigital Hosting v2.13.1
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.

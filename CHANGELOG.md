@@ -1,5 +1,9 @@
 # Registo de alterações
 
+## 2.13.1
+- Interface: cabeçalho em dois níveis em todas as páginas — ferramentas globais em cima; título, descrição e ação principal da página por baixo (o título deixa de ficar espremido).
+- Telemóvel: ferramentas do topo numa só linha; o separador ativo deixava de ficar espremido num círculo.
+
 ## 2.13.0
 - DNS refeito como no Cloudflare: editar registos (também os do painel), modelos de email (este servidor, Google Workspace, Microsoft 365), importar e exportar zonas BIND, verificar propagação, repor predefinidos, TTL "Auto".
 - Separador Servidor DNS: estado, verificação de saúde (nameservers na Internet, UDP/TCP, transferência de zona, resolver aberto), nameservers e valores do SOA.

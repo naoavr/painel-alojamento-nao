@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.13.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.13.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.0';
+const MP_VERSION = '2.13.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -601,6 +601,21 @@ svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .top-actions{display:flex;align-items:center;gap:8px}
 .top-actions form{margin:0}
 .burger{display:none}
+/* cabeçalho em dois níveis: ferramentas globais em cima, título e ação da página por baixo */
+.top{display:block}
+.top-bar{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.page-h{display:flex;align-items:flex-end;gap:16px;margin-top:14px}
+.page-h .grow{flex:1;min-width:0}
+.page-act{flex:none}
+.page-act:empty{display:none}
+@media (max-width:900px){
+  .top-bar{justify-content:space-between;gap:6px}
+  .top-bar .top-actions{order:0;width:auto;flex-wrap:nowrap;gap:6px;justify-content:flex-end}
+  .top-tools .chip{height:38px;min-width:38px;padding:0 9px}
+  .page-h{margin-top:12px;align-items:center;gap:12px}
+  .page-h .page-act{order:0;width:auto;flex-wrap:nowrap}
+  .tabs .chip,.tabs .chip.prim{width:auto!important;min-width:0;padding:0 14px!important}   /* separadores: nunca em forma de botão-ícone */
+}
 .content{padding:18px 32px 36px;display:flex;flex-direction:column;gap:20px}
 .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;align-items:center;gap:14px;box-shadow:var(--shadow);min-width:0}
@@ -2454,24 +2469,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 
   <div class="main">
     <header class="top">
-      <button class="iconbtn burger" type="button" data-nav-open aria-label="Abrir menu"><?= ic('menu') ?></button>
-      <div class="grow">
-        <div class="crumb"><?= h($section) ?></div>
-        <h1><?= h($pages[$page][0]) ?></h1>
-        <p><?= h($titles[$page]) ?></p>
-      </div>
-      <div class="top-actions">
-        <?php if ($page === 'sites' || $page === 'resumo'): ?>
-          <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
-        <?php elseif ($page === 'bd'): ?>
-          <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
-        <?php elseif ($page === 'cron' && $sites): ?>
-          <button class="chip prim" type="button" data-cron-new aria-label="Nova tarefa"><?= ic('plus') ?><span class="lbl">Nova tarefa</span></button>
-        <?php elseif ($page === 'backups'): ?>
-          <button class="chip prim" type="button" data-open="dlg-bk-now" aria-label="Fazer backup agora"><?= ic('archive') ?><span class="lbl">Fazer backup</span></button>
-        <?php elseif ($page === 'ligacoes'): ?>
-          <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
-        <?php endif; ?>
+      <div class="top-bar">
+        <button class="iconbtn burger" type="button" data-nav-open aria-label="Abrir menu"><?= ic('menu') ?></button>
+        <div class="top-actions top-tools">
         <form method="post" style="margin:0"><?= act_fields('refresh') ?><button class="chip" type="submit" title="Atualizar estado" aria-label="Atualizar estado"><?= ic('reload') ?><span class="lbl">Atualizar</span></button></form>
         <span class="chip sm hide-m">v<?= h(MP_VERSION) ?></span>
         <span class="chip ghost hide-m"><?= h($today) ?></span>
@@ -2494,6 +2494,27 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <form method="post"><?= act_fields('sair') ?><button type="submit"><?= ic('out') ?>Sair</button></form>
           </div>
         </details>
+        </div>
+      </div>
+      <div class="page-h">
+        <div class="grow">
+          <div class="crumb"><?= h($section) ?></div>
+          <h1><?= h($pages[$page][0]) ?></h1>
+          <p><?= h($titles[$page]) ?></p>
+        </div>
+        <div class="top-actions page-act">
+        <?php if ($page === 'sites' || $page === 'resumo'): ?>
+          <button class="chip prim" type="button" data-open="dlg-site-new" aria-label="Novo site"><?= ic('plus') ?><span class="lbl">Novo site</span></button>
+        <?php elseif ($page === 'bd'): ?>
+          <button class="chip prim" type="button" data-open="dlg-db-new" aria-label="Nova base de dados"><?= ic('plus') ?><span class="lbl">Nova base de dados</span></button>
+        <?php elseif ($page === 'cron' && $sites): ?>
+          <button class="chip prim" type="button" data-cron-new aria-label="Nova tarefa"><?= ic('plus') ?><span class="lbl">Nova tarefa</span></button>
+        <?php elseif ($page === 'backups'): ?>
+          <button class="chip prim" type="button" data-open="dlg-bk-now" aria-label="Fazer backup agora"><?= ic('archive') ?><span class="lbl">Fazer backup</span></button>
+        <?php elseif ($page === 'ligacoes'): ?>
+          <button class="chip prim" type="button" data-open="dlg-block" aria-label="Bloquear IP"><?= ic('ban') ?><span class="lbl">Bloquear IP</span></button>
+        <?php endif; ?>
+        </div>
       </div>
     </header>
 
