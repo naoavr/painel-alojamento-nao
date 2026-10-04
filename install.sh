@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.9.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.10.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.9.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.10.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.9.0"
+MP_VERSION="2.10.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -544,7 +544,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.9.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.10.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -552,7 +552,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.9.0';
+const MP_VERSION = '2.10.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -924,6 +924,7 @@ const ICONS = [
     'chev'   => '<path d="M6 9l6 6 6-6"/>',
     'ban'    => '<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
     'clock'  => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'shield' => '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
     'bell'   => '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
     'term'   => '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/>',
     'logs'   => '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
@@ -1346,6 +1347,16 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pager{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.sn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:20px;align-items:start}
+.sn-dot{width:12px;height:12px;border-radius:50%;flex:none;margin-top:4px}
+.sn-ok{background:var(--ok)}.sn-warn{background:var(--warn)}.sn-fail{background:var(--err);box-shadow:0 0 0 4px color-mix(in srgb,var(--err) 20%,transparent)}
+.sn-av{padding:8px 24px 20px}
+.sn-row{display:grid;grid-template-columns:260px 1fr 80px;gap:16px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.sn-n{display:flex;flex-direction:column}.sn-pc{text-align:right}
+.sn-days{display:grid;grid-template-columns:repeat(30,1fr);gap:3px}
+.sn-days i{height:22px;border-radius:4px;background:var(--line)}.sn-days i.g{background:var(--ok)}.sn-days i.y{background:var(--warn)}.sn-days i.r{background:var(--err)}
+.sn-chk{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px 18px}
+@media (max-width:900px){.sn-row{grid-template-columns:1fr}}
 .pr-sum{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px 24px}
 .pr-o{border:1px solid var(--line);border-radius:16px;padding:12px 14px}
 .pr-o .nm{margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
@@ -1563,6 +1574,7 @@ $pages = [
     'terminal' => ['Terminal', 'term'],
     'alertas'  => ['Alertas', 'bell'],
     'processos' => ['Processos', 'cpu'],
+    'sentinela' => ['Sentinela', 'shield'],
     'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
@@ -2033,6 +2045,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $back = ['t' => 'antispam'];
             break;
 
+        case 'sentinel_run':
+            job_submit('sentinel-run', [], 'Testar todos os serviços agora');
+            break;
+        case 'sentinel_settings':
+            $all = array_filter(explode(' ', post('all')), function ($x) { return preg_match('/^[a-z0-9:._-]{2,80}$/', $x); });
+            $on = array_filter((array)($_POST['on'] ?? []), function ($x) { return is_string($x) && preg_match('/^[a-z0-9:._-]{2,80}$/', $x); });
+            $off = array_values(array_diff($all, $on));
+            job_submit('sentinel-settings', ['--repair', post('repair') === 'off' ? 'off' : 'on', '--sites', post('sites') === 'off' ? 'off' : 'on', '--off', implode(' ', $off)], 'Configuração do sentinela');
+            break;
         case 'proc_kill':
             $pid = post('pid');
             if (!ctype_digit($pid) || (int)$pid < 3) { $bad('Processo inválido.'); break; }
@@ -2640,6 +2661,7 @@ $titles = [
     'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, proteção contra força bruta, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
+    'sentinela' => 'Testa todos os serviços a cada minuto, repara o que falha e alerta por SMS e email.',
     'processos' => 'Processos que consomem CPU e memória, com a origem (site, email, base de dados, sistema) e a opção de os terminar.',
     'alertas'  => 'Alertas por SMS e email: CPU, RAM, disco, ligações e volume de email.',
     'terminal' => 'Terminal do servidor (root) no browser. Exige a verificação em dois passos; as sessões ficam gravadas.',
@@ -2647,7 +2669,7 @@ $titles = [
     'dns'      => 'DNS autoritativo: zonas dos domínios alojados neste servidor.',
     'logs'     => 'Acessos e erros de cada site: servidor web, PHP e tarefas agendadas.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'processos', 'ligacoes', 'alertas', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'sentinela', 'processos', 'ligacoes', 'alertas', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
 $section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -4484,6 +4506,100 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Terminar</button></div>
       </form></dialog>
       <form method="post" id="kill-site-f" style="display:none" data-confirm=""><?= act_fields('proc_kill_site') ?><input type="hidden" name="site" id="kill-site-n"></form>
+
+<?php elseif ($page === 'sentinela'):
+    $sn = jload(MP_STATS . '/sentinel.json') ?? [];
+    $snR = is_array($sn['results'] ?? null) ? $sn['results'] : [];
+    $snst = jload(MP_STATS . '/sentinel-state.json') ?? [];
+    $stab = in_array(qget('t'), ['estado', 'incidentes', 'disponibilidade', 'config'], true) ? qget('t') : 'estado';
+    $tzs = tz_off(live_stats());
+    $cnt = ['ok' => 0, 'warn' => 0, 'fail' => 0]; foreach ($snR as $r) $cnt[$r['status']] = ($cnt[$r['status']] ?? 0) + 1;
+    $snAge = time() - (int)($sn['ts'] ?? 0);
+    $snOff = (string)($state['sentinel']['off'] ?? '');
+?>
+      <nav class="tabs" aria-label="Secções">
+        <?php foreach (['estado' => 'Estado', 'incidentes' => 'Incidentes', 'disponibilidade' => 'Disponibilidade', 'config' => 'Configuração'] as $tk => $tl): ?><a class="chip<?= $stab === $tk ? ' prim' : '' ?>" href="?p=sentinela&amp;t=<?= $tk ?>"><?= $tl ?></a><?php endforeach; ?>
+        <form method="post" style="margin-left:auto"><?= act_fields('sentinel_run') ?><button class="btn sm sec" type="submit"><?= ic('reload') ?>Testar agora</button></form>
+      </nav>
+  <?php if ($stab === 'estado'): ?>
+      <section class="stats">
+        <div class="stat"><span class="tile t-acc"><?= ic('check') ?></span><div><div class="k">Testes OK</div><div class="v"><?= $cnt['ok'] ?></div></div></div>
+        <div class="stat"><span class="tile t-warn"><?= ic('bell') ?></span><div><div class="k">Avisos</div><div class="v"><?= $cnt['warn'] ?></div></div></div>
+        <div class="stat"><span class="tile t-vio"><?= ic('ban') ?></span><div><div class="k">Falhas</div><div class="v" style="<?= $cnt['fail'] ? 'color:var(--err)' : '' ?>"><?= $cnt['fail'] ?></div></div></div>
+        <div class="stat"><span class="tile t-blue"><?= ic('clock') ?></span><div><div class="k">Último teste</div><div class="v" style="font-size:17px"><?= empty($sn['ts']) ? 'Nunca' : ($snAge < 120 ? 'há ' . $snAge . ' s' : '<span style="color:var(--err)">há ' . (int)round($snAge / 60) . ' min</span>') ?></div></div></div>
+      </section>
+      <?php if (!$snR): ?><section class="card"><div class="empty"><b>O sentinela ainda não correu</b>Corre sozinho a cada minuto. Usa "Testar agora" para o primeiro teste.</div></section><?php endif; ?>
+      <?php $groups = []; foreach ($snR as $r) $groups[$r['group']][] = $r;
+        $order = ['Serviços', 'Sites', 'Email', 'DNS', 'Certificados', 'Sistema', 'Painel']; $opos = function ($g) use ($order) { $i = array_search($g, $order, true); return $i === false ? 99 : $i; }; uksort($groups, function ($a, $b) use ($opos) { return $opos($a) <=> $opos($b); }); ?>
+      <div class="sn-grid">
+      <?php foreach ($groups as $g => $rs): $bad = count(array_filter($rs, function ($r) { return $r['status'] !== 'ok'; })); ?>
+        <section class="card">
+          <div class="card-h"><div><h2><?= h($g) ?></h2></div><span class="pill <?= $bad ? 'p-err' : 'p-ok' ?>"><?= $bad ? $bad . ' com problemas' : 'Tudo OK' ?></span></div>
+          <div class="row-list">
+          <?php usort($rs, function ($a, $b) { $w = ['fail' => 0, 'warn' => 1, 'ok' => 2]; return [$w[$a['status']] ?? 3, $a['name']] <=> [$w[$b['status']] ?? 3, $b['name']]; }); foreach ($rs as $r): $since = (int)($snst[$r['id']]['since'] ?? 0); ?>
+            <div class="item"><span class="sn-dot sn-<?= h($r['status']) ?>" aria-hidden="true"></span>
+              <div class="grow"><div class="nm"><?= h($r['name']) ?><?= !empty($r['repaired']) ? ' <span class="pill p-me">reparado</span>' : '' ?></div><div class="mu"><?= h($r['msg']) ?><?= $r['status'] !== 'ok' && $since ? ' · desde ' . h(gmdate('d/m H:i', $since + $tzs)) : '' ?></div></div></div>
+          <?php endforeach; ?>
+          </div>
+        </section>
+      <?php endforeach; ?>
+      </div>
+      <?php if ($snR): ?><p class="mu" style="margin:0">Teste completo em <?= (int)($sn['took'] ?? 0) ?> s · reparação automática <?= !empty($sn['repair']) ? 'ativa (até 3 vezes por hora por serviço)' : 'desligada' ?>.</p><?php endif; ?>
+
+  <?php elseif ($stab === 'incidentes'):
+      $incs = []; foreach (array_reverse(log_tail(MP_STATS . '/sentinel-incidents.log', 5000)) as $ln) { $j = json_decode($ln, true); if (is_array($j)) $incs[] = $j; }
+      foreach ($snst as $id => $s0) { if (($s0['status'] ?? 'ok') !== 'ok') { $nm = $id; foreach ($snR as $r) if ($r['id'] === $id) $nm = $r['name']; array_unshift($incs, ['id' => $id, 'name' => $nm, 'start' => (int)$s0['since'], 'end' => 0, 'msg' => (string)$s0['msg'], 'repaired' => false]); } }
+      [$il, $ipg, $ipages, $itot] = paginate($incs, 50);
+      $dur = function (int $s): string { return $s >= 86400 ? round($s / 86400, 1) . ' d' : ($s >= 3600 ? round($s / 3600, 1) . ' h' : max(1, (int)round($s / 60)) . ' min'); };
+  ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Incidentes</h2><p>Cada falha detetada: quando começou, quanto durou e se foi reparada automaticamente.</p></div></div>
+        <?php if (!$incs): ?><div class="empty">Sem incidentes registados.</div><?php else: ?>
+        <table class="list cards">
+          <thead><tr><th>Início</th><th>Teste</th><th>O que aconteceu</th><th>Duração</th><th>Resultado</th></tr></thead>
+          <tbody><?php foreach ($il as $i): ?>
+            <tr><td class="first mono" data-label="Início"><?= h(gmdate('d/m/Y H:i', (int)$i['start'] + $tzs)) ?></td><td data-label="Teste"><b><?= h((string)$i['name']) ?></b></td><td class="mu" data-label="O que aconteceu"><?= h((string)$i['msg']) ?></td>
+              <td data-label="Duração"><?= empty($i['end']) ? '<span class="pill p-err">a decorrer · ' . h($dur(time() - (int)$i['start'])) . '</span>' : h(!empty($i['repaired']) ? '—' : $dur((int)$i['end'] - (int)$i['start'])) ?></td>
+              <td data-label="Resultado"><?= empty($i['end']) ? '<span class="pill p-err">Em falha</span>' : (!empty($i['repaired']) ? '<span class="pill p-me">Reparado sozinho</span>' : '<span class="pill p-ok">Resolvido</span>') ?></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <div class="card-f"><?= pager($ipg, $ipages, $itot, 'pg', 'incidentes') ?></div>
+        <?php endif; ?>
+      </section>
+
+  <?php elseif ($stab === 'disponibilidade'):
+      $av = jload(MP_STATS . '/sentinel-avail.json') ?? []; $names0 = []; foreach ($snR as $r) $names0[$r['id']] = [$r['name'], $r['group']];
+      $days = []; for ($d = 29; $d >= 0; $d--) $days[] = gmdate('Ymd', time() - $d * 86400);
+  ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Disponibilidade nos últimos 30 dias</h2><p>Percentagem de testes sem falha, por dia. Os avisos contam como disponível.</p></div></div>
+        <?php if (!$av): ?><div class="empty">Ainda sem dados.</div><?php else: ?>
+        <div class="sn-av">
+        <?php ksort($av); foreach ($av as $id => $byDay): if (!isset($names0[$id])) continue; $ok = 0; $tot = 0; foreach ($byDay as $c) { $ok += (int)$c[0]; $tot += (int)$c[1]; } $pc = $tot ? $ok * 100 / $tot : 100; ?>
+          <div class="sn-row"><div class="sn-n"><b><?= h($names0[$id][0]) ?></b><span class="mu"><?= h($names0[$id][1]) ?></span></div>
+            <div class="sn-days"><?php foreach ($days as $d): $c = $byDay[$d] ?? null; $p = $c && $c[1] ? $c[0] * 100 / $c[1] : null; ?><i class="<?= $p === null ? 'n' : ($p >= 99.9 ? 'g' : ($p >= 98 ? 'y' : 'r')) ?>" title="<?= h(substr($d, 6, 2) . '/' . substr($d, 4, 2)) ?>: <?= $p === null ? 'sem dados' : number_format($p, 2, ',', '') . '%' ?>"></i><?php endforeach; ?></div>
+            <b class="sn-pc" style="<?= $pc < 99 ? 'color:var(--err)' : '' ?>"><?= number_format($pc, 2, ',', '') ?>%</b></div>
+        <?php endforeach; ?>
+        </div><?php endif; ?>
+      </section>
+
+  <?php else: $scfg = (array)($state['sentinel'] ?? []); ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Configuração do sentinela</h2><p>Testa todos os serviços a cada minuto. As falhas e as reparações são enviadas pelos canais de Alertas (SMS e email).</p></div></div>
+        <form method="post" class="card-b">
+          <?= act_fields('sentinel_settings') ?>
+          <div class="fgrid">
+            <label class="fld">Reparação automática<select class="in" name="repair"><option value="on"<?= !isset($scfg['repair']) || !empty($scfg['repair']) ? ' selected' : '' ?>>Ativa: reinicia o serviço em falha (até 3 vezes por hora)</option><option value="off"<?= isset($scfg['repair']) && empty($scfg['repair']) ? ' selected' : '' ?>>Desligada: só alerta</option></select></label>
+            <label class="fld">Testar a página inicial dos sites<select class="in" name="sites"><option value="on"<?= !isset($scfg['sites']) || !empty($scfg['sites']) ? ' selected' : '' ?>>Sim (deteta erros 5xx da aplicação)</option><option value="off"<?= isset($scfg['sites']) && empty($scfg['sites']) ? ' selected' : '' ?>>Não (só o PHP de cada site)</option></select></label>
+          </div>
+          <?php if ($snR): ?><p class="mu" style="margin:16px 0 8px">Testes ativos (desmarca os que não queres que sejam feitos):</p>
+          <div class="sn-chk"><?php foreach ($snR as $r): ?><label class="chk"><input type="checkbox" name="on[]" value="<?= h($r['id']) ?>"<?= strpos(' ' . $snOff . ' ', ' ' . $r['id'] . ' ') === false ? ' checked' : '' ?>> <?= h($r['group'] . ': ' . $r['name']) ?></label><?php endforeach; ?>
+            <?php foreach (array_filter(explode(' ', $snOff)) as $oid): ?><label class="chk"><input type="checkbox" name="on[]" value="<?= h($oid) ?>"> <?= h($oid) ?> <span class="mu">(desligado)</span></label><?php endforeach; ?></div>
+          <input type="hidden" name="all" value="<?= h(implode(' ', array_unique(array_merge(array_column($snR, 'id'), array_filter(explode(' ', $snOff)))))) ?>"><?php endif; ?>
+          <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+        </form>
+      </section>
+  <?php endif; ?>
 
 <?php elseif ($page === 'auditoria'):
     $alog = [];
@@ -7788,7 +7904,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.9.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.10.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -8228,11 +8344,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.9.0
+#  mpanel — IDDigital Hosting CLI v2.10.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.9.0"
+MP_VERSION="2.10.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -12315,6 +12431,191 @@ cmd_proc_kill_site(){ # site [--force]
   return 0
 }
 
+# ============================ SENTINELA (testes periódicos e reparação) ======
+SN_CONF=/etc/minipainel/sentinel.conf
+SN_DIR=$DATA/stats
+snget(){ local v; v=$(grep -m1 "^$1=" "$SN_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-${2:-}}"; }
+snset(){ touch "$SN_CONF"; chmod 600 "$SN_CONF"; if grep -q "^$1=" "$SN_CONF"; then sed -i "s|^$1=.*|$1=$2|" "$SN_CONF"; else echo "$1=$2" >> "$SN_CONF"; fi; }
+sn_off(){ [[ " $(snget OFF '') " == *" $1 "* ]]; }
+sn_unit_ok(){ systemctl list-unit-files "$1.service" 2>/dev/null | grep -q "^$1.service"; }
+SN_RES=""
+sn_res(){ SN_RES+="$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"$'\t'"$5"$'\t'"$6"$'\n'; }   # id grupo nome estado mensagem reparado
+sn_repair_ok(){ # id -> pode reparar (máx. 3 por hora por teste)
+  [ "$(snget REPAIR 1)" = 1 ] || return 1
+  local n; n=$(awk -v s=$(( EPOCHSECONDS - 3600 )) -v id="$1" '$1 >= s && $2 == id' "$SN_DIR/sentinel-repairs.log" 2>/dev/null | wc -l)
+  [ "$n" -lt 3 ]
+}
+sn_run(){ # segundos comando… — limite de tempo que funciona também com funções do bash
+  local t=$1 pid w rc; shift
+  ( "$@" ) & pid=$!
+  ( sleep "$t"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 5>&- 9>&- & w=$!
+  wait "$pid"; rc=$?
+  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+  [ "$rc" = 143 ] && echo "O teste não terminou em $t s"
+  return "$rc"
+}
+sn_check(){ # id grupo nome unidade(ou -) comando… (0 ok, 2 aviso, outro falha; imprime a mensagem)
+  local id=$1 grp=$2 name=$3 unit=$4 msg rc; shift 4
+  sn_off "$id" && return 0
+  msg=$(sn_run 25 "$@" 2>&1); rc=$?; msg=$(printf '%s' "$msg" | tr '\n\t' '  ' | cut -c1-240)
+  if [ "$rc" = 0 ]; then sn_res "$id" "$grp" "$name" ok "$msg" 0; return 0; fi
+  if [ "$rc" = 2 ]; then sn_res "$id" "$grp" "$name" warn "$msg" 0; return 0; fi
+  if [ "$unit" != - ] && sn_repair_ok "$id"; then
+    echo "$EPOCHSECONDS $id $unit" >> "$SN_DIR/sentinel-repairs.log"
+    if [ "${unit:0:1}" = : ]; then ${unit:1} >/dev/null 2>&1 5>&- 9>&-; else systemctl restart "$unit" >/dev/null 2>&1 5>&- 9>&-; fi
+    sleep 4
+    local m2; m2=$(sn_run 25 "$@" 2>&1) && { sn_res "$id" "$grp" "$name" ok "Falhou ($msg) e foi reparado automaticamente" 1; return 0; }
+    msg="$msg; a reparação automática não resolveu"
+  elif [ "$unit" != - ] && [ "$(snget REPAIR 1)" = 1 ]; then msg="$msg; já houve 3 reparações na última hora, sem resultado"; fi
+  sn_res "$id" "$grp" "$name" fail "$msg" 0
+}
+# ---------- testes ----------
+t_unit(){ systemctl is-active --quiet "$1" >/dev/null 2>&1 && echo "Ativo" || { echo "O serviço $1 está parado"; return 1; }; }
+t_tcp(){ # host porta [esperado no início da resposta]
+  local r; { exec 3<>"/dev/tcp/$1/$2"; } 2>/dev/null || { echo "Não responde na porta $2"; return 1; }
+  if [ -n "${3:-}" ]; then read -r -t 6 r <&3; exec 3>&-; [[ "$r" == "$3"* ]] && echo "Responde na porta $2" || { echo "Resposta inesperada na porta $2: ${r:0:60}"; return 1; }
+  else exec 3>&-; echo "Responde na porta $2"; fi
+}
+t_db(){ local r; r=$(mysql -uroot -N -B -e 'SELECT 1' 2>&1) && [ "$r" = 1 ] && echo "Responde a consultas" || { echo "Não responde: ${r:0:120}"; return 1; }; }
+t_fpm(){ # socket ficheiro_público
+  command -v cgi-fcgi >/dev/null 2>&1 || { echo "Sem a ferramenta cgi-fcgi (pacote libfcgi-bin)"; return 2; }
+  [ -S "$1" ] || { echo "A socket do PHP não existe"; return 1; }
+  local o; o=$(SCRIPT_FILENAME="$2/__mp_sentinela_$$.php" SCRIPT_NAME="/__mp_sentinela.php" REQUEST_METHOD=GET timeout 10 cgi-fcgi -bind -connect "$1" 2>&1)
+  if [[ "$o" == *"404"* ]] || [[ "$o" == *"not found"* ]] || [[ "$o" == *"Primary script unknown"* ]]; then echo "O PHP responde"; else echo "O PHP não respondeu: ${o:0:100}"; return 1; fi
+}
+t_site(){ # porta
+  local c; c=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "http://127.0.0.1:$1/" 2>/dev/null)
+  case "$c" in 000) echo "Sem resposta em 15 s"; return 1 ;; 5*) echo "A página inicial deu erro $c (erro da aplicação ou do PHP)"; return 1 ;; *) echo "Página inicial: HTTP $c" ;; esac
+}
+t_redis(){ local r; r=$(redis-cli -a "$(cat /etc/minipainel/redis.pw 2>/dev/null)" --no-auth-warning ping 2>&1); [ "$r" = PONG ] && echo "Responde" || { echo "Não responde: ${r:0:80}"; return 1; }; }
+t_unbound(){ dig +short +time=3 +tries=1 @127.0.0.1 localhost A >/dev/null 2>&1 && echo "Responde" || { echo "O resolver local não responde"; return 1; }; }
+t_queue(){ local n; n=$(postqueue -j 2>/dev/null | wc -l); [ "$n" -lt "$(snget QUEUE_MAX 300)" ] && echo "$n mensagens na fila" || { echo "$n mensagens na fila (acima de $(snget QUEUE_MAX 300))"; return 2; }; }
+t_zone(){ local s w; w=$(jq -r '.serial' "$DNS_DIR/$1.json" 2>/dev/null); s=$(dig +norec +short +time=3 +tries=1 SOA "$1" @"$(dns_get IP)" 2>/dev/null | awk '{print $3}')
+  [[ "$s" =~ ^[0-9]+$ ]] || { echo "A zona não responde"; return 1; }; [ "$s" = "$w" ] && echo "Responde (série $s)" || { echo "Série publicada $s diferente da esperada $w"; return 1; }; }
+t_cert(){ local e d; e=$(cert_expiry "$1"); [ -n "$e" ] || { echo "Sem certificado"; return 2; }; d=$(( (e - EPOCHSECONDS) / 86400 ))
+  if [ "$d" -lt 3 ]; then echo "Expira em $d dias"; return 1; elif [ "$d" -lt 14 ]; then echo "Expira em $d dias (a renovação ainda não aconteceu)"; return 2; fi; echo "Válido mais $d dias"; }
+t_rw(){ local f=$DATA/.sentinela-rw; ( echo ok > "$f" ) 2>/dev/null && rm -f "$f" && echo "Disco com escrita" || { echo "O disco está só de leitura ou cheio"; return 1; }; }
+t_inodes(){ local p; p=$(df -iP / | awk 'NR==2 {gsub("%","",$5); print $5}'); [[ "$p" =~ ^[0-9]+$ ]] || p=0; [ "$p" -lt 90 ] && echo "Inodes a $p%" || { echo "Inodes a $p%"; return 2; }; }
+t_oom(){ local n; n=$(journalctl -k -q --since "-6min" 2>/dev/null | grep -c 'Out of memory: Killed process'); [ "$n" = 0 ] && echo "Sem processos terminados por falta de memória" || { echo "$n processos terminados por falta de memória nos últimos minutos"; return 2; }; }
+t_segv(){ local n; n=$(journalctl -k -q --since "-6min" 2>/dev/null | grep -c 'segfault at'); [ "$n" = 0 ] && echo "Sem falhas de segmentação" || { echo "$n falhas de segmentação nos últimos minutos"; return 2; }; }
+t_zombie(){ local z d; z=$(ps -eo stat= | grep -c '^Z'); d=$(ps -eo stat= | grep -c '^D'); [ "$z" -lt 20 ] && [ "$d" -lt 10 ] && echo "$z zombie, $d bloqueados" || { echo "$z processos zombie e $d bloqueados em disco"; return 2; }; }
+t_ntp(){ local s; s=$(timedatectl show -p NTPSynchronized --value 2>/dev/null); [ "$s" = no ] && { echo "O relógio não está sincronizado (NTP)"; return 2; }; echo "Relógio sincronizado"; }
+t_fpmmax(){ # aumento das mensagens "reached pm.max_children" desde o último teste
+  local tot prev f=$SN_DIR/.sentinela-fpmmax
+  tot=$(cat /var/log/php*-fpm.log /var/log/php-fpm/*.log 2>/dev/null | grep -c 'reached pm.max_children'); prev=$(cat "$f" 2>/dev/null || echo "$tot"); echo "$tot" > "$f"
+  [[ "$prev" =~ ^[0-9]+$ ]] || prev=$tot; [ "$tot" -lt "$prev" ] && prev=0
+  [ $(( tot - prev )) -le 0 ] && echo "Sem limite de processos PHP atingido" || { echo "Limite de processos PHP atingido $(( tot - prev )) vezes desde o último teste (sites lentos ou sob carga)"; return 2; }
+}
+t_collector(){ local a; a=$(( EPOCHSECONDS - $(stat -c %Y "$DATA/stats/live.json" 2>/dev/null || echo 0) )); [ "$a" -lt 120 ] && echo "A recolher dados" || { echo "Sem dados novos há $a s"; return 1; }; }
+t_queue_panel(){ local n; n=$(find "$DATA/queue" -name '*.json' -mmin +10 2>/dev/null | wc -l); [ "$n" = 0 ] && echo "Fila de tarefas a andar" || { echo "$n tarefas paradas há mais de 10 minutos"; return 1; }; }
+t_fw(){ nft list table inet minipainel >/dev/null 2>&1 && echo "Firewall carregada" || { echo "A tabela da firewall do painel não está carregada"; return 1; }; }
+t_backup(){ local t; [ "$(bk_get ENABLED 1)" = 1 ] || { echo "Backups automáticos desligados"; return 0; }
+  t=$(jq -r 'if (.last.ok // false) then .last.ts else 0 end' "$DATA/stats/backup.json" 2>/dev/null); [[ "$t" =~ ^[0-9]+$ ]] || t=0
+  [ $(( EPOCHSECONDS - t )) -lt 93600 ] && echo "Último backup há $(( (EPOCHSECONDS - t) / 3600 )) h" || { echo "Sem backup bem-sucedido nas últimas 26 h"; return 2; }; }
+cmd_sentinel_run(){
+  exec 5>/run/minipainel-sentinel.lock; flock -n 5 || { echo "O sentinela já está a correr."; return 0; }
+  local t0=$EPOCHSECONDS n v u
+  SN_RES=""
+  # serviços essenciais
+  for u in nginx cron; do sn_unit_ok "$u" && sn_check "svc:$u" "Serviços" "$u" "$u" t_unit "$u"; done
+  for u in mariadb mysql; do sn_unit_ok "$u" && { sn_check "svc:db" "Serviços" "MariaDB" "$u" t_unit "$u"; break; }; done
+  for u in ssh sshd; do sn_unit_ok "$u" && { sn_check "svc:ssh" "Serviços" "SSH" "$u" t_unit "$u"; break; }; done
+  for v in $(php_installed); do sn_unit_ok "$(php_service "$v")" && sn_check "svc:php$v" "Serviços" "PHP $v" "$(php_service "$v")" t_unit "$(php_service "$v")"; done
+  sn_check "web:http" "Serviços" "Servidor web (porta 80)" nginx t_tcp 127.0.0.1 80
+  sn_check "db:query" "Serviços" "Base de dados (consulta)" "$(sn_unit_ok mariadb && echo mariadb || echo mysql)" t_db
+  # sites: PHP de cada site e página inicial
+  for n in $(site_names); do
+    [ "$(site_get "$n" ENABLED)" = 1 ] || continue
+    v=$(site_get "$n" PHP)
+    sn_check "site:$n:php" "Sites" "$n — PHP $v" "$(php_service "$v")" t_fpm "$(php_sock "$v" "$n")" "$WWW_ROOT/$n/public_html"
+    [ "$(snget SITES 1)" = 1 ] && sn_check "site:$n:web" "Sites" "$n — página inicial" - t_site "$(site_get "$n" PORT)"
+    [ "$(site_get "$n" SSL)" = le ] && sn_check "cert:$n" "Certificados" "$n" - t_cert "mp-$n"
+  done
+  # email
+  if mail_on; then
+    sn_check "svc:postfix" "Email" "Postfix" postfix t_unit postfix
+    sn_check "mail:smtp25" "Email" "SMTP (25)" postfix t_tcp 127.0.0.1 25 220
+    sn_check "mail:smtp587" "Email" "Envio (587)" postfix t_tcp 127.0.0.1 587 220
+    sn_check "svc:dovecot" "Email" "Dovecot" dovecot t_unit dovecot
+    sn_check "mail:imap" "Email" "IMAP (143)" dovecot t_tcp 127.0.0.1 143 "* OK"
+    sn_check "svc:rspamd" "Email" "Rspamd (antispam)" rspamd t_tcp 127.0.0.1 11333
+    sn_check "svc:redis" "Email" "Redis" "$(mail_svc_redis)" t_redis
+    sn_check "svc:unbound" "Email" "Unbound (resolver)" unbound t_unbound
+    sn_check "mail:queue" "Email" "Fila de email" - t_queue
+    [ "$(mail_get CLAMAV 0)" = 1 ] && sn_unit_ok clamav-daemon && sn_check "svc:clamav" "Email" "ClamAV" clamav-daemon t_unit clamav-daemon
+    sn_check "cert:mail" "Certificados" "Servidor de email" - t_cert mp-mail
+  fi
+  if dns_on; then
+    sn_check "svc:nsd" "DNS" "NSD" nsd t_unit nsd
+    for n in $(dns_zones); do sn_check "dns:$n" "DNS" "Zona $n" nsd t_zone "$n"; done
+  fi
+  [ -s /etc/pure-ftpd/pureftpd.passwd ] && sn_check "svc:ftp" "Serviços" "Pure-FTPd (FTPS)" pure-ftpd t_tcp 127.0.0.1 21 220
+  [ -n "$(srv_get PANEL_DOMAIN '')" ] && sn_check "cert:painel" "Certificados" "Domínio do painel" - t_cert mp-painel
+  # sistema
+  sn_check "sys:rw" "Sistema" "Escrita no disco" - t_rw
+  sn_check "sys:inodes" "Sistema" "Inodes" - t_inodes
+  sn_check "sys:oom" "Sistema" "Falta de memória (OOM)" - t_oom
+  sn_check "sys:segv" "Sistema" "Falhas de segmentação" - t_segv
+  sn_check "sys:procs" "Sistema" "Processos zombie e bloqueados" - t_zombie
+  sn_check "sys:ntp" "Sistema" "Relógio (NTP)" - t_ntp
+  sn_check "sys:fpmmax" "Sistema" "Limite de processos PHP" - t_fpmmax
+  # o próprio painel
+  sn_check "panel:collector" "Painel" "Recolhedor de estatísticas" minipainel-stats t_collector
+  sn_check "panel:queue" "Painel" "Fila de tarefas" ":systemctl restart minipainel-worker.path" t_queue_panel
+  sn_check "panel:fw" "Painel" "Firewall do painel" ":/usr/local/sbin/mpanel fw-restore" t_fw
+  sn_check "panel:backup" "Painel" "Backups" - t_backup
+  sn_finish "$t0"
+}
+sn_finish(){ # estado, incidentes, disponibilidade e alertas
+  local t0=$1 st=$SN_DIR/sentinel-state.json res=$SN_DIR/sentinel.json inc=$SN_DIR/sentinel-incidents.log av=$SN_DIR/sentinel-avail.json day now=$EPOCHSECONDS
+  [ -s "$st" ] || echo '{}' > "$st"; [ -s "$av" ] || echo '{}' > "$av"; day=$(date +%Y%m%d)
+  local json; json=$(printf '%s' "$SN_RES" | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | {id:.[0], group:.[1], name:.[2], status:.[3], msg:.[4], repaired:(.[5] == "1")})')
+  printf '{"ts":%s,"took":%s,"repair":%s,"results":%s}\n' "$now" $(( now - t0 )) "$([ "$(snget REPAIR 1)" = 1 ] && echo true || echo false)" "$json" > "$res.tmp" && mv -f "$res.tmp" "$res"
+  # disponibilidade por dia (30 dias)
+  jq --argjson r "$json" --arg d "$day" --arg lim "$(date -d '-30 days' +%Y%m%d)" '
+    reduce $r[] as $x (.; .[$x.id][$d] = [((.[$x.id][$d][0] // 0) + (if $x.status == "fail" then 0 else 1 end)), ((.[$x.id][$d][1] // 0) + 1)])
+    | with_entries(.value |= with_entries(select(.key >= $lim)))' "$av" > "$av.tmp" && mv -f "$av.tmp" "$av"
+  # transições -> incidentes e alertas
+  local id name status msg rep prev since sent nst
+  nst=$(cat "$st")
+  while IFS=$'\t' read -r id _ name status msg rep; do
+    [ -n "$id" ] || continue
+    prev=$(jq -r --arg i "$id" '.[$i].status // "ok"' <<<"$nst"); since=$(jq -r --arg i "$id" '.[$i].since // 0' <<<"$nst"); sent=$(jq -r --arg i "$id" '.[$i].sent // 0' <<<"$nst")
+    if [ "$rep" = 1 ]; then
+      jq -cn --arg i "$id" --arg n "$name" --arg m "$msg" --argjson t "$now" '{id:$i, name:$n, start:$t, end:$t, msg:$m, repaired:true}' >> "$inc"
+      /usr/local/sbin/mpanel alert-send "Sentinela: $name falhou e foi reparado automaticamente." --level ok --key "sn:$id" >/dev/null 2>&1
+    fi
+    if [ "$status" != ok ] && [ "$prev" = ok ]; then
+      since=$now; sent=$now
+      /usr/local/sbin/mpanel alert-send "Sentinela: $name — $msg" --level "$([ "$status" = fail ] && echo crit || echo warn)" --key "sn:$id" >/dev/null 2>&1
+    elif [ "$status" != ok ] && [ $(( now - sent )) -ge 21600 ]; then
+      sent=$now; /usr/local/sbin/mpanel alert-send "Sentinela (continua): $name — $msg" --level crit --key "sn:$id" >/dev/null 2>&1
+    elif [ "$status" = ok ] && [ "$prev" != ok ]; then
+      jq -cn --arg i "$id" --arg n "$name" --argjson s "$since" --argjson t "$now" --arg m "$(jq -r --arg i "$id" '.[$i].msg // ""' <<<"$nst")" '{id:$i, name:$n, start:$s, end:$t, msg:$m, repaired:false}' >> "$inc"
+      /usr/local/sbin/mpanel alert-send "Sentinela: $name voltou ao normal." --level ok --key "sn:$id" >/dev/null 2>&1
+      since=0; sent=0
+    fi
+    nst=$(jq -c --arg i "$id" --arg s "$status" --arg m "$msg" --argjson si "$since" --argjson se "$sent" '.[$i] = {status:$s, msg:$m, since:$si, sent:$se}' <<<"$nst")
+  done <<<"$SN_RES"
+  printf '%s\n' "$nst" > "$st"
+  [ -f "$inc" ] && tail -n 5000 "$inc" > "$inc.tmp" && mv -f "$inc.tmp" "$inc"
+  awk -v s=$(( now - 7200 )) '$1 >= s' "$SN_DIR/sentinel-repairs.log" > "$SN_DIR/sentinel-repairs.tmp" 2>/dev/null && mv -f "$SN_DIR/sentinel-repairs.tmp" "$SN_DIR/sentinel-repairs.log"
+  local f; for f in "$res" "$st" "$inc" "$av"; do [ -f "$f" ] && { chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"; }; done
+  echo "Sentinela: $(printf '%s' "$SN_RES" | awk -F'\t' 'NF { n++; if ($4 == "ok") o++; else if ($4 == "warn") w++; else f++; if ($6 == 1) r++ } END { printf "%d testes, %d ok, %d avisos, %d falhas, %d reparados", n, o, w, f, r }') em $(( now - t0 )) s."
+}
+cmd_sentinel_settings(){
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repair) case "${2:-}" in on) snset REPAIR 1 ;; off) snset REPAIR 0 ;; *) die "--repair on|off" ;; esac ;;
+      --sites) case "${2:-}" in on) snset SITES 1 ;; off) snset SITES 0 ;; *) die "--sites on|off" ;; esac ;;
+      --off) local re='^[a-z0-9:._ -]*$'; [[ "${2:-}" =~ $re ]] || die "Lista inválida."; snset OFF "${2:-}" ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+    shift 2 || shift
+  done
+  echo "Sentinela: definições guardadas."; return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -12387,6 +12688,7 @@ write_state(){
     --argjson jdns "$(jv dns "$(dns_state_json 2>/dev/null)" '{"enabled":false}')" --arg ldays "$(logs_days)" \
     --argjson jgeo "$(jv geo "$(geo_state_json 2>/dev/null)" '{}')" \
     --argjson jal "$(jv alerts "$(alerts_state_json 2>/dev/null)" '{}')" \
+    --arg snr "$(snget REPAIR 1)" --arg sns "$(snget SITES 1)" --arg sno "$(snget OFF '')" \
     --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
     --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
     --arg prr "$(awk -v s=$(( EPOCHSECONDS - 86400 )) '$1 >= s' "$DATA/stats/ban-history.txt" 2>/dev/null | wc -l)" \
@@ -12403,6 +12705,7 @@ write_state(){
       ftp:{installed:$fti, plain:($ftpl == "1"), pasv_ip:$ftip},
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
       dns:$jdns, log_days:($ldays|tonumber), geo:$jgeo, alerts:$jal,
+      sentinel:{repair:($snr == "1"), sites:($sns == "1"), off:$sno},
       protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
@@ -12436,7 +12739,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -12454,7 +12757,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.9.0 (mpanel)
+IDDigital Hosting — CLI v2.10.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -12493,6 +12796,10 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
   dns-zone-add|dns-zone-del <domínio>       zona com registos automáticos (sites, email, nameservers)
   dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
   dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
+
+Sentinela (testa todos os serviços a cada minuto; repara e alerta)
+  sentinel-run                         corre todos os testes agora
+  sentinel-settings [--repair on|off] [--sites on|off] [--off "id id"]
 
 Processos
   proc-kill <pid> [--force]            termina um processo (os essenciais são recusados)
@@ -12682,6 +12989,8 @@ dispatch(){
     geoip-update)      cmd_geoip_update ;;
     alerts-settings)   cmd_alerts_settings "$@" ;;
     proc-kill)         cmd_proc_kill "$@" ;;
+    sentinel-settings) cmd_sentinel_settings "$@" ;;
+    sentinel-run)      cmd_sentinel_run ;;
     proc-kill-site)    cmd_proc_kill_site "$@" ;;
     alerts-test)       cmd_alerts_test ;;
     geo-block)         cmd_geo_block "$@" ;;
@@ -12728,6 +13037,8 @@ if [ "$cmd" = backup-run ]; then shift; cmd_backup_run "$@"; exit $?; fi
 if [ "$cmd" = mail-spool ]; then cmd_mail_spool; exit $?; fi
 # o envio de alertas só lê a configuração e escreve o histórico: nunca espera por outra operação
 if [ "$cmd" = alert-send ]; then shift; cmd_alert_send "$@"; exit $?; fi
+# o sentinela tem o seu próprio bloqueio: uma operação longa do painel nunca o atrasa
+if [ "$cmd" = sentinel-run ]; then cmd_sentinel_run; exit $?; fi
 # as atualizações têm bloqueio próprio: o instalador volta a chamar o mpanel durante a instalação
 if [ "$cmd" = update-run ]; then shift; cmd_update_run "$@"; exit $?; fi
 if [ "$cmd" = os-run ]; then shift; cmd_os_run "$@"; exit $?; fi
@@ -12781,7 +13092,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.9.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.10.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -13165,6 +13476,13 @@ alerts_tick(){ # médias do último minuto em milésimos: cpu ram disco
     echo "$sz" > "$p"
   fi
 }
+# o sentinela e o recolhedor vigiam-se um ao outro
+sentinel_watch(){
+  [ -f /etc/cron.d/minipainel-sentinel ] && [ -f "$DIR/sentinel.json" ] || return 0
+  local a on=0; a=$(( EPOCHSECONDS - $(stat -c %Y "$DIR/sentinel.json" 2>/dev/null || echo "$EPOCHSECONDS") ))
+  if [ "$a" -ge 300 ]; then on=1; systemctl restart cron >/dev/null 2>&1 || systemctl restart crond >/dev/null 2>&1; fi
+  al_cond sentinel "$on" "O sentinela não corre há $(( a / 60 )) min (o cron foi reiniciado)" "O sentinela voltou a correr"
+}
 # volume de email: 30 dias a aprender o normal; depois alerta acima de +MAIL_PCT%
 mail_vol_tick(){
   grep -q '^ENABLED=1$' /etc/minipainel/mail.conf 2>/dev/null || [ -f /etc/minipainel/mail-enabled ] || return 0
@@ -13282,6 +13600,7 @@ while :; do
     update_crons
     auth_guard
     alerts_tick $(( a_cpu / acc_n )) $(( a_mem / acc_n )) $(( a_disk / acc_n ))
+    sentinel_watch
     mail_vol_tick
     h=$(( EPOCHSECONDS / 3600 ))
     if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
@@ -13320,7 +13639,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.9.0
+#  mp-sendmail — IDDigital Hosting v2.10.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -13392,7 +13711,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.9.0
+#  mpanel-term — IDDigital Hosting v2.10.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -13408,13 +13727,16 @@ exec script -q -f -T "$LOG/$id.timing" -O "$LOG/$id.log" -c "TMOUT=900 exec bash
 MPTERM
 chown root:root /usr/local/sbin/mpanel-term; chmod 700 /usr/local/sbin/mpanel-term
 install -d -o root -g minipainel -m 2750 /var/log/minipainel/terminal
+printf '# IDDigital Hosting — sentinela: testa todos os serviços a cada minuto\n* * * * * root /usr/local/sbin/mpanel sentinel-run >/dev/null 2>&1\n' > /etc/cron.d/minipainel-sentinel
+chmod 644 /etc/cron.d/minipainel-sentinel
+if [ "$OS_FAMILY" = debian ]; then pkg_install_soft libfcgi-bin; else pkg_install_soft fcgi; fi
 printf '# IDDigital Hosting — gravações do terminal: guardar 90 dias\n45 4 * * * root find /var/log/minipainel/terminal -type f -mtime +90 -delete\n' > /etc/cron.d/minipainel-terminal
 chmod 644 /etc/cron.d/minipainel-terminal
 
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.9.0
+#  mpanel-cron — IDDigital Hosting v2.10.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
