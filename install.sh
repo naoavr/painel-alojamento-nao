@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Correções: tarefas do cron (Sentinela, IPs de confiança) não encontravam os comandos do sistema; terminal preso em "A iniciar".
+# NOTAS: Desempenho: Redis por site, cache no browser, Brotli, WebP automático e rede afinada (TCP BBR).
 # =============================================================================
-#  IDDigital Hosting v2.11.2 — instalador (MiniPainel)
+#  IDDigital Hosting v2.12.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.11.2.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.12.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.11.2"
+MP_VERSION="2.12.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -545,7 +545,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.11.2 — painel web (MiniPainel)
+ * IDDigital Hosting v2.12.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -553,7 +553,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.11.2';
+const MP_VERSION = '2.12.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1368,6 +1368,8 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .sn-days i{height:22px;border-radius:4px;background:var(--line)}.sn-days i.g{background:var(--ok)}.sn-days i.y{background:var(--warn)}.sn-days i.r{background:var(--err)}
 .sn-chk{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px 18px}
 @media (max-width:900px){.sn-row{grid-template-columns:1fr}}
+.dlg-sec{margin:18px 0 6px;font-size:14px;padding-top:14px;border-top:1px solid var(--line)}
+.infobox{background:color-mix(in srgb,var(--acc) 8%,var(--card));border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12.5px;line-height:1.6;margin:6px 0}
 .pr-sum{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px 24px}
 .pr-o{border:1px solid var(--line);border-radius:16px;padding:12px 14px}
 .pr-o .nm{margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
@@ -2072,7 +2074,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!valid_site($site)) { $bad('Site inválido.'); break; }
             $pc = post('cache'); $ppm = post('pm'); $pmc = post('maxch'); $psl = post('slow');
             if (!in_array($pc, ['0', '60', '300', '600', '1800', '3600'], true) || !in_array($ppm, ['ondemand', 'dynamic'], true) || !ctype_digit($pmc) || (int)$pmc < 2 || (int)$pmc > 200 || !in_array($psl, ['0', '1', '3', '5', '10'], true)) { $bad('Valores inválidos (máximo de processos entre 2 e 200).'); break; }
-            job_submit('site-perf', [$site, '--cache', $pc, '--pm', $ppm, '--max-children', $pmc, '--slowlog', $psl], 'Desempenho de ' . $site);
+            $prm = post('redis_mb'); $psd = post('static_days');
+            if (!in_array($prm, ['32', '64', '128', '256', '512', '1024'], true) || !in_array($psd, ['0', '7', '30', '365'], true)) { $bad('Valores inválidos.'); break; }
+            job_submit('site-perf', [$site, '--cache', $pc, '--pm', $ppm, '--max-children', $pmc, '--slowlog', $psl, '--redis', post('redis') === 'on' ? 'on' : 'off', '--redis-mem', $prm,
+                '--static-days', $psd, '--webp', post('webp') === 'off' ? 'off' : 'on', '--webp-auto', post('webp_auto') === '1' ? 'on' : 'off'], 'Desempenho de ' . $site);
+            break;
+        case 'site_webp':
+            if (!valid_site($site)) { $bad('Site inválido.'); break; }
+            job_submit('site-webp', [$site], 'Converter as imagens de ' . $site . ' em WebP');
+            break;
+        case 'net_tune':
+            job_submit('net-tune', [post('on') === 'off' ? 'off' : 'on'], 'Afinação de rede');
+            break;
+        case 'brotli':
+            job_submit('brotli', [post('on') === 'off' ? 'off' : 'on'], 'Compressão Brotli');
             break;
         case 'cache_purge':
             if (!valid_site($site)) { $bad('Site inválido.'); break; }
@@ -3795,6 +3810,17 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
 
 <?php endif; if ($dtab === 'servicos'): ?>
+      <?php $pg2 = is_array($state['perf'] ?? null) ? $state['perf'] : []; ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Rede e compressão</h2><p>Ajustes do servidor que tornam os sites mais rápidos para todos os visitantes.</p></div></div>
+        <div class="row-list">
+          <div class="item"><div class="grow"><div class="nm">Rede afinada (TCP BBR) <span class="pill <?= ($pg2['cc'] ?? '') === 'bbr' ? 'p-ok' : 'p-off' ?>"><?= h((string)($pg2['cc'] ?? '—')) ?></span></div><div class="mu">Controlo de congestionamento BBR e filas de ligação maiores: páginas mais rápidas sobretudo em redes móveis e visitantes distantes.</div></div>
+            <form method="post"><?= act_fields('net_tune', ['on' => !empty($pg2['net']) ? 'off' : 'on']) ?><button class="btn sm <?= !empty($pg2['net']) ? 'sec' : '' ?>" type="submit"><?= !empty($pg2['net']) ? 'Desligar' : 'Ligar' ?></button></form></div>
+          <div class="item"><div class="grow"><div class="nm">Compressão Brotli <span class="pill <?= !empty($pg2['brotli']) ? 'p-ok' : 'p-off' ?>"><?= !empty($pg2['brotli']) ? 'Ligada' : 'Desligada' ?></span></div><div class="mu">HTML, CSS e JS cerca de 15–20% mais pequenos do que com gzip (que continua ativo para os browsers sem Brotli).<?= empty($pg2['brotli_ok']) && empty($pg2['brotli']) ? ' O módulo é instalado ao ligar.' : '' ?></div></div>
+            <form method="post"><?= act_fields('brotli', ['on' => !empty($pg2['brotli']) ? 'off' : 'on']) ?><button class="btn sm <?= !empty($pg2['brotli']) ? 'sec' : '' ?>" type="submit"><?= !empty($pg2['brotli']) ? 'Desligar' : 'Ligar' ?></button></form></div>
+        </div>
+      </section>
+
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>phpMyAdmin</h2><p>Tempos e limites. Aumenta-os para importar ou exportar bases de dados grandes.</p></div></div>
@@ -4884,14 +4910,29 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       <label class="fld">Registar scripts lentos<select class="in" name="slow">
         <?php foreach (['0' => 'Não registar', '1' => 'Acima de 1 segundo', '3' => 'Acima de 3 segundos', '5' => 'Acima de 5 segundos', '10' => 'Acima de 10 segundos'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)$pf['slow'] === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?>
       </select><small>Mostra o ficheiro e a função que estava a correr quando o pedido demorou (Logs → PHP lento)</small></label>
+      <h4 class="dlg-sec">Redis (cache de objetos)</h4>
+      <div class="fgrid">
+        <label class="fld">Redis do site<select class="in" name="redis"><option value="off"<?= empty($pf['redis']) ? ' selected' : '' ?>>Desligado</option><option value="on"<?= !empty($pf['redis']) ? ' selected' : '' ?>>Ligado</option></select></label>
+        <label class="fld">Memória<select class="in" name="redis_mb"><?php foreach ([32, 64, 128, 256, 512, 1024] as $mb): ?><option value="<?= $mb ?>"<?= (int)($pf['redis_mb'] ?? 128) === $mb ? ' selected' : '' ?>><?= $mb ?> MB</option><?php endforeach; ?></select></label>
+      </div>
+      <?php if (!empty($pf['redis'])): ?><div class="infobox"><b>Ligação:</b> socket <span class="mono"><?= h((string)$pf['sock']) ?></span> (sem password; só este site lhe chega).<br>
+        <b>WordPress</b> (plugin "Redis Object Cache"), no <span class="mono">wp-config.php</span>:<br><span class="mono">define('WP_REDIS_SCHEME', 'unix');<br>define('WP_REDIS_PATH', '<?= h((string)$pf['sock']) ?>');</span><br>
+        <b>PrestaShop / OpenCart / outros:</b> no módulo ou na configuração de cache, Redis com o caminho da socket acima.</div><?php else: ?><small class="mu">Guarda em memória as consultas repetidas da aplicação (WordPress, WooCommerce, PrestaShop…). Cada site tem o seu Redis, isolado dos outros.</small><?php endif; ?>
+      <h4 class="dlg-sec">Ficheiros estáticos</h4>
+      <div class="fgrid">
+        <label class="fld">Cache no browser<select class="in" name="static_days"><?php foreach (['0' => 'Desligada', '7' => '7 dias', '30' => '30 dias', '365' => '1 ano'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)($pf['static_days'] ?? 30) === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select><small>Imagens, CSS, JS e fontes não voltam a ser descarregados por quem regressa ao site</small></label>
+        <label class="fld">WebP automático<select class="in" name="webp"><option value="on"<?= !empty($pf['webp']) ? ' selected' : '' ?>>Sim</option><option value="off"<?= empty($pf['webp']) ? ' selected' : '' ?>>Não</option></select><small>Se existir imagem.jpg.webp, é entregue aos browsers que o suportam</small></label>
+      </div>
+      <label class="chk"><input type="checkbox" name="webp_auto" value="1"<?= !empty($pf['webp_auto']) ? ' checked' : '' ?>> Converter as imagens novas em WebP todas as noites</label>
     </div>
     <div class="dlg-f">
-      <?php if ((int)$pf['cache'] > 0): ?><button class="btn sec" type="submit" form="cache-purge-<?= h($n) ?>" style="margin-right:auto">Limpar cache</button><?php endif; ?>
+      <div style="margin-right:auto;display:flex;gap:8px;flex-wrap:wrap"><?php if ((int)$pf['cache'] > 0): ?><button class="btn sec" type="submit" form="cache-purge-<?= h($n) ?>">Limpar cache</button><?php endif; ?><button class="btn sec" type="submit" form="webp-now-<?= h($n) ?>" title="Converte todas as imagens JPG e PNG do site (pode demorar)">Converter imagens</button></div>
       <button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button>
     </div>
   </form>
 </dialog>
 <form method="post" id="cache-purge-<?= h($n) ?>" style="display:none"><?= act_fields('cache_purge', ['site' => $n]) ?></form>
+<form method="post" id="webp-now-<?= h($n) ?>" style="display:none"><?= act_fields('site_webp', ['site' => $n]) ?></form>
 <dialog class="drawer" id="dlg-ftp-<?= h($n) ?>">
   <form method="post" autocomplete="off">
     <?= act_fields('site_ftp', ['site' => $n]) ?>
@@ -8033,7 +8074,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.11.2 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.12.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -8473,12 +8514,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.11.2
+#  mpanel — IDDigital Hosting CLI v2.12.0
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.11.2"
+MP_VERSION="2.12.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -8682,6 +8723,7 @@ write_nginx(){
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
+$(perf_static_loc "$n")
 
     location ~ [^/]\.php(/|\$) {
         fastcgi_split_path_info ^(.+?\.php)(/.*)\$;
@@ -8913,6 +8955,7 @@ cmd_site_del(){
   rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
   rm -rf "/etc/cron.d/minipainel-$n" "${CRON_DIR:?}/$n" "$CRON_DIR/$n.json"; touch /etc/cron.d 2>/dev/null
   rm -rf "${SITE_LOGS:?}/$n" "${CACHE_ROOT:?}/$n"; logs_rotate_conf
+  [ "$(site_get "$n" REDIS)" = 1 ] && rds_disable "$n"
   rm -rf "${MSPOOL:?}/$n" "${MLIB:?}/rejected/$n" "$MLIB/rejected/$n.log" "$MLIB/sent/$n"
   if [ -s "$DBMAP" ]; then jq --arg s "$n" 'with_entries(select(.value != $s))' "$DBMAP" > "$DBMAP.tmp" && mv -f "$DBMAP.tmp" "$DBMAP"; fi
   sleep 1
@@ -8955,6 +8998,7 @@ cmd_site_php(){
   rm -f "$(php_pool_dir "$ov")/mp-$n.conf"
   apply_php "$ov" || warn "Verifica o PHP-FPM $ov."
   site_set "$n" PHP "$nv"
+  if [ "$(site_get "$n" REDIS)" = 1 ]; then php_has_ext "$nv" redis || { pkg_install_soft "$(php_ext_pkg "$nv" redis)"; apply_php "$nv" >/dev/null 2>&1; }; fi
   cron_write_site "$n"
   echo "Site '$n' passou de PHP $ov para PHP $nv."
   return 0
@@ -12674,6 +12718,7 @@ t_site(){ # porta
   local c; c=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "http://127.0.0.1:$1/" 2>/dev/null)
   case "$c" in 000) echo "Sem resposta em 15 s"; return 1 ;; 5*) echo "A página inicial deu erro $c (erro da aplicação ou do PHP)"; return 1 ;; *) echo "Página inicial: HTTP $c" ;; esac
 }
+t_rds(){ local r; [ -S "$1" ] || { echo "A socket do Redis não existe"; return 1; }; r=$(redis-cli -s "$1" ping 2>&1); [ "$r" = PONG ] && echo "Responde" || { echo "Não responde: ${r:0:80}"; return 1; }; }
 t_redis(){ local r; r=$(redis-cli -a "$(cat /etc/minipainel/redis.pw 2>/dev/null)" --no-auth-warning ping 2>&1); [ "$r" = PONG ] && echo "Responde" || { echo "Não responde: ${r:0:80}"; return 1; }; }
 t_unbound(){ dig +short +time=3 +tries=1 @127.0.0.1 localhost A >/dev/null 2>&1 && echo "Responde" || { echo "O resolver local não responde"; return 1; }; }
 t_queue(){ local n; n=$(postqueue -j 2>/dev/null | wc -l); [ "$n" -lt "$(snget QUEUE_MAX 300)" ] && echo "$n mensagens na fila" || { echo "$n mensagens na fila (acima de $(snget QUEUE_MAX 300))"; return 2; }; }
@@ -12716,6 +12761,7 @@ cmd_sentinel_run(){
     v=$(site_get "$n" PHP)
     sn_check "site:$n:php" "Sites" "$n — PHP $v" "$(php_service "$v")" t_fpm "$(php_sock "$v" "$n")" "$WWW_ROOT/$n/public_html"
     [ "$(snget SITES 1)" = 1 ] && sn_check "site:$n:web" "Sites" "$n — página inicial" - t_site "$(site_get "$n" PORT)"
+    [ "$(site_get "$n" REDIS)" = 1 ] && sn_check "site:$n:redis" "Sites" "$n — Redis" "minipainel-redis@$n" t_rds "$(rds_sock "$n")"
     [ "$(site_get "$n" SSL)" = le ] && sn_check "cert:$n" "Certificados" "$n" - t_cert "mp-$n"
   done
   # email
@@ -12821,7 +12867,16 @@ map $request_method $mp_nc_m { default 1; GET 0; HEAD 0; }
 map $http_cookie $mp_nc_c { default 0; "~*(wordpress_logged_in|wordpress_sec|wp-postpass|comment_author|woocommerce_items_in_cart|woocommerce_cart_hash|wp_woocommerce_session|edd_items_in_cart|PrestaShop-|OCSESSID|PHPSESSID|mp_nocache)" 1; }
 map $request_uri $mp_nc_u { default 0; "~*(/wp-admin|/wp-login\.php|/xmlrpc\.php|/wp-json/|/wc-api/|/cart|/carrinho|/checkout|/finalizar|/my-account|/minha-conta|/admin|/administrator|route=(checkout|account)|add-to-cart=|preview=true|/feed)" 1; }
 map "$mp_nc_m$mp_nc_c$mp_nc_u" $mp_nocache { default 1; "000" 0; }
+# WebP: entregar imagem.jpg.webp (se existir) a browsers que o aceitem
+map $http_accept $mp_webp { default ""; "~*image/webp" ".webp"; }
+gzip_comp_level 5;
+gzip_min_length 256;
+gzip_proxied any;
 EOF
+    if [ "$(srv_get BROTLI 0)" = 1 ] && brotli_ok; then
+      echo "brotli on; brotli_static on; brotli_comp_level 5; brotli_min_length 256;"
+      echo "brotli_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/rss+xml image/svg+xml application/wasm font/ttf font/otf application/vnd.ms-fontobject;"
+    fi
     for n in $(site_names); do
       [ "$(site_get "$n" CACHE)" -gt 0 ] 2>/dev/null || continue
       install -d -o "$WEB_USER" -g "$WEB_GROUP" -m 750 "$CACHE_ROOT/$n"
@@ -12845,12 +12900,18 @@ perf_ngx_cache(){ # site -> linhas da cache para o bloco PHP (vazio se desligada
         add_header X-Cache \$upstream_cache_status always;
 EOF
 }
-cmd_site_perf(){ # site [--cache 0|60|600|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
-  local n="${1:-}" c pm mc sl; [ $# -gt 0 ] && shift
+cmd_site_perf(){ # site [--cache …] [--pm …] [--max-children N] [--slowlog S] [--redis on|off] [--redis-mem MB] [--static-days D] [--webp on|off] [--webp-auto on|off]
+  local n="${1:-}" c pm mc sl rd rm sd wp wa; [ $# -gt 0 ] && shift
   valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
   c=$(site_get "$n" CACHE); pm=$(site_get "$n" PM); mc=$(site_get "$n" MAXCH); sl=$(site_get "$n" SLOW)
+  rd=$(site_get "$n" REDIS); rm=$(site_get "$n" REDIS_MB); sd=$(site_get "$n" STATIC_DAYS); wp=$(site_get "$n" WEBP); wa=$(site_get "$n" WEBP_AUTO)
   while [ $# -gt 0 ]; do
     case "$1" in
+      --redis) case "${2:-}" in on) rd=1 ;; off) rd=0 ;; *) die "--redis on|off" ;; esac; shift 2 || shift ;;
+      --redis-mem) rm="${2:-}"; shift 2 || shift ;;
+      --static-days) sd="${2:-}"; shift 2 || shift ;;
+      --webp) case "${2:-}" in on) wp=1 ;; off) wp=0 ;; *) die "--webp on|off" ;; esac; shift 2 || shift ;;
+      --webp-auto) case "${2:-}" in on) wa=1 ;; off) wa=0 ;; *) die "--webp-auto on|off" ;; esac; shift 2 || shift ;;
       --cache) c="${2:-}"; shift 2 || shift ;; --pm) pm="${2:-}"; shift 2 || shift ;;
       --max-children) mc="${2:-}"; shift 2 || shift ;; --slowlog) sl="${2:-}"; shift 2 || shift ;;
       *) die "Opção desconhecida: $1" ;;
@@ -12861,12 +12922,19 @@ cmd_site_perf(){ # site [--cache 0|60|600|3600] [--pm ondemand|dynamic] [--max-c
   [[ "$pm" =~ ^(ondemand|dynamic)$ ]] || die "Processos: ondemand (a pedido) ou dynamic (sempre prontos)."
   [[ "$mc" =~ ^[0-9]{1,3}$ ]] && [ "$mc" -ge 2 ] && [ "$mc" -le 200 ] || die "Máximo de processos entre 2 e 200."
   [[ "$sl" =~ ^[0-9]{1,2}$ ]] && [ "$sl" -le 60 ] || die "Registo de scripts lentos: 0 (desligado) a 60 segundos."
+  rd=${rd:-0}; rm=${rm:-128}; sd=${sd:-30}; wp=${wp:-1}; wa=${wa:-0}
+  [[ "$rm" =~ ^(32|64|128|256|512|1024)$ ]] || die "Memória do Redis: 32, 64, 128, 256, 512 ou 1024 MB."
+  [[ "$sd" =~ ^(0|7|30|365)$ ]] || die "Cache no browser: 0 (desligada), 7, 30 ou 365 dias."
   site_set "$n" CACHE "$c"; site_set "$n" PM "$pm"; site_set "$n" MAXCH "$mc"; site_set "$n" SLOW "$sl"
+  site_set "$n" STATIC_DAYS "$sd"; site_set "$n" WEBP "$wp"; site_set "$n" WEBP_AUTO "$wa"
+  if [ "$rd" = 1 ]; then rds_enable "$n" "$rm"; site_set "$n" REDIS 1; site_set "$n" REDIS_MB "$rm"
+  elif [ "$(site_get "$n" REDIS)" = 1 ]; then rds_disable "$n"; site_set "$n" REDIS 0; fi
   write_pool "$n" "$(site_get "$n" PHP)"; apply_php "$(site_get "$n" PHP)"
   write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"
   [ "$c" = 0 ] && rm -rf "${CACHE_ROOT:?}/$n"
   apply_nginx || die "Configuração do nginx inválida."
-  echo "Desempenho de $n: cache $([ "$c" = 0 ] && echo desligada || echo "de $c s"); processos PHP $([ "$pm" = dynamic ] && echo 'sempre prontos' || echo 'a pedido') (máx. $mc); scripts lentos $([ "$sl" = 0 ] && echo 'não registados' || echo "registados acima de $sl s")."
+  [ "$rd" = 1 ] && echo "Redis de $n ativo ($rm MB): socket $(rds_sock "$n")."
+  echo "Desempenho de $n: cache $([ "$c" = 0 ] && echo desligada || echo "de $c s"); estáticos $([ "$sd" = 0 ] && echo 'sem cache no browser' || echo "em cache no browser $sd dias")$([ "$wp" = 1 ] && echo ', WebP automático'); processos PHP $([ "$pm" = dynamic ] && echo 'sempre prontos' || echo 'a pedido') (máx. $mc); scripts lentos $([ "$sl" = 0 ] && echo 'não registados' || echo "registados acima de $sl s")."
   return 0
 }
 cmd_perf_sync(){ # reescreve os pools PHP de todos os sites (atualizações)
@@ -12974,6 +13042,138 @@ cmd_db_slow_report(){ # resumo das consultas lentas para o painel
   echo "Relatório de consultas lentas atualizado."; return 0
 }
 
+pkg_install_soft(){ # pacotes… — instala um a um; os que não existirem são ignorados
+  local p
+  if [ "$OS_FAMILY" = debian ]; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@" >/dev/null 2>&1 && return 0
+    for p in "$@"; do DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$p" >/dev/null 2>&1; done
+  else
+    dnf install -y -q "$@" >/dev/null 2>&1 && return 0
+    for p in "$@"; do dnf install -y -q "$p" >/dev/null 2>&1; done
+  fi
+  return 0
+}
+# ---------- Redis por site (cache de objetos) ----------
+RDS_CONF=/etc/minipainel/redis
+rds_bin(){ command -v redis-server 2>/dev/null || echo /usr/bin/redis-server; }
+rds_sock(){ echo "$WWW_ROOT/$1/tmp/redis.sock"; }
+rds_unit_write(){
+  cat > /etc/systemd/system/minipainel-redis@.service <<EOF
+[Unit]
+Description=IDDigital Hosting — Redis do site %i
+After=network.target
+
+[Service]
+Type=simple
+User=mp_%i
+Group=mp_%i
+UMask=0077
+ExecStart=$(rds_bin) $RDS_CONF/%i.conf
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload >/dev/null 2>&1
+}
+php_ext_pkg(){ # versão extensão -> pacote
+  if [ "$OS_FAMILY" = debian ]; then echo "php$1-$2"; else echo "php$(php_vv "$1")-php-pecl-$2"; fi
+}
+rds_enable(){ # site MB
+  local n=$1 mb=$2 v; v=$(site_get "$n" PHP)
+  command -v redis-server >/dev/null 2>&1 || { if [ "$OS_FAMILY" = debian ]; then pkg_install_soft redis-server; else pkg_install_soft redis; fi; }
+  command -v redis-server >/dev/null 2>&1 || die "Não foi possível instalar o Redis."
+  php_has_ext "$v" redis || pkg_install_soft "$(php_ext_pkg "$v" redis)"
+  install -d -m 755 "$RDS_CONF"; install -d -o "mp_$n" -g "mp_$n" -m 2770 "$WWW_ROOT/$n/tmp"
+  printf '# IDDigital Hosting — Redis do site %s (gerado pelo painel)\nport 0\nunixsocket %s\nunixsocketperm 600\ndaemonize no\nmaxmemory %smb\nmaxmemory-policy allkeys-lru\nsave ""\nappendonly no\ndir %s\nlogfile ""\ndatabases 4\n' \
+    "$n" "$(rds_sock "$n")" "$mb" "$WWW_ROOT/$n/tmp" > "$RDS_CONF/$n.conf"
+  chmod 644 "$RDS_CONF/$n.conf"
+  rds_unit_write
+  systemctl enable "minipainel-redis@$n" >/dev/null 2>&1; systemctl restart "minipainel-redis@$n" >/dev/null 2>&1
+  apply_php "$v" >/dev/null 2>&1
+}
+rds_disable(){ local n=$1; systemctl disable --now "minipainel-redis@$n" >/dev/null 2>&1; rm -f "$RDS_CONF/$n.conf" "$(rds_sock "$n")"; }
+php_has_ext(){ "$(php_cli "$1")" -m 2>/dev/null | grep -qix "$2"; }
+# ---------- WebP ----------
+webp_bin(){ command -v cwebp 2>/dev/null; }
+cmd_site_webp(){ # site [--quiet] — converte .jpg/.jpeg/.png em ficheiro.ext.webp (com o utilizador do site)
+  local n="${1:-}" q="${2:-}" c
+  valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
+  [ -n "$(webp_bin)" ] || { if [ "$OS_FAMILY" = debian ]; then pkg_install_soft webp; else pkg_install_soft libwebp-tools; fi; }
+  [ -n "$(webp_bin)" ] || die "Não foi possível instalar o conversor de WebP (cwebp)."
+  c=$(runuser -u "mp_$n" -- nice -n 15 ionice -c3 bash -c '
+    n=0; s=0
+    while IFS= read -r -d "" f; do
+      [ "$(stat -c %s "$f")" -le 20971520 ] || continue
+      if [ ! -e "$f.webp" ] || [ "$f" -nt "$f.webp" ]; then
+        if timeout 60 "$1" -quiet -q 82 -metadata none "$f" -o "$f.webp.tmp" 2>/dev/null; then
+          if [ "$(stat -c %s "$f.webp.tmp")" -lt "$(stat -c %s "$f")" ]; then mv -f "$f.webp.tmp" "$f.webp"; n=$((n+1)); else rm -f "$f.webp.tmp"; s=$((s+1)); fi
+        else rm -f "$f.webp.tmp"; fi
+      fi
+    done < <(find "$2" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \) -print0 2>/dev/null)
+    echo "$n $s"' _ "$(webp_bin)" "$WWW_ROOT/$n/public_html")
+  [ "$q" = --quiet ] || echo "WebP de $n: ${c%% *} imagens convertidas; ${c##* } ignoradas (o WebP ficava maior)."
+  return 0
+}
+cmd_webp_nightly(){ local n; for n in $(site_names); do [ "$(site_get "$n" WEBP_AUTO)" = 1 ] && cmd_site_webp "$n" --quiet; done; return 0; }
+# ---------- rede (TCP BBR) e compressão ----------
+NET_SYSCTL=/etc/sysctl.d/90-minipainel-net.conf
+cmd_net_tune(){ # on|off
+  case "${1:-on}" in
+    off) rm -f "$NET_SYSCTL"; sysctl -q -w net.ipv4.tcp_congestion_control=cubic >/dev/null 2>&1; srv_set NET_TUNE 0; echo "Afinação de rede desligada (volta ao normal no próximo arranque)."; return 0 ;;
+    on) ;; *) die "Usa: mpanel net-tune on|off" ;;
+  esac
+  modprobe tcp_bbr >/dev/null 2>&1; echo tcp_bbr > /etc/modules-load.d/minipainel-bbr.conf 2>/dev/null
+  local k v ok=0 fail=0 line
+  { echo "# IDDigital Hosting — rede (gerado pelo painel)"
+    sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr && { echo "net.core.default_qdisc = fq"; echo "net.ipv4.tcp_congestion_control = bbr"; }
+    printf 'net.core.somaxconn = 4096\nnet.ipv4.tcp_max_syn_backlog = 8192\nnet.ipv4.tcp_fastopen = 3\nnet.ipv4.tcp_slow_start_after_idle = 0\nnet.ipv4.tcp_mtu_probing = 1\n'; } > "$NET_SYSCTL"
+  while IFS= read -r line; do
+    [[ "$line" == \#* || -z "$line" ]] && continue
+    k=${line%% =*}; v=${line#*= }
+    if sysctl -q -w "$k=$v" >/dev/null 2>&1; then ok=$((ok+1)); else fail=$((fail+1)); sed -i "\\|^$k = |d" "$NET_SYSCTL"; fi   # num contentor alguns valores não se podem mudar
+  done < "$NET_SYSCTL"
+  srv_set NET_TUNE 1
+  echo "Rede afinada: $ok parâmetros aplicados$([ "$fail" -gt 0 ] && echo ", $fail não permitidos neste sistema"); controlo de congestionamento: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)."
+  return 0
+}
+brotli_ok(){ [ -n "$(ls /etc/nginx/modules-enabled/*brotli* /usr/share/nginx/modules/*brotli* 2>/dev/null)" ]; }
+cmd_brotli(){ # on|off
+  case "${1:-on}" in
+    on) brotli_ok || { if [ "$OS_FAMILY" = debian ]; then pkg_install_soft libnginx-mod-http-brotli-filter libnginx-mod-http-brotli-static; else pkg_install_soft nginx-mod-brotli; fi; }
+        brotli_ok || die "O módulo Brotli do nginx não está disponível neste sistema (fica só o gzip)."
+        srv_set BROTLI 1 ;;
+    off) srv_set BROTLI 0 ;;
+    *) die "Usa: mpanel brotli on|off" ;;
+  esac
+  perf_ngx_write; apply_nginx || { srv_set BROTLI 0; perf_ngx_write; apply_nginx; die "O nginx recusou a configuração do Brotli; foi desligado."; }
+  echo "Brotli $([ "$(srv_get BROTLI 0)" = 1 ] && echo ligado || echo desligado)."; return 0
+}
+perf_static_loc(){ # site -> bloco dos ficheiros estáticos (cache no browser e WebP)
+  local n=$1 d w; d=$(site_get "$n" STATIC_DAYS); [[ "$d" =~ ^[0-9]+$ ]] || d=30; w=$(site_get "$n" WEBP); [ -n "$w" ] || w=1
+  [ "$d" -gt 0 ] || [ "$w" = 1 ] || return 0
+  if [ "$w" = 1 ]; then cat <<EOF
+    location ~* \\.(?:jpe?g|png)\$ {
+        add_header Vary Accept;
+$([ "$d" -gt 0 ] && printf '        expires %sd;\n        add_header Cache-Control "public";\n' "$d")
+        try_files \$uri\$mp_webp \$uri \$uri/ /index.php?\$query_string;
+    }
+EOF
+  fi
+  [ "$d" -gt 0 ] && cat <<EOF
+    location ~* \\.(?:css|js|mjs|woff2?|ttf|otf|eot|svg|ico|gif|webp|avif|mp4|webm|pdf)\$ {
+        expires ${d}d;
+        add_header Cache-Control "public";
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+EOF
+  return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -12982,6 +13182,7 @@ write_state(){
         --arg mem "$(lim_get "$n" MEM)" --arg up "$(lim_get "$n" UPLOAD)" --arg ex "$(lim_get "$n" EXEC)" \
         --arg it "$(lim_get "$n" INPUT_TIME)" --arg iv "$(lim_get "$n" INPUT_VARS)" --arg de "$(lim_get "$n" DISPLAY_ERRORS)" \
         --arg doms "$(site_get "$n" DOMAINS)" --arg ssl "$(site_get "$n" SSL)" --arg hs "$(site_get "$n" HTTPS)" --arg www "$(site_get "$n" WWW)" \
+        --arg prd "$(site_get "$n" REDIS)" --arg prm "$(site_get "$n" REDIS_MB)" --arg psd "$(site_get "$n" STATIC_DAYS)" --arg pwp "$(site_get "$n" WEBP)" --arg pwa "$(site_get "$n" WEBP_AUTO)" --arg psk "$(rds_sock "$n")" \
         --arg pc "$(site_get "$n" CACHE)" --arg ppm "$(site_get "$n" PM)" --arg pmc "$(site_get "$n" MAXCH)" --arg psl "$(site_get "$n" SLOW)" \
         --arg ftp "$(site_get "$n" FTP)" --arg sexp "$(cert_expiry "mp-$n")" --arg cok "$( [ -n "$(site_get "$n" DOMAINS)" ] && [ "$(site_get "$n" SSL)" != none ] && cert_files "mp-$n" >/dev/null && echo 1)" \
         '{name:$name, port:($port|tonumber), php:$php, enabled:($en=="1"), root:$root,
@@ -12989,7 +13190,8 @@ write_state(){
                   input_time:($it|tonumber), input_vars:($iv|tonumber), display_errors:($de=="1")},
           domains:$doms, ssl:(if $ssl == "" then "none" else $ssl end), https:(if $hs == "" then "1" else $hs end), www:(if $www == "" then "keep" else $www end),
           ssl_exp:(if $sexp == "" then null else ($sexp|tonumber) end), https_ok:($cok == "1"), ftp:($ftp == "1"),
-          perf:{cache:(($pc | tonumber?) // 0), pm:(if $ppm == "" then "ondemand" else $ppm end), maxch:(($pmc | tonumber?) // 10), slow:(($psl | tonumber?) // 5)}}'
+          perf:{cache:(($pc | tonumber?) // 0), pm:(if $ppm == "" then "ondemand" else $ppm end), maxch:(($pmc | tonumber?) // 10), slow:(($psl | tonumber?) // 5),
+                redis:($prd == "1"), redis_mb:(($prm | tonumber?) // 128), static_days:(($psd | tonumber?) // 30), webp:($pwp != "0"), webp_auto:($pwa == "1"), sock:$psk}}'
     done | jq -cs '.')
   pkg_cache_load
   phps=$(for v in $(php_installed); do
@@ -13050,6 +13252,7 @@ write_state(){
     --argjson jal "$(jv alerts "$(alerts_state_json 2>/dev/null)" '{}')" \
     --arg snr "$(snget REPAIR 1)" --arg sns "$(snget SITES 1)" --arg sno "$(snget OFF '')" \
     --arg pf_opm "$(srv_get OPC_MEM auto)" --arg pf_opa "$(opc_mem_auto)" --arg pf_opr "$(srv_get OPC_REVAL 60)" --arg pf_dbp "$(srv_get DB_BP auto)" --arg pf_dba "$(db_bp_auto)" \
+    --arg pf_net "$(srv_get NET_TUNE 0)" --arg pf_cc "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" --arg pf_br "$(srv_get BROTLI 0)" --arg pf_bro "$(brotli_ok && echo 1 || echo 0)" \
     --arg pf_dbs "$(srv_get DB_SLOW 1)" --arg pf_dbt "$(srv_get DB_SLOW_T 2)" --arg pf_ram "$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)" \
     --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
     --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
@@ -13068,7 +13271,8 @@ write_state(){
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
       dns:$jdns, log_days:($ldays|tonumber), geo:$jgeo, alerts:$jal,
       sentinel:{repair:($snr == "1"), sites:($sns == "1"), off:$sno},
-      perf:{opc_mem:$pf_opm, opc_mem_auto:($pf_opa|tonumber), opc_reval:($pf_opr|tonumber), db_bp:$pf_dbp, db_bp_auto:($pf_dba|tonumber), db_slow:($pf_dbs == "1"), db_slow_t:($pf_dbt|tonumber), ram_mb:($pf_ram|tonumber)},
+      perf:{opc_mem:$pf_opm, opc_mem_auto:($pf_opa|tonumber), opc_reval:($pf_opr|tonumber), db_bp:$pf_dbp, db_bp_auto:($pf_dba|tonumber), db_slow:($pf_dbs == "1"), db_slow_t:($pf_dbt|tonumber), ram_mb:($pf_ram|tonumber),
+            net:($pf_net == "1"), cc:$pf_cc, brotli:($pf_br == "1"), brotli_ok:($pf_bro == "1")},
       protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
@@ -13102,7 +13306,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -13120,7 +13324,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.11.2 (mpanel)
+IDDigital Hosting — CLI v2.12.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -13163,6 +13367,10 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
 Desempenho
   site-perf <site> [--cache 0|60|300|600|1800|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
   cache-purge <site>                   limpa a cache de página do site
+  site-perf … [--redis on|off] [--redis-mem MB] [--static-days 0|7|30|365] [--webp on|off] [--webp-auto on|off]
+  site-webp <site>                     converte as imagens JPG/PNG do site em WebP (imagem.jpg.webp)
+  net-tune on|off                      afinação de rede (TCP BBR, filas maiores)
+  brotli on|off                        compressão Brotli no nginx (além do gzip)
   opcache-settings [--memory auto|MB] [--revalidate S] · opcache-reset
   db-tune [--buffer auto|MB] [--slow on|off] [--slow-time S]   afina o MariaDB (reinicia-o; repõe se falhar)
   db-slow-report                       resume as consultas lentas para o painel
@@ -13364,6 +13572,10 @@ dispatch(){
     site-perf)         cmd_site_perf "$@" ;;
     cache-purge)       cmd_cache_purge "$@" ;;
     perf-sync)         cmd_perf_sync ;;
+    site-webp)         cmd_site_webp "$@" ;;
+    webp-nightly)      cmd_webp_nightly ;;
+    net-tune)          cmd_net_tune "$@" ;;
+    brotli)            cmd_brotli "$@" ;;
     opcache-settings)  cmd_opcache_settings "$@" ;;
     opcache-reset)     cmd_opcache_reset ;;
     db-tune)           cmd_db_tune "$@" ;;
@@ -13471,7 +13683,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.11.2
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.12.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -14019,7 +14231,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.11.2
+#  mp-sendmail — IDDigital Hosting v2.12.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -14091,7 +14303,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.11.2
+#  mpanel-term — IDDigital Hosting v2.12.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -14116,7 +14328,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.11.2
+#  mpanel-cron — IDDigital Hosting v2.12.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -14289,6 +14501,9 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel conf-lock >/dev/null 2>&1 || true
 /usr/local/sbin/mpanel opcache-settings >/dev/null 2>&1 || warn "Não foi possível configurar o OPcache."
 /usr/local/sbin/mpanel perf-sync >/dev/null 2>&1 || true
+grep -q '^NET_TUNE=' /etc/minipainel/server.conf 2>/dev/null || /usr/local/sbin/mpanel net-tune on >/dev/null 2>&1 || true
+grep -q '^BROTLI=' /etc/minipainel/server.conf 2>/dev/null || /usr/local/sbin/mpanel brotli on >/dev/null 2>&1 || warn "Brotli não disponível neste sistema (fica o gzip)."
+printf '# IDDigital Hosting — converte imagens novas em WebP nos sites que o pedem\n40 3 * * * root /usr/local/sbin/mpanel webp-nightly >/dev/null 2>&1\n' > /etc/cron.d/minipainel-webp; chmod 644 /etc/cron.d/minipainel-webp
 if [ ! -f /etc/mysql/mariadb.conf.d/90-minipainel.cnf ] && [ ! -f /etc/my.cnf.d/90-minipainel.cnf ]; then
   say "A afinar o MariaDB à memória do servidor..."; /usr/local/sbin/mpanel db-tune | tail -1 || warn "Não foi possível afinar o MariaDB (a configuração anterior foi mantida)."
 fi
