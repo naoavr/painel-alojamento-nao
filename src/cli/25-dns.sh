@@ -27,7 +27,7 @@ dns_write_zone(){ # gera o ficheiro de zona, verifica-o e só então o ativa
   {
     printf '; IDDigital Hosting — zona %s (gerada pelo painel; não editar à mão)\n$ORIGIN %s.\n$TTL %s\n' "$z" "$z" "$(dns_get DEF_TTL 3600)"
     printf '@ IN SOA %s %s ( %s %s %s %s %s )\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$hm")" "$serial" "$(dns_get SOA_REFRESH 10800)" "$(dns_get SOA_RETRY 3600)" "$(dns_get SOA_EXPIRE 1209600)" "$(dns_get SOA_MIN 3600)"
-    printf '@ IN NS %s\n@ IN NS %s\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$ns2")"
+    local nsx; while IFS= read -r nsx; do [ -n "$nsx" ] && printf '@ IN NS %s\n' "$(dns_fqdn "$nsx")"; done < <(dns_ns_list)
     jq -r '.records[] | [.name, (if (.ttl // 0) >= 60 then (.ttl|tostring) else "-" end), .type, (.prio // 0 | tostring), .value] | @tsv' <<<"$j" | while IFS=$'\t' read -r n t ty pr v; do
       [ "$t" = "-" ] && t=""   # TTL automático: usa o $TTL da zona (um campo vazio deslocaria as colunas)
       case "$ty" in
@@ -50,12 +50,77 @@ dns_write_zone(){ # gera o ficheiro de zona, verifica-o e só então o ativa
   install -o root -g nsd -m 640 "$tmp" "$f"; rm -f "$tmp"
   return 0
 }
+# ---------- DNS secundário externo (ex.: Hurricane Electric) ----------
+dns_sec_on(){ [ -n "$(dns_get SEC_IPS '')" ]; }
+dns_ns_list(){ # nameservers da zona e da delegação: ns1 do painel, ns2 (sem secundário) e os do secundário
+  local n
+  echo "$(dns_get NS1)"
+  if ! dns_sec_on || [ "$(dns_get SEC_KEEP_NS2 0)" = 1 ]; then echo "$(dns_get NS2)"; fi
+  if dns_sec_on; then for n in $(dns_get SEC_NS ''); do echo "$n"; done; fi
+}
+dns_nsd_outgoing(){ # o outgoing-interface só é válido dentro das regras da zona: nunca no server: do nsd.conf
+  [ -f /etc/nsd/nsd.conf ] && sed -i '/^    outgoing-interface:/d' /etc/nsd/nsd.conf
+  return 0
+}
+cmd_dns_secondary(){ # --provider he|custom|off [--ips "…"] [--notify "…"] [--ns "…"] [--tsig on|off] [--keep-ns2 on|off] [--new-key]
+  local prov="" ips ntf nss tsig kn2 newkey=0 a
+  dns_need
+  ips=$(dns_get SEC_IPS ''); ntf=$(dns_get SEC_NOTIFY ''); nss=$(dns_get SEC_NS ''); tsig=$(dns_get SEC_TSIG 1); kn2=$(dns_get SEC_KEEP_NS2 0)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --provider) prov="${2:-}"; shift 2 || shift ;;
+      --ips) ips="${2:-}"; shift 2 || shift ;;
+      --notify) ntf="${2:-}"; shift 2 || shift ;;
+      --ns) nss="${2:-}"; shift 2 || shift ;;
+      --tsig) case "${2:-}" in on) tsig=1 ;; off) tsig=0 ;; *) die "--tsig on|off" ;; esac; shift 2 || shift ;;
+      --keep-ns2) case "${2:-}" in on) kn2=1 ;; off) kn2=0 ;; *) die "--keep-ns2 on|off" ;; esac; shift 2 || shift ;;
+      --new-key) newkey=1; shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  case "$prov" in
+    off) for a in SEC_PROVIDER SEC_IPS SEC_NOTIFY SEC_NS; do dns_set "$a" ""; done
+         local z; while IFS= read -r z; do [ -n "$z" ] && dns_bump "$z" "$(dns_load "$z")" >/dev/null 2>&1; done < <(dns_zones)
+         dns_apply; echo "DNS secundário desligado: as zonas voltam a ter só os nameservers deste servidor."; return 0 ;;
+    he) ips="216.218.133.2 2001:470:600::2"; ntf="216.218.133.2"; [ -n "$nss" ] && [ "$(dns_get SEC_PROVIDER '')" = he ] || nss="ns2.he.net ns3.he.net ns4.he.net ns5.he.net" ;;
+    custom|"") prov=${prov:-$(dns_get SEC_PROVIDER custom)} ;;
+    *) die "Serviço: he (Hurricane Electric), custom ou off." ;;
+  esac
+  for a in $ips $ntf; do fw_ip_valid "$a" || die "IP inválido: $a"; done
+  for a in $nss; do [[ "$a" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "Nameserver inválido: $a"; done
+  [ -n "$ips" ] && [ -n "$nss" ] || die "Indica os IPs que copiam as zonas e os nameservers do serviço."
+  dns_set SEC_PROVIDER "$prov"; dns_set SEC_IPS "$ips"; dns_set SEC_NOTIFY "${ntf:-$ips}"; dns_set SEC_NS "$nss"; dns_set SEC_TSIG "$tsig"; dns_set SEC_KEEP_NS2 "$kn2"
+  [ -n "$(dns_get SEC_KEYNAME '')" ] || dns_set SEC_KEYNAME "minipainel-$(hostname -s | tr -cd 'a-z0-9-' | cut -c1-30)-xfr"
+  if [ "$newkey" = 1 ] || [ -z "$(dns_get SEC_KEY '')" ]; then dns_set SEC_KEY "$(openssl rand -base64 32)"; fi
+  # os NS das zonas mudam (entram os do secundário): série nova em todas
+  local z; while IFS= read -r z; do [ -n "$z" ] && dns_bump "$z" "$(dns_load "$z")" >/dev/null 2>&1; done < <(dns_zones)
+  dns_nsd_outgoing
+  dns_apply || die "Configuração do NSD inválida; o secundário não foi ativado."
+  systemctl restart nsd >/dev/null 2>&1 || true   # o outgoing-interface só é lido ao arrancar
+  echo "DNS secundário ativo ($prov): cópia autorizada para $ips$([ "$tsig" = 1 ] && echo ' com chave TSIG'); nameservers das zonas: $(dns_ns_list | tr '\n' ' ')"
+  return 0
+}
+dns_sec_conf(){ # bloco do NSD: chave, quem pode copiar e quem é avisado
+  dns_sec_on || return 0
+  local a k=NOKEY
+  if [ "$(dns_get SEC_TSIG 1)" = 1 ]; then
+    k=$(dns_get SEC_KEYNAME)
+    printf 'key:\n    name: "%s"\n    algorithm: hmac-sha256\n    secret: "%s"\n' "$k" "$(dns_get SEC_KEY)"
+  fi
+  printf 'pattern:\n    name: "mp-secundario"\n'
+  for a in $(dns_get SEC_IPS); do printf '    provide-xfr: %s %s\n' "$a" "$k"; done
+  for a in $(dns_get SEC_NOTIFY); do printf '    notify: %s NOKEY\n' "$a"; done
+  # avisos e cópias saem sempre dos IPs públicos configurados (o secundário só aceita avisos do principal)
+  for a in $(dns_get IP) $(dns_get IP6); do printf '    outgoing-interface: %s\n' "$a"; done
+}
 dns_apply(){ # lista de zonas do NSD e recarga
   local z
   local before after
   before=$(md5sum /etc/nsd/minipainel-zones.conf 2>/dev/null | awk '{print $1}')
-  { echo "# IDDigital Hosting — zonas (gerado pelo painel)"; while IFS= read -r z; do [ -n "$z" ] && printf 'zone:\n    name: "%s"\n    zonefile: "%s/%s.zone"\n' "$z" "$NSD_ZONES" "$z"; done < <(dns_zones); } > /etc/nsd/minipainel-zones.conf
-  chmod 644 /etc/nsd/minipainel-zones.conf
+  local pat=""; dns_sec_on && pat='    include-pattern: "mp-secundario"\n'
+  { echo "# IDDigital Hosting — zonas (gerado pelo painel; não editar à mão)"; dns_sec_conf
+    while IFS= read -r z; do [ -n "$z" ] && printf "zone:\n    name: \"%s\"\n    zonefile: \"%s/%s.zone\"\n$pat" "$z" "$NSD_ZONES" "$z"; done < <(dns_zones); } > /etc/nsd/minipainel-zones.conf
+  chown root:nsd /etc/nsd/minipainel-zones.conf 2>/dev/null; chmod 640 /etc/nsd/minipainel-zones.conf   # pode ter a chave TSIG
   after=$(md5sum /etc/nsd/minipainel-zones.conf | awk '{print $1}')
   nsd-checkconf /etc/nsd/nsd.conf >/dev/null 2>&1 || { echo "Configuração do NSD inválida." >&2; return 1; }
   if [ "$before" != "$after" ]; then
@@ -261,6 +326,20 @@ cmd_dns_server_check(){ # saúde do servidor DNS
   if [ "$(jq -r '.[] | select(.id == "udp") | .status' <<<"$r")" != ok ]; then chk open "Resolver aberto" warn "Não testado (o servidor não responde)"; jq -n --argjson r "$r" --arg ts "$EPOCHSECONDS" '{ts:($ts|tonumber), rows:$r}' > "$f"; chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"; echo "Verificação do servidor DNS: $(jq '[.[] | select(.status == "ok")] | length' <<<"$r") de $(jq 'length' <<<"$r") OK."; return 0; fi
   out=$(dig +time=3 +tries=1 A google.com @"$ip" 2>/dev/null | grep -o 'status: [A-Z]*' | cut -d' ' -f2)
   if [ "$out" = NOERROR ] && dig +short +time=3 +tries=1 A google.com @"$ip" 2>/dev/null | grep -q .; then chk open "Resolver aberto" fail "Responde por domínios de terceiros (pode ser usado em ataques)"; else chk open "Resolver aberto" ok "Não (só responde pelas tuas zonas)"; fi
+  if dns_sec_on; then   # o secundário tem a versão atual de cada zona?
+    local sns zz ok=0 tot=0 miss="" o1 o2
+    sns=$(dns_get SEC_NS | awk '{print $1}')
+    while IFS= read -r zz; do
+      [ -n "$zz" ] || continue; tot=$((tot+1))
+      o1=$(dig +short +time=3 +tries=1 SOA "$zz" @"$ip" 2>/dev/null | awk '{print $3}')
+      o2=$(dig +short +time=4 +tries=1 SOA "$zz" @"$sns" 2>/dev/null | awk '{print $3}')
+      if [ -n "$o2" ] && [ "$o2" = "$o1" ]; then ok=$((ok+1)); else miss+=" $zz"; fi
+    done < <(dns_zones)
+    if [ "$tot" = 0 ]; then chk sec "DNS secundário" warn "Ainda não há zonas para copiar"
+    elif [ "$ok" = "$tot" ]; then chk sec "DNS secundário ($sns)" ok "Cópia em dia nas $tot zonas"
+    elif [ "$ok" = 0 ]; then chk sec "DNS secundário ($sns)" fail "Nenhuma zona copiada ainda: acrescenta cada domínio no serviço (ex.: dns.he.net → Add a new slave)"
+    else chk sec "DNS secundário ($sns)" warn "$ok de $tot em dia; por copiar ou desatualizadas:$miss"; fi
+  fi
   jq -n --argjson r "$r" --arg ts "$EPOCHSECONDS" '{ts:($ts|tonumber), rows:$r}' > "$f"; chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
   echo "Verificação do servidor DNS: $(jq '[.[] | select(.status == "ok")] | length' <<<"$r") de $(jq 'length' <<<"$r") OK."; return 0
 }
@@ -375,14 +454,14 @@ cmd_dns_check(){ # a delegação no registador já aponta para este servidor?
   local z="${1:-}" got ours r f=$DATA/stats/dns-check.json
   dns_need; [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
   got=$(dig +short NS "$z" @8.8.8.8 2>/dev/null | sed 's/\.$//' | sort | tr '\n' ' ')
-  ours=$(printf '%s\n%s\n' "$(dns_get NS1)" "$(dns_get NS2)" | sort | tr '\n' ' ')
+  ours=$(dns_ns_list | sort -u | tr '\n' ' ')
   r=$(dig +short SOA "$z" @"$(dns_get IP)" 2>/dev/null | awk '{print $3}')
   [ -s "$f" ] || echo '{}' > "$f"
   jq --arg z "$z" --arg g "$got" --argjson ok "$([ "$got" = "$ours" ] && echo true || echo false)" --arg r "$r" --arg t "$EPOCHSECONDS" \
     '.[$z] = {checked:($t|tonumber), delegated:$ok, found:$g, serial_public:$r}' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
   chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
   if [ "$got" = "$ours" ]; then echo "Delegação de $z correta: os nameservers apontam para este servidor."
-  else echo "A delegação de $z ainda não aponta para este servidor (encontrado: ${got:-nada}). Altera os nameservers no registador para $(dns_get NS1) e $(dns_get NS2)."; fi
+  else echo "A delegação de $z ainda não aponta para este servidor (encontrado: ${got:-nada}). Altera os nameservers no registador para: $(dns_ns_list | tr '\n' ' ')"; fi
   return 0
 }
 dns_state_json(){
@@ -392,6 +471,10 @@ dns_state_json(){
   jq -n --arg ns1 "$(dns_get NS1)" --arg ns2 "$(dns_get NS2)" --arg ip "$(dns_get IP)" --arg ip6 "$(dns_get IP6)" --argjson zs "$zs" \
     --arg act "$(systemctl is-active nsd 2>/dev/null)" --arg hm "$(dns_get HOSTMASTER '')" \
     --arg st "$(dns_get DEF_TTL 3600) $(dns_get SOA_REFRESH 10800) $(dns_get SOA_RETRY 3600) $(dns_get SOA_EXPIRE 1209600) $(dns_get SOA_MIN 3600)" \
-    '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, hostmaster:$hm, active:($act == "active"), zones:$zs,
+    --argjson nsl "$(dns_ns_list | jq -R . | jq -sc 'map(select(length > 0))')" \
+    --arg sp "$(dns_get SEC_PROVIDER '')" --arg si "$(dns_get SEC_IPS '')" --arg sn "$(dns_get SEC_NS '')" --arg st2 "$(dns_get SEC_TSIG 1)" \
+    --arg sk "$(dns_get SEC_KEYNAME '')" --arg ss "$(dns_get SEC_KEY '')" --arg s2 "$(dns_get SEC_KEEP_NS2 0)" \
+    '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, hostmaster:$hm, active:($act == "active"), zones:$zs, ns_list:$nsl,
+      sec:(if $si == "" then null else {provider:$sp, ips:($si | split(" ")), ns:($sn | split(" ")), tsig:($st2 == "1"), keyname:$sk, key:$ss, keep_ns2:($s2 == "1")} end),
       soa:($st | split(" ") | {ttl:(.[0]|tonumber), refresh:(.[1]|tonumber), retry:(.[2]|tonumber), expire:(.[3]|tonumber), minimum:(.[4]|tonumber)})}'
 }

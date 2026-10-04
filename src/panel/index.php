@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.13.4 — painel web (MiniPainel)
+ * IDDigital Hosting v2.14.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.4';
+const MP_VERSION = '2.14.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -983,6 +983,10 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dz-ban{display:flex;gap:12px;align-items:flex-start;margin:0 24px 16px;padding:14px 16px;border-radius:14px;line-height:1.7}
 .dz-ban.ok{background:color-mix(in srgb,var(--ok) 12%,transparent);color:var(--ok);font-weight:600;align-items:center}
 .dz-ban.warn{background:color-mix(in srgb,var(--warn) 12%,transparent)}
+.dz-ban.info{background:color-mix(in srgb,var(--acc) 10%,transparent);align-items:center}
+.sec-t{table-layout:fixed;width:100%}.sec-t td{padding:9px 12px!important}.sec-key{overflow-wrap:anywhere}
+.sec-ns{display:flex;flex-wrap:wrap;gap:8px 4px}
+.sec-f:not(.custom) [data-seccustom]{display:none}
 .dz-ns{display:inline-flex;gap:6px;align-items:center;margin:0 6px}.dz-ns code{font-weight:700}
 .dz-add{display:grid;grid-template-columns:120px minmax(160px,1fr) minmax(220px,2fr) 110px 120px auto;gap:10px;align-items:end;padding:16px 24px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--line-2)}
 .dz-add .fld{margin:0}.dz-add .btn{height:42px}
@@ -1922,6 +1926,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             break;
         case 'dns_restart':
             job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
+            break;
+        case 'dns_secondary':
+            $op = post('op');
+            if ($op === 'off') { job_submit('dns-secondary', ['--provider', 'off'], 'Desligar o DNS secundário'); $back = ['t' => 'servidor']; break; }
+            if ($op === 'newkey') { job_submit('dns-secondary', ['--new-key'], 'Nova chave do DNS secundário'); $back = ['t' => 'servidor']; break; }
+            $prov = post('provider') === 'custom' ? 'custom' : 'he';
+            $sa = ['--provider', $prov, '--tsig', post('tsig') === '1' ? 'on' : 'off', '--keep-ns2', post('keep_ns2') === '1' ? 'on' : 'off'];
+            if ($prov === 'custom') {
+                $ips = preg_split('/[\s,]+/', trim(post('ips')), -1, PREG_SPLIT_NO_EMPTY); $nss = preg_split('/[\s,]+/', strtolower(trim(post('ns'))), -1, PREG_SPLIT_NO_EMPTY);
+                if (!$ips || !$nss) { $bad('Indica os IPs que copiam as zonas e os nameservers do serviço.'); break; }
+                foreach ($ips as $x) { if (!filter_var($x, FILTER_VALIDATE_IP)) { $bad('IP inválido: ' . $x); break 2; } }
+                foreach ($nss as $x) { if (!preg_match('/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/', $x)) { $bad('Nameserver inválido: ' . $x); break 2; } }
+                array_push($sa, '--ips', implode(' ', $ips), '--notify', implode(' ', $ips), '--ns', implode(' ', $nss));
+            }
+            job_submit('dns-secondary', $sa, 'DNS secundário externo'); $back = ['t' => 'servidor'];
             break;
         case 'dns_server_check':
             job_submit('dns-server-check', [], 'Verificar o servidor DNS'); $back = ['t' => 'servidor'];
@@ -4133,6 +4152,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $ttlL = function ($t) use ($soa) { $t = (int)$t; if ($t <= 0) return 'Auto'; if ($t % 86400 === 0) return ($t / 86400) . ' d'; if ($t % 3600 === 0) return ($t / 3600) . ' h'; if ($t % 60 === 0) return ($t / 60) . ' min'; return $t . ' s'; };
     $zst = function ($z) { $ck = is_array($z['check'] ?? null) ? $z['check'] : null; return $ck === null ? ['p-off', 'Não verificado'] : (!empty($ck['delegated']) ? ['p-ok', 'Ativo'] : ['p-warn', 'Pendente: nameservers por mudar']); };
     $types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'];
+    $nsl = array_values(array_filter((array)($dn['ns_list'] ?? [(string)($dn['ns1'] ?? ''), (string)($dn['ns2'] ?? '')])));
+    $nsTxt = implode(', ', array_map(function ($x) { return '<span class="mono">' . h((string)$x) . '</span>'; }, $nsl));
 ?>
       <?php if ($dz === null && !empty($dn['enabled'])): ?>
       <nav class="tabs" aria-label="Secções">
@@ -4177,11 +4198,11 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php else: ?>
           <div class="dz-ban warn"><?= ic('bell') ?><div><b><?= $ck === null ? 'Ainda não verificado se o domínio usa este servidor.' : 'Este domínio ainda não usa este servidor DNS' . (!empty($ck['found']) ? ' (usa: ' . h(trim((string)$ck['found'])) . ')' : '') . '.' ?></b>
             No registador do domínio, muda os nameservers para:
-            <span class="dz-ns"><code><?= h((string)$dn['ns1']) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ns1']) ?>">Copiar</button></span>
-            <span class="dz-ns"><code><?= h((string)$dn['ns2']) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ns2']) ?>">Copiar</button></span>
+            <?php foreach ($nsl as $nx): ?><span class="dz-ns"><code><?= h((string)$nx) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$nx) ?>">Copiar</button></span><?php endforeach; ?>
             Depois carrega em "Verificar nameservers".</div></div>
         <?php endif; ?>
 
+        <?php if (!empty($dn['sec'])): ?><div class="dz-ban info"><?= ic('world') ?><div>DNS secundário ativo: este domínio tem de estar acrescentado no serviço<?= ($dn['sec']['provider'] ?? '') === 'he' ? ' (dns.he.net → Add a new slave)' : '' ?>. Os dados a preencher estão em <a href="?p=dns&amp;t=servidor">Servidor DNS → DNS secundário externo</a>.</div></div><?php endif; ?>
         <form method="post" class="dz-add" id="dz-add">
           <?= act_fields('dns_rec_add', ['zone' => $zn]) ?>
           <label class="fld">Tipo<select class="in" name="type" data-rtype><?php foreach (['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'] as $t): ?><option><?= $t ?></option><?php endforeach; ?></select></label>
@@ -4202,7 +4223,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:80px"><col style="width:120px"><col style="width:150px"></colgroup>
           <thead><tr><th>Tipo</th><th>Nome</th><th>Conteúdo</th><th>Prioridade</th><th>TTL</th><th>Propagação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody id="dz-rows">
-            <?php foreach ([(string)$dn['ns1'], (string)$dn['ns2']] as $nsx): ?>
+            <?php foreach ($nsl as $nsx): ?>
             <tr data-type="NS" data-s="<?= h($zn . ' ' . $nsx) ?>"><td><span class="pill p-off">NS</span></td><td class="mono"><?= h($zn) ?></td><td class="mono"><?= h($nsx) ?></td><td>—</td><td><?= h($ttlL(0)) ?></td><td>—</td><td class="r mu" title="Os nameservers vêm do Servidor DNS">🔒 Servidor</td></tr>
             <?php endforeach; ?>
             <?php foreach ($recs as $r): $k = $r['name'] . '|' . $r['type']; $pp = $prop[$k] ?? null; ?>
@@ -4250,7 +4271,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($dtab === 'dominios'):   /* ===================== LISTA DE DOMÍNIOS ===================== */ ?>
       <section class="card">
         <div class="card-h"><div><h2>Domínios</h2><p>Cada domínio tem a sua zona de DNS neste servidor. Os registos dos sites e do email são criados sozinhos.</p></div><button class="btn sm" type="button" data-open="dlg-dz-new"><?= ic('plus') ?>Adicionar domínio</button></div>
-        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio. Depois, no registador, aponta os nameservers para <span class="mono"><?= h((string)$dn['ns1']) ?></span> e <span class="mono"><?= h((string)$dn['ns2']) ?></span>.</div>
+        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio. Depois, no registador, aponta os nameservers para <?= $nsTxt ?>.</div>
         <?php else: [$zl, $zpg, $zpages, $ztot] = paginate($dzs, 50); ?>
         <table class="list">
           <colgroup><col><col style="width:260px"><col style="width:110px"><col style="width:160px"><col style="width:140px"></colgroup>
@@ -4268,7 +4289,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?= act_fields('dns_zone_add') ?>
         <div class="dlg-h"><div><h3>Adicionar domínio</h3><p>Cria a zona com os registos do site e do email já preenchidos.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
         <div class="dlg-b"><label class="fld">Domínio<input class="in mono" name="zone" required placeholder="exemplo.pt" autocomplete="off"></label>
-          <p class="mu">Depois, no registador do domínio, aponta os nameservers para <span class="mono"><?= h((string)$dn['ns1']) ?></span> e <span class="mono"><?= h((string)$dn['ns2']) ?></span>. Nos domínios <span class="mono">.pt</span>, cria a zona aqui <b>antes</b> de mudar no registador.</p></div>
+          <p class="mu">Depois, no registador do domínio, aponta os nameservers para <?= $nsTxt ?>. Nos domínios <span class="mono">.pt</span>, cria a zona aqui <b>antes</b> de mudar no registador.</p></div>
         <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
       </form></dialog>
 
@@ -4300,6 +4321,45 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <tbody><?php foreach ($rows as $r): ?><tr><td><?= ($r['status'] ?? '') === 'ok' ? '<span class="pill p-ok">OK</span>' : (($r['status'] ?? '') === 'warn' ? '<span class="pill p-warn">Aviso</span>' : '<span class="pill p-err">Falha</span>') ?></td><td><b><?= h((string)$r['name']) ?></b></td><td class="sn-msg"><?= h((string)$r['msg']) ?></td></tr><?php endforeach; ?></tbody>
         </table>
         <?php endif; ?>
+      </section>
+      <?php $sec = is_array($dn['sec'] ?? null) ? $dn['sec'] : null; $isHe = $sec && ($sec['provider'] ?? '') === 'he'; ?>
+      <section class="card">
+        <div class="card-h"><div><h2>DNS secundário externo</h2><p>Um serviço externo copia as zonas deste servidor e responde por elas noutros IPs. O DNS.PT exige nameservers com IPs diferentes, e se este servidor parar os domínios continuam a resolver.</p></div>
+          <span class="pill <?= $sec ? 'p-ok' : 'p-off' ?>"><?= $sec ? 'Ativo' . ($isHe ? ' · Hurricane Electric' : '') : 'Desligado' ?></span></div>
+        <?php if ($sec): ?>
+        <div class="card-b">
+          <p style="margin:0 0 10px"><b><?= $isHe ? 'Em dns.he.net → "Add a new slave", para cada domínio:' : 'No serviço secundário, para cada domínio:' ?></b></p>
+          <table class="list sec-t"><colgroup><col style="width:200px"><col><col style="width:110px"></colgroup><tbody>
+            <tr><td class="mu"><?= $isHe ? 'Domain Name' : 'Domínio' ?></td><td>o domínio (ex.: <span class="mono">pontoderede.pt</span>)</td><td></td></tr>
+            <tr><td class="mu"><?= $isHe ? 'Master #1' : 'Servidor principal' ?></td><td class="mono"><?= h((string)$dn['ip']) ?></td><td><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ip']) ?>">Copiar</button></td></tr>
+            <?php if (!empty($sec['tsig'])): ?>
+            <tr><td class="mu"><?= $isHe ? 'Hash Algorithm' : 'Algoritmo TSIG' ?></td><td class="mono">hmac-sha256</td><td></td></tr>
+            <tr><td class="mu"><?= $isHe ? 'Key Name' : 'Nome da chave' ?></td><td class="mono"><?= h((string)$sec['keyname']) ?></td><td><button type="button" class="chip sm" data-copy="<?= h((string)$sec['keyname']) ?>">Copiar</button></td></tr>
+            <tr><td class="mu"><?= $isHe ? 'Secret Hash' : 'Segredo' ?></td><td class="mono sec-key"><?= h((string)$sec['key']) ?></td><td><button type="button" class="chip sm" data-copy="<?= h((string)$sec['key']) ?>">Copiar</button></td></tr>
+            <?php else: ?><tr><td class="mu">TSIG</td><td>Sem chave (cópia autorizada só pelo IP)</td><td></td></tr><?php endif; ?>
+          </tbody></table>
+          <p style="margin:16px 0 6px"><b>No registador de cada domínio, os nameservers ficam:</b></p>
+          <div class="sec-ns"><?php foreach ((array)($dn['ns_list'] ?? []) as $nx): ?><span class="dz-ns"><code><?= h((string)$nx) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$nx) ?>">Copiar</button></span><?php endforeach; ?></div>
+          <p class="mu" style="margin:12px 0 0">Depois de acrescentares um domínio no serviço, carrega em "Verificar agora" (acima): o teste "DNS secundário" confirma, zona a zona, que a cópia está em dia.<?= $isHe ? ' <a href="https://dns.he.net/" target="_blank" rel="noopener">Abrir dns.he.net</a>' : '' ?></p>
+        </div>
+        <div class="card-f" style="display:flex;gap:8px;flex-wrap:wrap">
+          <form method="post" data-confirm="Gerar uma chave nova? A cópia deixa de funcionar até atualizares o Key Name/Secret Hash no serviço, em todos os domínios."><?= act_fields('dns_secondary', ['op' => 'newkey']) ?><button class="btn sm sec" type="submit">Gerar chave nova</button></form>
+          <form method="post" data-confirm="Desligar o DNS secundário? Os domínios cujos nameservers incluem o serviço deixam de ser atualizados lá."><?= act_fields('dns_secondary', ['op' => 'off']) ?><button class="btn sm sec" type="submit">Desligar</button></form>
+        </div>
+        <?php endif; ?>
+        <form method="post" class="card-b sec-f"<?= $sec ? ' style="border-top:1px solid var(--line)"' : '' ?>>
+          <?= act_fields('dns_secondary', ['op' => 'save']) ?>
+          <div class="fgrid">
+            <label class="fld">Serviço<select class="in" name="provider" data-secprov>
+              <option value="he"<?= !$sec || $isHe ? ' selected' : '' ?>>Hurricane Electric (gratuito, recomendado)</option>
+              <option value="custom"<?= $sec && !$isHe ? ' selected' : '' ?>>Outro serviço</option></select></label>
+            <label class="fld" data-seccustom>IPs que copiam as zonas<input class="in mono" name="ips" value="<?= h($sec && !$isHe ? implode(' ', (array)$sec['ips']) : '') ?>" placeholder="ex.: 203.0.113.10 2001:db8::10"></label>
+            <label class="fld" data-seccustom>Nameservers do serviço<input class="in mono" name="ns" value="<?= h($sec && !$isHe ? implode(' ', (array)$sec['ns']) : '') ?>" placeholder="ex.: ns2.servico.net ns3.servico.net"></label>
+          </div>
+          <label class="chk" style="margin-top:12px"><input type="checkbox" name="tsig" value="1"<?= !$sec || !empty($sec['tsig']) ? ' checked' : '' ?>> Proteger a cópia com chave TSIG (recomendado)</label>
+          <label class="chk"><input type="checkbox" name="keep_ns2" value="1"<?= $sec && !empty($sec['keep_ns2']) ? ' checked' : '' ?>> Manter também o <?= h((string)$dn['ns2']) ?> (só se tiver um IP diferente do <?= h((string)$dn['ns1']) ?>)</label>
+          <div style="margin-top:14px"><button class="btn" type="submit"><?= $sec ? 'Guardar' : 'Ativar o DNS secundário' ?></button></div>
+        </form>
       </section>
       <div class="grid2e" style="align-items:stretch">
         <section class="card">
@@ -5165,6 +5225,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     }
     var c = e.target.closest('[data-copy]'); if (c) { navigator.clipboard && navigator.clipboard.writeText(c.getAttribute('data-copy')); var t = c.textContent; c.textContent = 'Copiado'; setTimeout(function () { c.textContent = t; }, 1200); }
   });
+  document.querySelectorAll('[data-secprov]').forEach(function (sel) { var f = sel.closest('form'); function upd() { f.classList.toggle('custom', sel.value === 'custom'); } sel.addEventListener('change', upd); upd(); });
   var ft = document.getElementById('dz-ft'), q = document.getElementById('dz-q');
   if (ft && q) {
     var rows = Array.prototype.slice.call(document.querySelectorAll('#dz-rows tr')), cnt = document.getElementById('dz-cnt');

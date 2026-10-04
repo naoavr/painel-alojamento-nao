@@ -329,6 +329,15 @@ A página DNS tem dois separadores: **Domínios** (os teus domínios e os seus r
 2. Na zona onde esses nomes vivem (ex.: `iddigital.pt`, no ISPmanager), cria `ns1.host` e `ns2.host` como registos A com o IP do servidor.
 3. Carrega em **Verificar agora**: todos os testes devem ficar OK (serviço a correr, nameservers visíveis na Internet, resposta por UDP e TCP, transferência de zona recusada, sem resolver aberto). A porta 53 (UDP e TCP) tem de estar aberta na firewall do Proxmox e do fornecedor.
 
+**DNS secundário externo (obrigatório para domínios `.pt` com um só servidor):**
+
+O DNS.PT exige que os nameservers de um domínio tenham IPs diferentes. Com um só servidor, usa um serviço gratuito que copia as zonas do painel, como a Hurricane Electric (até 50 zonas grátis). O painel continua a ser o único sítio onde se gerem os registos; o serviço recebe as alterações em segundos e, se este servidor parar, continua a responder.
+
+1. Separador **Servidor DNS** → **DNS secundário externo** → Serviço: *Hurricane Electric* → **Ativar**. O painel cria uma chave TSIG, autoriza a cópia só aos servidores da Hurricane Electric e avisa-os a cada alteração.
+2. Cria uma conta em [dns.he.net](https://dns.he.net/) (Quick Links → Free DNS) e, para cada domínio, **Add a new slave** com os dados que o painel mostra: *Domain Name*, *Master #1* (o IP deste servidor), *Hash Algorithm* `hmac-sha256`, *Key Name* e *Secret Hash*. Não uses "Add a new domain" (isso passaria a gestão para a Hurricane Electric).
+3. No registador, os nameservers do domínio passam a ser `ns1.host…` e `ns2.he.net` a `ns5.he.net` (a lista exata aparece na página de cada domínio).
+4. **Verificar agora** (Servidor DNS): o teste "DNS secundário" confirma, zona a zona, que a cópia está em dia.
+
 **Cada domínio:**
 
 1. Separador **Domínios** → **Adicionar domínio**. Os registos do site, do email (MX, SPF, DKIM, DMARC) e um CAA para o Let's Encrypt são criados sozinhos.

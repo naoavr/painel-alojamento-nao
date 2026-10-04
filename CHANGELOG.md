@@ -1,5 +1,10 @@
 # Registo de alterações
 
+## 2.14.0
+- DNS secundário externo (Servidor DNS): Hurricane Electric pré-configurada ou outro serviço. Cópia das zonas autorizada só aos servidores do serviço, protegida com chave TSIG; aviso (NOTIFY) a cada alteração, sempre a partir do IP público; os nameservers do serviço entram nos registos NS de todas as zonas.
+- O painel mostra os dados exatos a preencher no serviço ("Add a new slave") e os nameservers a pôr no registador; "Verificar agora" confirma, zona a zona, que a cópia está em dia.
+- Resolve a regra do DNS.PT de nameservers com IPs diferentes sem segundo IP nem segundo servidor.
+
 ## 2.13.4
 - Alertas: "Enviar mensagem de teste" no cartão Email (sai o cartão solto).
 - Backups → Agendamento e destinos: os dois a toda a largura.

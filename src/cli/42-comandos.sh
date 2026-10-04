@@ -92,6 +92,7 @@ dispatch(){
     dns-settings)      cmd_dns_settings "$@" ;;
     dns-restart)       cmd_dns_restart ;;
     dns-server-check)  cmd_dns_server_check ;;
+    dns-secondary)     cmd_dns_secondary "$@" ;;
     site-webp)         cmd_site_webp "$@" ;;
     webp-nightly)      cmd_webp_nightly ;;
     net-tune)          cmd_net_tune "$@" ;;

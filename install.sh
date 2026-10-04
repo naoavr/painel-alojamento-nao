@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Interface: Alertas, Backups e Atualizações reorganizados (alturas iguais), Resumo com serviços compactos e logs dos sites nas Definições → Serviços.
+# NOTAS: DNS secundário externo (Hurricane Electric ou outro): cópia das zonas com chave TSIG e aviso a cada alteração; resolve a regra do DNS.PT de IPs diferentes.
 # =============================================================================
-#  IDDigital Hosting v2.13.4 — instalador (MiniPainel)
+#  IDDigital Hosting v2.14.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.13.4.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.14.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.13.4"
+MP_VERSION="2.14.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -874,6 +874,15 @@ A página DNS tem dois separadores: **Domínios** (os teus domínios e os seus r
 2. Na zona onde esses nomes vivem (ex.: `iddigital.pt`, no ISPmanager), cria `ns1.host` e `ns2.host` como registos A com o IP do servidor.
 3. Carrega em **Verificar agora**: todos os testes devem ficar OK (serviço a correr, nameservers visíveis na Internet, resposta por UDP e TCP, transferência de zona recusada, sem resolver aberto). A porta 53 (UDP e TCP) tem de estar aberta na firewall do Proxmox e do fornecedor.
 
+**DNS secundário externo (obrigatório para domínios `.pt` com um só servidor):**
+
+O DNS.PT exige que os nameservers de um domínio tenham IPs diferentes. Com um só servidor, usa um serviço gratuito que copia as zonas do painel, como a Hurricane Electric (até 50 zonas grátis). O painel continua a ser o único sítio onde se gerem os registos; o serviço recebe as alterações em segundos e, se este servidor parar, continua a responder.
+
+1. Separador **Servidor DNS** → **DNS secundário externo** → Serviço: *Hurricane Electric* → **Ativar**. O painel cria uma chave TSIG, autoriza a cópia só aos servidores da Hurricane Electric e avisa-os a cada alteração.
+2. Cria uma conta em [dns.he.net](https://dns.he.net/) (Quick Links → Free DNS) e, para cada domínio, **Add a new slave** com os dados que o painel mostra: *Domain Name*, *Master #1* (o IP deste servidor), *Hash Algorithm* `hmac-sha256`, *Key Name* e *Secret Hash*. Não uses "Add a new domain" (isso passaria a gestão para a Hurricane Electric).
+3. No registador, os nameservers do domínio passam a ser `ns1.host…` e `ns2.he.net` a `ns5.he.net` (a lista exata aparece na página de cada domínio).
+4. **Verificar agora** (Servidor DNS): o teste "DNS secundário" confirma, zona a zona, que a cópia está em dia.
+
 **Cada domínio:**
 
 1. Separador **Domínios** → **Adicionar domínio**. Os registos do site, do email (MX, SPF, DKIM, DMARC) e um CAA para o Let's Encrypt são criados sozinhos.
@@ -1492,7 +1501,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.13.4 — painel web (MiniPainel)
+ * IDDigital Hosting v2.14.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1500,7 +1509,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.4';
+const MP_VERSION = '2.14.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2475,6 +2484,10 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dz-ban{display:flex;gap:12px;align-items:flex-start;margin:0 24px 16px;padding:14px 16px;border-radius:14px;line-height:1.7}
 .dz-ban.ok{background:color-mix(in srgb,var(--ok) 12%,transparent);color:var(--ok);font-weight:600;align-items:center}
 .dz-ban.warn{background:color-mix(in srgb,var(--warn) 12%,transparent)}
+.dz-ban.info{background:color-mix(in srgb,var(--acc) 10%,transparent);align-items:center}
+.sec-t{table-layout:fixed;width:100%}.sec-t td{padding:9px 12px!important}.sec-key{overflow-wrap:anywhere}
+.sec-ns{display:flex;flex-wrap:wrap;gap:8px 4px}
+.sec-f:not(.custom) [data-seccustom]{display:none}
 .dz-ns{display:inline-flex;gap:6px;align-items:center;margin:0 6px}.dz-ns code{font-weight:700}
 .dz-add{display:grid;grid-template-columns:120px minmax(160px,1fr) minmax(220px,2fr) 110px 120px auto;gap:10px;align-items:end;padding:16px 24px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--line-2)}
 .dz-add .fld{margin:0}.dz-add .btn{height:42px}
@@ -3414,6 +3427,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             break;
         case 'dns_restart':
             job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
+            break;
+        case 'dns_secondary':
+            $op = post('op');
+            if ($op === 'off') { job_submit('dns-secondary', ['--provider', 'off'], 'Desligar o DNS secundário'); $back = ['t' => 'servidor']; break; }
+            if ($op === 'newkey') { job_submit('dns-secondary', ['--new-key'], 'Nova chave do DNS secundário'); $back = ['t' => 'servidor']; break; }
+            $prov = post('provider') === 'custom' ? 'custom' : 'he';
+            $sa = ['--provider', $prov, '--tsig', post('tsig') === '1' ? 'on' : 'off', '--keep-ns2', post('keep_ns2') === '1' ? 'on' : 'off'];
+            if ($prov === 'custom') {
+                $ips = preg_split('/[\s,]+/', trim(post('ips')), -1, PREG_SPLIT_NO_EMPTY); $nss = preg_split('/[\s,]+/', strtolower(trim(post('ns'))), -1, PREG_SPLIT_NO_EMPTY);
+                if (!$ips || !$nss) { $bad('Indica os IPs que copiam as zonas e os nameservers do serviço.'); break; }
+                foreach ($ips as $x) { if (!filter_var($x, FILTER_VALIDATE_IP)) { $bad('IP inválido: ' . $x); break 2; } }
+                foreach ($nss as $x) { if (!preg_match('/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/', $x)) { $bad('Nameserver inválido: ' . $x); break 2; } }
+                array_push($sa, '--ips', implode(' ', $ips), '--notify', implode(' ', $ips), '--ns', implode(' ', $nss));
+            }
+            job_submit('dns-secondary', $sa, 'DNS secundário externo'); $back = ['t' => 'servidor'];
             break;
         case 'dns_server_check':
             job_submit('dns-server-check', [], 'Verificar o servidor DNS'); $back = ['t' => 'servidor'];
@@ -5625,6 +5653,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $ttlL = function ($t) use ($soa) { $t = (int)$t; if ($t <= 0) return 'Auto'; if ($t % 86400 === 0) return ($t / 86400) . ' d'; if ($t % 3600 === 0) return ($t / 3600) . ' h'; if ($t % 60 === 0) return ($t / 60) . ' min'; return $t . ' s'; };
     $zst = function ($z) { $ck = is_array($z['check'] ?? null) ? $z['check'] : null; return $ck === null ? ['p-off', 'Não verificado'] : (!empty($ck['delegated']) ? ['p-ok', 'Ativo'] : ['p-warn', 'Pendente: nameservers por mudar']); };
     $types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'];
+    $nsl = array_values(array_filter((array)($dn['ns_list'] ?? [(string)($dn['ns1'] ?? ''), (string)($dn['ns2'] ?? '')])));
+    $nsTxt = implode(', ', array_map(function ($x) { return '<span class="mono">' . h((string)$x) . '</span>'; }, $nsl));
 ?>
       <?php if ($dz === null && !empty($dn['enabled'])): ?>
       <nav class="tabs" aria-label="Secções">
@@ -5669,11 +5699,11 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php else: ?>
           <div class="dz-ban warn"><?= ic('bell') ?><div><b><?= $ck === null ? 'Ainda não verificado se o domínio usa este servidor.' : 'Este domínio ainda não usa este servidor DNS' . (!empty($ck['found']) ? ' (usa: ' . h(trim((string)$ck['found'])) . ')' : '') . '.' ?></b>
             No registador do domínio, muda os nameservers para:
-            <span class="dz-ns"><code><?= h((string)$dn['ns1']) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ns1']) ?>">Copiar</button></span>
-            <span class="dz-ns"><code><?= h((string)$dn['ns2']) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ns2']) ?>">Copiar</button></span>
+            <?php foreach ($nsl as $nx): ?><span class="dz-ns"><code><?= h((string)$nx) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$nx) ?>">Copiar</button></span><?php endforeach; ?>
             Depois carrega em "Verificar nameservers".</div></div>
         <?php endif; ?>
 
+        <?php if (!empty($dn['sec'])): ?><div class="dz-ban info"><?= ic('world') ?><div>DNS secundário ativo: este domínio tem de estar acrescentado no serviço<?= ($dn['sec']['provider'] ?? '') === 'he' ? ' (dns.he.net → Add a new slave)' : '' ?>. Os dados a preencher estão em <a href="?p=dns&amp;t=servidor">Servidor DNS → DNS secundário externo</a>.</div></div><?php endif; ?>
         <form method="post" class="dz-add" id="dz-add">
           <?= act_fields('dns_rec_add', ['zone' => $zn]) ?>
           <label class="fld">Tipo<select class="in" name="type" data-rtype><?php foreach (['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'] as $t): ?><option><?= $t ?></option><?php endforeach; ?></select></label>
@@ -5694,7 +5724,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:80px"><col style="width:120px"><col style="width:150px"></colgroup>
           <thead><tr><th>Tipo</th><th>Nome</th><th>Conteúdo</th><th>Prioridade</th><th>TTL</th><th>Propagação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody id="dz-rows">
-            <?php foreach ([(string)$dn['ns1'], (string)$dn['ns2']] as $nsx): ?>
+            <?php foreach ($nsl as $nsx): ?>
             <tr data-type="NS" data-s="<?= h($zn . ' ' . $nsx) ?>"><td><span class="pill p-off">NS</span></td><td class="mono"><?= h($zn) ?></td><td class="mono"><?= h($nsx) ?></td><td>—</td><td><?= h($ttlL(0)) ?></td><td>—</td><td class="r mu" title="Os nameservers vêm do Servidor DNS">🔒 Servidor</td></tr>
             <?php endforeach; ?>
             <?php foreach ($recs as $r): $k = $r['name'] . '|' . $r['type']; $pp = $prop[$k] ?? null; ?>
@@ -5742,7 +5772,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($dtab === 'dominios'):   /* ===================== LISTA DE DOMÍNIOS ===================== */ ?>
       <section class="card">
         <div class="card-h"><div><h2>Domínios</h2><p>Cada domínio tem a sua zona de DNS neste servidor. Os registos dos sites e do email são criados sozinhos.</p></div><button class="btn sm" type="button" data-open="dlg-dz-new"><?= ic('plus') ?>Adicionar domínio</button></div>
-        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio. Depois, no registador, aponta os nameservers para <span class="mono"><?= h((string)$dn['ns1']) ?></span> e <span class="mono"><?= h((string)$dn['ns2']) ?></span>.</div>
+        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio. Depois, no registador, aponta os nameservers para <?= $nsTxt ?>.</div>
         <?php else: [$zl, $zpg, $zpages, $ztot] = paginate($dzs, 50); ?>
         <table class="list">
           <colgroup><col><col style="width:260px"><col style="width:110px"><col style="width:160px"><col style="width:140px"></colgroup>
@@ -5760,7 +5790,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?= act_fields('dns_zone_add') ?>
         <div class="dlg-h"><div><h3>Adicionar domínio</h3><p>Cria a zona com os registos do site e do email já preenchidos.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
         <div class="dlg-b"><label class="fld">Domínio<input class="in mono" name="zone" required placeholder="exemplo.pt" autocomplete="off"></label>
-          <p class="mu">Depois, no registador do domínio, aponta os nameservers para <span class="mono"><?= h((string)$dn['ns1']) ?></span> e <span class="mono"><?= h((string)$dn['ns2']) ?></span>. Nos domínios <span class="mono">.pt</span>, cria a zona aqui <b>antes</b> de mudar no registador.</p></div>
+          <p class="mu">Depois, no registador do domínio, aponta os nameservers para <?= $nsTxt ?>. Nos domínios <span class="mono">.pt</span>, cria a zona aqui <b>antes</b> de mudar no registador.</p></div>
         <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
       </form></dialog>
 
@@ -5792,6 +5822,45 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <tbody><?php foreach ($rows as $r): ?><tr><td><?= ($r['status'] ?? '') === 'ok' ? '<span class="pill p-ok">OK</span>' : (($r['status'] ?? '') === 'warn' ? '<span class="pill p-warn">Aviso</span>' : '<span class="pill p-err">Falha</span>') ?></td><td><b><?= h((string)$r['name']) ?></b></td><td class="sn-msg"><?= h((string)$r['msg']) ?></td></tr><?php endforeach; ?></tbody>
         </table>
         <?php endif; ?>
+      </section>
+      <?php $sec = is_array($dn['sec'] ?? null) ? $dn['sec'] : null; $isHe = $sec && ($sec['provider'] ?? '') === 'he'; ?>
+      <section class="card">
+        <div class="card-h"><div><h2>DNS secundário externo</h2><p>Um serviço externo copia as zonas deste servidor e responde por elas noutros IPs. O DNS.PT exige nameservers com IPs diferentes, e se este servidor parar os domínios continuam a resolver.</p></div>
+          <span class="pill <?= $sec ? 'p-ok' : 'p-off' ?>"><?= $sec ? 'Ativo' . ($isHe ? ' · Hurricane Electric' : '') : 'Desligado' ?></span></div>
+        <?php if ($sec): ?>
+        <div class="card-b">
+          <p style="margin:0 0 10px"><b><?= $isHe ? 'Em dns.he.net → "Add a new slave", para cada domínio:' : 'No serviço secundário, para cada domínio:' ?></b></p>
+          <table class="list sec-t"><colgroup><col style="width:200px"><col><col style="width:110px"></colgroup><tbody>
+            <tr><td class="mu"><?= $isHe ? 'Domain Name' : 'Domínio' ?></td><td>o domínio (ex.: <span class="mono">pontoderede.pt</span>)</td><td></td></tr>
+            <tr><td class="mu"><?= $isHe ? 'Master #1' : 'Servidor principal' ?></td><td class="mono"><?= h((string)$dn['ip']) ?></td><td><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ip']) ?>">Copiar</button></td></tr>
+            <?php if (!empty($sec['tsig'])): ?>
+            <tr><td class="mu"><?= $isHe ? 'Hash Algorithm' : 'Algoritmo TSIG' ?></td><td class="mono">hmac-sha256</td><td></td></tr>
+            <tr><td class="mu"><?= $isHe ? 'Key Name' : 'Nome da chave' ?></td><td class="mono"><?= h((string)$sec['keyname']) ?></td><td><button type="button" class="chip sm" data-copy="<?= h((string)$sec['keyname']) ?>">Copiar</button></td></tr>
+            <tr><td class="mu"><?= $isHe ? 'Secret Hash' : 'Segredo' ?></td><td class="mono sec-key"><?= h((string)$sec['key']) ?></td><td><button type="button" class="chip sm" data-copy="<?= h((string)$sec['key']) ?>">Copiar</button></td></tr>
+            <?php else: ?><tr><td class="mu">TSIG</td><td>Sem chave (cópia autorizada só pelo IP)</td><td></td></tr><?php endif; ?>
+          </tbody></table>
+          <p style="margin:16px 0 6px"><b>No registador de cada domínio, os nameservers ficam:</b></p>
+          <div class="sec-ns"><?php foreach ((array)($dn['ns_list'] ?? []) as $nx): ?><span class="dz-ns"><code><?= h((string)$nx) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$nx) ?>">Copiar</button></span><?php endforeach; ?></div>
+          <p class="mu" style="margin:12px 0 0">Depois de acrescentares um domínio no serviço, carrega em "Verificar agora" (acima): o teste "DNS secundário" confirma, zona a zona, que a cópia está em dia.<?= $isHe ? ' <a href="https://dns.he.net/" target="_blank" rel="noopener">Abrir dns.he.net</a>' : '' ?></p>
+        </div>
+        <div class="card-f" style="display:flex;gap:8px;flex-wrap:wrap">
+          <form method="post" data-confirm="Gerar uma chave nova? A cópia deixa de funcionar até atualizares o Key Name/Secret Hash no serviço, em todos os domínios."><?= act_fields('dns_secondary', ['op' => 'newkey']) ?><button class="btn sm sec" type="submit">Gerar chave nova</button></form>
+          <form method="post" data-confirm="Desligar o DNS secundário? Os domínios cujos nameservers incluem o serviço deixam de ser atualizados lá."><?= act_fields('dns_secondary', ['op' => 'off']) ?><button class="btn sm sec" type="submit">Desligar</button></form>
+        </div>
+        <?php endif; ?>
+        <form method="post" class="card-b sec-f"<?= $sec ? ' style="border-top:1px solid var(--line)"' : '' ?>>
+          <?= act_fields('dns_secondary', ['op' => 'save']) ?>
+          <div class="fgrid">
+            <label class="fld">Serviço<select class="in" name="provider" data-secprov>
+              <option value="he"<?= !$sec || $isHe ? ' selected' : '' ?>>Hurricane Electric (gratuito, recomendado)</option>
+              <option value="custom"<?= $sec && !$isHe ? ' selected' : '' ?>>Outro serviço</option></select></label>
+            <label class="fld" data-seccustom>IPs que copiam as zonas<input class="in mono" name="ips" value="<?= h($sec && !$isHe ? implode(' ', (array)$sec['ips']) : '') ?>" placeholder="ex.: 203.0.113.10 2001:db8::10"></label>
+            <label class="fld" data-seccustom>Nameservers do serviço<input class="in mono" name="ns" value="<?= h($sec && !$isHe ? implode(' ', (array)$sec['ns']) : '') ?>" placeholder="ex.: ns2.servico.net ns3.servico.net"></label>
+          </div>
+          <label class="chk" style="margin-top:12px"><input type="checkbox" name="tsig" value="1"<?= !$sec || !empty($sec['tsig']) ? ' checked' : '' ?>> Proteger a cópia com chave TSIG (recomendado)</label>
+          <label class="chk"><input type="checkbox" name="keep_ns2" value="1"<?= $sec && !empty($sec['keep_ns2']) ? ' checked' : '' ?>> Manter também o <?= h((string)$dn['ns2']) ?> (só se tiver um IP diferente do <?= h((string)$dn['ns1']) ?>)</label>
+          <div style="margin-top:14px"><button class="btn" type="submit"><?= $sec ? 'Guardar' : 'Ativar o DNS secundário' ?></button></div>
+        </form>
       </section>
       <div class="grid2e" style="align-items:stretch">
         <section class="card">
@@ -6657,6 +6726,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     }
     var c = e.target.closest('[data-copy]'); if (c) { navigator.clipboard && navigator.clipboard.writeText(c.getAttribute('data-copy')); var t = c.textContent; c.textContent = 'Copiado'; setTimeout(function () { c.textContent = t; }, 1200); }
   });
+  document.querySelectorAll('[data-secprov]').forEach(function (sel) { var f = sel.closest('form'); function upd() { f.classList.toggle('custom', sel.value === 'custom'); } sel.addEventListener('change', upd); upd(); });
   var ft = document.getElementById('dz-ft'), q = document.getElementById('dz-q');
   if (ft && q) {
     var rows = Array.prototype.slice.call(document.querySelectorAll('#dz-rows tr')), cnt = document.getElementById('dz-cnt');
@@ -9593,7 +9663,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.13.4 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.14.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -10033,12 +10103,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.13.4
+#  mpanel — IDDigital Hosting CLI v2.14.0
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.13.4"
+MP_VERSION="2.14.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -13670,7 +13740,7 @@ dns_write_zone(){ # gera o ficheiro de zona, verifica-o e só então o ativa
   {
     printf '; IDDigital Hosting — zona %s (gerada pelo painel; não editar à mão)\n$ORIGIN %s.\n$TTL %s\n' "$z" "$z" "$(dns_get DEF_TTL 3600)"
     printf '@ IN SOA %s %s ( %s %s %s %s %s )\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$hm")" "$serial" "$(dns_get SOA_REFRESH 10800)" "$(dns_get SOA_RETRY 3600)" "$(dns_get SOA_EXPIRE 1209600)" "$(dns_get SOA_MIN 3600)"
-    printf '@ IN NS %s\n@ IN NS %s\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$ns2")"
+    local nsx; while IFS= read -r nsx; do [ -n "$nsx" ] && printf '@ IN NS %s\n' "$(dns_fqdn "$nsx")"; done < <(dns_ns_list)
     jq -r '.records[] | [.name, (if (.ttl // 0) >= 60 then (.ttl|tostring) else "-" end), .type, (.prio // 0 | tostring), .value] | @tsv' <<<"$j" | while IFS=$'\t' read -r n t ty pr v; do
       [ "$t" = "-" ] && t=""   # TTL automático: usa o $TTL da zona (um campo vazio deslocaria as colunas)
       case "$ty" in
@@ -13693,12 +13763,77 @@ dns_write_zone(){ # gera o ficheiro de zona, verifica-o e só então o ativa
   install -o root -g nsd -m 640 "$tmp" "$f"; rm -f "$tmp"
   return 0
 }
+# ---------- DNS secundário externo (ex.: Hurricane Electric) ----------
+dns_sec_on(){ [ -n "$(dns_get SEC_IPS '')" ]; }
+dns_ns_list(){ # nameservers da zona e da delegação: ns1 do painel, ns2 (sem secundário) e os do secundário
+  local n
+  echo "$(dns_get NS1)"
+  if ! dns_sec_on || [ "$(dns_get SEC_KEEP_NS2 0)" = 1 ]; then echo "$(dns_get NS2)"; fi
+  if dns_sec_on; then for n in $(dns_get SEC_NS ''); do echo "$n"; done; fi
+}
+dns_nsd_outgoing(){ # o outgoing-interface só é válido dentro das regras da zona: nunca no server: do nsd.conf
+  [ -f /etc/nsd/nsd.conf ] && sed -i '/^    outgoing-interface:/d' /etc/nsd/nsd.conf
+  return 0
+}
+cmd_dns_secondary(){ # --provider he|custom|off [--ips "…"] [--notify "…"] [--ns "…"] [--tsig on|off] [--keep-ns2 on|off] [--new-key]
+  local prov="" ips ntf nss tsig kn2 newkey=0 a
+  dns_need
+  ips=$(dns_get SEC_IPS ''); ntf=$(dns_get SEC_NOTIFY ''); nss=$(dns_get SEC_NS ''); tsig=$(dns_get SEC_TSIG 1); kn2=$(dns_get SEC_KEEP_NS2 0)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --provider) prov="${2:-}"; shift 2 || shift ;;
+      --ips) ips="${2:-}"; shift 2 || shift ;;
+      --notify) ntf="${2:-}"; shift 2 || shift ;;
+      --ns) nss="${2:-}"; shift 2 || shift ;;
+      --tsig) case "${2:-}" in on) tsig=1 ;; off) tsig=0 ;; *) die "--tsig on|off" ;; esac; shift 2 || shift ;;
+      --keep-ns2) case "${2:-}" in on) kn2=1 ;; off) kn2=0 ;; *) die "--keep-ns2 on|off" ;; esac; shift 2 || shift ;;
+      --new-key) newkey=1; shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  case "$prov" in
+    off) for a in SEC_PROVIDER SEC_IPS SEC_NOTIFY SEC_NS; do dns_set "$a" ""; done
+         local z; while IFS= read -r z; do [ -n "$z" ] && dns_bump "$z" "$(dns_load "$z")" >/dev/null 2>&1; done < <(dns_zones)
+         dns_apply; echo "DNS secundário desligado: as zonas voltam a ter só os nameservers deste servidor."; return 0 ;;
+    he) ips="216.218.133.2 2001:470:600::2"; ntf="216.218.133.2"; [ -n "$nss" ] && [ "$(dns_get SEC_PROVIDER '')" = he ] || nss="ns2.he.net ns3.he.net ns4.he.net ns5.he.net" ;;
+    custom|"") prov=${prov:-$(dns_get SEC_PROVIDER custom)} ;;
+    *) die "Serviço: he (Hurricane Electric), custom ou off." ;;
+  esac
+  for a in $ips $ntf; do fw_ip_valid "$a" || die "IP inválido: $a"; done
+  for a in $nss; do [[ "$a" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "Nameserver inválido: $a"; done
+  [ -n "$ips" ] && [ -n "$nss" ] || die "Indica os IPs que copiam as zonas e os nameservers do serviço."
+  dns_set SEC_PROVIDER "$prov"; dns_set SEC_IPS "$ips"; dns_set SEC_NOTIFY "${ntf:-$ips}"; dns_set SEC_NS "$nss"; dns_set SEC_TSIG "$tsig"; dns_set SEC_KEEP_NS2 "$kn2"
+  [ -n "$(dns_get SEC_KEYNAME '')" ] || dns_set SEC_KEYNAME "minipainel-$(hostname -s | tr -cd 'a-z0-9-' | cut -c1-30)-xfr"
+  if [ "$newkey" = 1 ] || [ -z "$(dns_get SEC_KEY '')" ]; then dns_set SEC_KEY "$(openssl rand -base64 32)"; fi
+  # os NS das zonas mudam (entram os do secundário): série nova em todas
+  local z; while IFS= read -r z; do [ -n "$z" ] && dns_bump "$z" "$(dns_load "$z")" >/dev/null 2>&1; done < <(dns_zones)
+  dns_nsd_outgoing
+  dns_apply || die "Configuração do NSD inválida; o secundário não foi ativado."
+  systemctl restart nsd >/dev/null 2>&1 || true   # o outgoing-interface só é lido ao arrancar
+  echo "DNS secundário ativo ($prov): cópia autorizada para $ips$([ "$tsig" = 1 ] && echo ' com chave TSIG'); nameservers das zonas: $(dns_ns_list | tr '\n' ' ')"
+  return 0
+}
+dns_sec_conf(){ # bloco do NSD: chave, quem pode copiar e quem é avisado
+  dns_sec_on || return 0
+  local a k=NOKEY
+  if [ "$(dns_get SEC_TSIG 1)" = 1 ]; then
+    k=$(dns_get SEC_KEYNAME)
+    printf 'key:\n    name: "%s"\n    algorithm: hmac-sha256\n    secret: "%s"\n' "$k" "$(dns_get SEC_KEY)"
+  fi
+  printf 'pattern:\n    name: "mp-secundario"\n'
+  for a in $(dns_get SEC_IPS); do printf '    provide-xfr: %s %s\n' "$a" "$k"; done
+  for a in $(dns_get SEC_NOTIFY); do printf '    notify: %s NOKEY\n' "$a"; done
+  # avisos e cópias saem sempre dos IPs públicos configurados (o secundário só aceita avisos do principal)
+  for a in $(dns_get IP) $(dns_get IP6); do printf '    outgoing-interface: %s\n' "$a"; done
+}
 dns_apply(){ # lista de zonas do NSD e recarga
   local z
   local before after
   before=$(md5sum /etc/nsd/minipainel-zones.conf 2>/dev/null | awk '{print $1}')
-  { echo "# IDDigital Hosting — zonas (gerado pelo painel)"; while IFS= read -r z; do [ -n "$z" ] && printf 'zone:\n    name: "%s"\n    zonefile: "%s/%s.zone"\n' "$z" "$NSD_ZONES" "$z"; done < <(dns_zones); } > /etc/nsd/minipainel-zones.conf
-  chmod 644 /etc/nsd/minipainel-zones.conf
+  local pat=""; dns_sec_on && pat='    include-pattern: "mp-secundario"\n'
+  { echo "# IDDigital Hosting — zonas (gerado pelo painel; não editar à mão)"; dns_sec_conf
+    while IFS= read -r z; do [ -n "$z" ] && printf "zone:\n    name: \"%s\"\n    zonefile: \"%s/%s.zone\"\n$pat" "$z" "$NSD_ZONES" "$z"; done < <(dns_zones); } > /etc/nsd/minipainel-zones.conf
+  chown root:nsd /etc/nsd/minipainel-zones.conf 2>/dev/null; chmod 640 /etc/nsd/minipainel-zones.conf   # pode ter a chave TSIG
   after=$(md5sum /etc/nsd/minipainel-zones.conf | awk '{print $1}')
   nsd-checkconf /etc/nsd/nsd.conf >/dev/null 2>&1 || { echo "Configuração do NSD inválida." >&2; return 1; }
   if [ "$before" != "$after" ]; then
@@ -13904,6 +14039,20 @@ cmd_dns_server_check(){ # saúde do servidor DNS
   if [ "$(jq -r '.[] | select(.id == "udp") | .status' <<<"$r")" != ok ]; then chk open "Resolver aberto" warn "Não testado (o servidor não responde)"; jq -n --argjson r "$r" --arg ts "$EPOCHSECONDS" '{ts:($ts|tonumber), rows:$r}' > "$f"; chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"; echo "Verificação do servidor DNS: $(jq '[.[] | select(.status == "ok")] | length' <<<"$r") de $(jq 'length' <<<"$r") OK."; return 0; fi
   out=$(dig +time=3 +tries=1 A google.com @"$ip" 2>/dev/null | grep -o 'status: [A-Z]*' | cut -d' ' -f2)
   if [ "$out" = NOERROR ] && dig +short +time=3 +tries=1 A google.com @"$ip" 2>/dev/null | grep -q .; then chk open "Resolver aberto" fail "Responde por domínios de terceiros (pode ser usado em ataques)"; else chk open "Resolver aberto" ok "Não (só responde pelas tuas zonas)"; fi
+  if dns_sec_on; then   # o secundário tem a versão atual de cada zona?
+    local sns zz ok=0 tot=0 miss="" o1 o2
+    sns=$(dns_get SEC_NS | awk '{print $1}')
+    while IFS= read -r zz; do
+      [ -n "$zz" ] || continue; tot=$((tot+1))
+      o1=$(dig +short +time=3 +tries=1 SOA "$zz" @"$ip" 2>/dev/null | awk '{print $3}')
+      o2=$(dig +short +time=4 +tries=1 SOA "$zz" @"$sns" 2>/dev/null | awk '{print $3}')
+      if [ -n "$o2" ] && [ "$o2" = "$o1" ]; then ok=$((ok+1)); else miss+=" $zz"; fi
+    done < <(dns_zones)
+    if [ "$tot" = 0 ]; then chk sec "DNS secundário" warn "Ainda não há zonas para copiar"
+    elif [ "$ok" = "$tot" ]; then chk sec "DNS secundário ($sns)" ok "Cópia em dia nas $tot zonas"
+    elif [ "$ok" = 0 ]; then chk sec "DNS secundário ($sns)" fail "Nenhuma zona copiada ainda: acrescenta cada domínio no serviço (ex.: dns.he.net → Add a new slave)"
+    else chk sec "DNS secundário ($sns)" warn "$ok de $tot em dia; por copiar ou desatualizadas:$miss"; fi
+  fi
   jq -n --argjson r "$r" --arg ts "$EPOCHSECONDS" '{ts:($ts|tonumber), rows:$r}' > "$f"; chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
   echo "Verificação do servidor DNS: $(jq '[.[] | select(.status == "ok")] | length' <<<"$r") de $(jq 'length' <<<"$r") OK."; return 0
 }
@@ -14018,14 +14167,14 @@ cmd_dns_check(){ # a delegação no registador já aponta para este servidor?
   local z="${1:-}" got ours r f=$DATA/stats/dns-check.json
   dns_need; [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
   got=$(dig +short NS "$z" @8.8.8.8 2>/dev/null | sed 's/\.$//' | sort | tr '\n' ' ')
-  ours=$(printf '%s\n%s\n' "$(dns_get NS1)" "$(dns_get NS2)" | sort | tr '\n' ' ')
+  ours=$(dns_ns_list | sort -u | tr '\n' ' ')
   r=$(dig +short SOA "$z" @"$(dns_get IP)" 2>/dev/null | awk '{print $3}')
   [ -s "$f" ] || echo '{}' > "$f"
   jq --arg z "$z" --arg g "$got" --argjson ok "$([ "$got" = "$ours" ] && echo true || echo false)" --arg r "$r" --arg t "$EPOCHSECONDS" \
     '.[$z] = {checked:($t|tonumber), delegated:$ok, found:$g, serial_public:$r}' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
   chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
   if [ "$got" = "$ours" ]; then echo "Delegação de $z correta: os nameservers apontam para este servidor."
-  else echo "A delegação de $z ainda não aponta para este servidor (encontrado: ${got:-nada}). Altera os nameservers no registador para $(dns_get NS1) e $(dns_get NS2)."; fi
+  else echo "A delegação de $z ainda não aponta para este servidor (encontrado: ${got:-nada}). Altera os nameservers no registador para: $(dns_ns_list | tr '\n' ' ')"; fi
   return 0
 }
 dns_state_json(){
@@ -14035,7 +14184,11 @@ dns_state_json(){
   jq -n --arg ns1 "$(dns_get NS1)" --arg ns2 "$(dns_get NS2)" --arg ip "$(dns_get IP)" --arg ip6 "$(dns_get IP6)" --argjson zs "$zs" \
     --arg act "$(systemctl is-active nsd 2>/dev/null)" --arg hm "$(dns_get HOSTMASTER '')" \
     --arg st "$(dns_get DEF_TTL 3600) $(dns_get SOA_REFRESH 10800) $(dns_get SOA_RETRY 3600) $(dns_get SOA_EXPIRE 1209600) $(dns_get SOA_MIN 3600)" \
-    '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, hostmaster:$hm, active:($act == "active"), zones:$zs,
+    --argjson nsl "$(dns_ns_list | jq -R . | jq -sc 'map(select(length > 0))')" \
+    --arg sp "$(dns_get SEC_PROVIDER '')" --arg si "$(dns_get SEC_IPS '')" --arg sn "$(dns_get SEC_NS '')" --arg st2 "$(dns_get SEC_TSIG 1)" \
+    --arg sk "$(dns_get SEC_KEYNAME '')" --arg ss "$(dns_get SEC_KEY '')" --arg s2 "$(dns_get SEC_KEEP_NS2 0)" \
+    '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, hostmaster:$hm, active:($act == "active"), zones:$zs, ns_list:$nsl,
+      sec:(if $si == "" then null else {provider:$sp, ips:($si | split(" ")), ns:($sn | split(" ")), tsig:($st2 == "1"), keyname:$sk, key:$ss, keep_ns2:($s2 == "1")} end),
       soa:($st | split(" ") | {ttl:(.[0]|tonumber), refresh:(.[1]|tonumber), retry:(.[2]|tonumber), expire:(.[3]|tonumber), minimum:(.[4]|tonumber)})}'
 }
 # ============================ LOGS DOS SITES =================================
@@ -14983,7 +15136,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -15001,7 +15154,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.13.4 (mpanel)
+IDDigital Hosting — CLI v2.14.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -15056,6 +15209,8 @@ DNS (gestão avançada)
   dns-propagation <zona>               compara este servidor com a Google (8.8.8.8)
   dns-settings [--ttl N] [--refresh N] [--retry N] [--expire N] [--minimum N]
   dns-restart · dns-server-check       reinicia / verifica a saúde do servidor DNS
+  dns-secondary --provider he|custom|off [--ips "…"] [--notify "…"] [--ns "…"] [--tsig on|off] [--keep-ns2 on|off] [--new-key]
+                                       DNS secundário externo (ex.: Hurricane Electric)
   brotli on|off                        compressão Brotli no nginx (além do gzip)
   opcache-settings [--memory auto|MB] [--revalidate S] · opcache-reset
   db-tune [--buffer auto|MB] [--slow on|off] [--slow-time S]   afina o MariaDB (reinicia-o; repõe se falhar)
@@ -15267,6 +15422,7 @@ dispatch(){
     dns-settings)      cmd_dns_settings "$@" ;;
     dns-restart)       cmd_dns_restart ;;
     dns-server-check)  cmd_dns_server_check ;;
+    dns-secondary)     cmd_dns_secondary "$@" ;;
     site-webp)         cmd_site_webp "$@" ;;
     webp-nightly)      cmd_webp_nightly ;;
     net-tune)          cmd_net_tune "$@" ;;
@@ -15378,7 +15534,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.13.4
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.14.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -15926,7 +16082,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.13.4
+#  mp-sendmail — IDDigital Hosting v2.14.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -15998,7 +16154,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.13.4
+#  mpanel-term — IDDigital Hosting v2.14.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -16023,7 +16179,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.13.4
+#  mpanel-cron — IDDigital Hosting v2.14.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
