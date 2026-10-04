@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
+# NOTAS: Atualizações a partir de um repositório privado (token do GitHub só de leitura); version.json e assinatura passam a ser opcionais.
 # =============================================================================
-#  IDDigital Hosting v2.10.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.11.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.10.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.11.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.10.0"
+MP_VERSION="2.11.1"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -544,7 +545,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.10.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.11.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -552,7 +553,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.10.0';
+const MP_VERSION = '2.11.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -731,11 +732,13 @@ function log_tail(string $f, int $max, string $grep = '', int $maxBytes = 335544
 function log_parse(string $ln): ?array { // formato "combined" do nginx
     if (!preg_match('/^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d{3}) (\d+|-) "([^"]*)" "([^"]*)"/', $ln, $m)) return null;
     $t = DateTime::createFromFormat('d/M/Y:H:i:s O', $m[2]);
-    return ['ip' => $m[1], 't' => $t ? $t->getTimestamp() : 0, 'm' => $m[3], 'u' => $m[4], 's' => (int)$m[5], 'b' => $m[6] === '-' ? 0 : (int)$m[6], 'r' => $m[7], 'a' => $m[8]];
+    $rt = null; $cs = '';
+    if (preg_match('/ rt=([0-9.]+)(?: urt=\S+)?(?: cs=(\S+))?\s*$/', $ln, $x)) { $rt = (float)$x[1]; $cs = ($x[2] ?? '') === '-' ? '' : (string)($x[2] ?? ''); }
+    return ['ip' => $m[1], 't' => $t ? $t->getTimestamp() : 0, 'm' => $m[3], 'u' => $m[4], 's' => (int)$m[5], 'b' => $m[6] === '-' ? 0 : (int)$m[6], 'r' => $m[7], 'a' => $m[8], 'rt' => $rt, 'cs' => $cs];
 }
 function log_is_bot(string $ua): bool { return (bool)preg_match('/bot|crawl|spider|slurp|bingpreview|facebookexternalhit|curl|wget|python|go-http|semrush|ahrefs|mj12|petal|yandex|dotbot|scrapy/i', $ua); }
 function log_summary(string $f): array { // últimas 24 h
-    $since = time() - 86400; $sum = ['total' => 0, 'c' => ['2' => 0, '3' => 0, '4' => 0, '5' => 0], 'bots' => 0, 'bytes' => 0, 'ips' => [], 'e404' => [], 'e5xx' => []];
+    $since = time() - 86400; $sum = ['total' => 0, 'c' => ['2' => 0, '3' => 0, '4' => 0, '5' => 0], 'bots' => 0, 'bytes' => 0, 'ips' => [], 'e404' => [], 'e5xx' => [], 'slow' => [], 'cache' => [], 'rtn' => 0, 'rts' => 0.0];
     foreach (log_tail($f, 300000, '', 67108864) as $ln) {
         $p = log_parse($ln); if (!$p || $p['t'] < $since) continue;
         $sum['total']++; $k = (string)intdiv($p['s'], 100); if (isset($sum['c'][$k])) $sum['c'][$k]++;
@@ -744,7 +747,15 @@ function log_summary(string $f): array { // últimas 24 h
         $u = strtok($p['u'], '?') ?: $p['u'];
         if ($p['s'] === 404) $sum['e404'][$u] = ($sum['e404'][$u] ?? 0) + 1;
         if ($p['s'] >= 500) $sum['e5xx'][$u] = ($sum['e5xx'][$u] ?? 0) + 1;
+        if ($p['rt'] !== null && !preg_match('/\.(css|js|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|map)$/i', $u)) {
+            $sum['rtn']++; $sum['rts'] += $p['rt'];
+            $q0 = $sum['slow'][$u] ?? [0, 0.0, 0.0]; $sum['slow'][$u] = [$q0[0] + 1, $q0[1] + $p['rt'], max($q0[2], $p['rt'])];
+        }
+        if ($p['cs'] !== '') $sum['cache'][$p['cs']] = ($sum['cache'][$p['cs']] ?? 0) + 1;
     }
+    $sum['slow'] = array_filter($sum['slow'], function ($v) { return $v[0] >= 2; });
+    uasort($sum['slow'], function ($a, $b) { return ($b[1] / $b[0]) <=> ($a[1] / $a[0]); });
+    $sum['slow'] = array_slice($sum['slow'], 0, 10, true);
     foreach (['ips', 'e404', 'e5xx'] as $k) { arsort($sum[$k]); $sum[$k] = array_slice($sum[$k], 0, 10, true); }
     return $sum;
 }
@@ -1372,7 +1383,7 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .term-wrap{position:relative;height:calc(100vh - 260px);min-height:420px;background:#000;border-radius:0 0 24px 24px;overflow:hidden}
 .term-wrap iframe{display:none;width:100%;height:100%;border:0}
 .term-wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;color:#cbd5e1}
-.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
 @media (max-width:1100px){.grid3{grid-template-columns:1fr}}
 .lg-url{display:inline-block;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .lg-ua{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1665,7 +1676,7 @@ if (qget('logs') === 'json' || qget('logs') === 'dl') {
     $ld = MP_SITE_LOGS . '/' . $ls;
     if (qget('logs') === 'dl') {
         $lf = qget('f');
-        if (!preg_match('/^(access|error)\.log(-\d{8})?(\.\d+)?(\.gz)?$/', $lf) || !is_file($ld . '/' . $lf) || is_link($ld . '/' . $lf)) { http_response_code(404); exit('Ficheiro não encontrado.'); }
+        if (!preg_match('/^(access|error|php-slow)\.log(-\d{8})?(\.\d+)?(\.gz)?$/', $lf) || !is_file($ld . '/' . $lf) || is_link($ld . '/' . $lf)) { http_response_code(404); exit('Ficheiro não encontrado.'); }
         @set_time_limit(0); while (ob_get_level() > 0) ob_end_clean();
         header('Content-Type: ' . (substr($lf, -3) === '.gz' ? 'application/gzip' : 'text/plain; charset=utf-8'));
         header('Content-Length: ' . (string)filesize($ld . '/' . $lf));
@@ -1674,8 +1685,8 @@ if (qget('logs') === 'json' || qget('logs') === 'dl') {
         readfile($ld . '/' . $lf); exit;
     }
     header('Content-Type: application/json; charset=utf-8');
-    $lt = qget('t') === 'error' ? 'error' : 'access'; $n = max(10, min(5000, (int)qget('n') ?: 500)); $q = mb_substr(qget('q'), 0, 200);
-    if ($lt === 'error') { echo json_encode(['lines' => log_tail($ld . '/error.log', $n, $q)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE); exit; }
+    $lt = in_array(qget('t'), ['error', 'slow'], true) ? qget('t') : 'access'; $n = max(10, min(5000, (int)qget('n') ?: 500)); $q = mb_substr(qget('q'), 0, 200);
+    if ($lt !== 'access') { echo json_encode(['lines' => log_tail($ld . '/' . ($lt === 'slow' ? 'php-slow' : 'error') . '.log', $n, $q)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE); exit; }
     $st = qget('st'); $ipf = qget('ip'); $rows = [];
     foreach (log_tail($ld . '/access.log', $st === '' && $ipf === '' ? $n : 200000, $q) as $ln) {
         $p = log_parse($ln); if (!$p) continue;
@@ -1957,6 +1968,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (post('unsigned') === '1' && !reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
             job_submit('update-start', post('unsigned') === '1' ? ['--allow-unsigned'] : [], 'Atualizar o painel' . (post('unsigned') === '1' ? ' (sem assinatura)' : ''));
             break;
+        case 'update_token':
+            if (!reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
+            if (post('op') === 'clear') { job_submit('update-token', ['clear'], 'Remover o token do GitHub'); break; }
+            $tk = trim(post_raw('token'));
+            if (!preg_match('/^(github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255})$/', $tk)) { $bad('Token inválido (começa por github_pat_ ou ghp_).'); break; }
+            job_submit('update-token', ['set', $tk], 'Guardar o token do GitHub');
+            break;
+
         case 'update_key':
             if (!reauth_ok($auth)) { $bad('Password ou código de verificação incorretos.'); break; }
             if (post('op') === 'clear') { job_submit('update-key', ['clear'], 'Remover a chave das atualizações'); break; }
@@ -2043,6 +2062,34 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'mail_av':
             job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
             $back = ['t' => 'antispam'];
+            break;
+
+        case 'site_perf':
+            if (!valid_site($site)) { $bad('Site inválido.'); break; }
+            $pc = post('cache'); $ppm = post('pm'); $pmc = post('maxch'); $psl = post('slow');
+            if (!in_array($pc, ['0', '60', '300', '600', '1800', '3600'], true) || !in_array($ppm, ['ondemand', 'dynamic'], true) || !ctype_digit($pmc) || (int)$pmc < 2 || (int)$pmc > 200 || !in_array($psl, ['0', '1', '3', '5', '10'], true)) { $bad('Valores inválidos (máximo de processos entre 2 e 200).'); break; }
+            job_submit('site-perf', [$site, '--cache', $pc, '--pm', $ppm, '--max-children', $pmc, '--slowlog', $psl], 'Desempenho de ' . $site);
+            break;
+        case 'cache_purge':
+            if (!valid_site($site)) { $bad('Site inválido.'); break; }
+            job_submit('cache-purge', [$site], 'Limpar a cache de ' . $site);
+            break;
+        case 'opcache_settings':
+            $om = post('mem'); $orv = post('reval');
+            if (!in_array($om, ['auto', '128', '256', '512', '1024'], true) || !in_array($orv, ['0', '2', '60', '300'], true)) { $bad('Valores inválidos.'); break; }
+            job_submit('opcache-settings', ['--memory', $om, '--revalidate', $orv], 'Configuração do OPcache');
+            break;
+        case 'opcache_reset':
+            job_submit('opcache-reset', [], 'Limpar o OPcache');
+            break;
+        case 'db_tune':
+            $bp = strtolower(post('bp')); $st = post('slow') === 'off' ? 'off' : 'on'; $stt = post('slow_t');
+            if ($bp !== 'auto' && (!ctype_digit($bp) || (int)$bp < 128)) { $bad('Memória: auto ou um número igual ou superior a 128 (MB).'); break; }
+            if (!ctype_digit($stt) || (int)$stt < 1 || (int)$stt > 99) { $bad('Tempo das consultas lentas entre 1 e 99 segundos.'); break; }
+            job_submit('db-tune', ['--buffer', $bp, '--slow', $st, '--slow-time', $stt], 'Afinar o MariaDB');
+            break;
+        case 'db_slow_report':
+            job_submit('db-slow-report', [], 'Atualizar as consultas lentas');
             break;
 
         case 'sentinel_run':
@@ -2847,6 +2894,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
                     <a href="?p=cron&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('clock') ?>Tarefas agendadas</a>
                     <a href="?p=logs&amp;site=<?= h(rawurlencode($n)) ?>"><?= ic('logs') ?>Logs</a>
                     <button type="button" data-open="dlg-dom-<?= h($n) ?>"><?= ic('world') ?>Domínios e SSL</button>
+                    <button type="button" data-open="dlg-perf-<?= h($n) ?>"><?= ic('pulse') ?>Desempenho<?= !empty($s['perf']['cache']) ? ' <span class="pill p-ok" style="margin-left:auto">Cache</span>' : '' ?></button>
                     <button type="button" data-open="dlg-ftp-<?= h($n) ?>"><?= ic('upload') ?>Acesso FTP/SFTP<?= !empty($s['ftp']) ? ' <span class="pill p-ok" style="margin-left:auto">Ativo</span>' : '' ?></button>
                     <button type="button" data-open="dlg-lim-<?= h($n) ?>"><?= ic('sliders') ?>Limites</button>
                     <button type="button" data-open="dlg-php-<?= h($n) ?>"><?= ic('code') ?>Mudar versão de PHP</button>
@@ -3017,6 +3065,30 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       <?php endif; ?>
 
 <?php elseif ($page === 'bd'): ?>
+      <?php $pg = is_array($state['perf'] ?? null) ? $state['perf'] : []; $slow = jload(MP_STATS . '/db-slow.json') ?? ['rows' => []]; ?>
+      <div class="grid2e" style="align-items:stretch">
+      <section class="card">
+        <div class="card-h"><div><h2>Desempenho do MariaDB</h2><p>A memória para dados evita leituras ao disco. Por omissão o MariaDB usa só 128 MB.</p></div></div>
+        <form method="post" class="card-b" data-confirm="Aplicar? O MariaDB é reiniciado (os sites ficam alguns segundos sem base de dados). Se não arrancar, a configuração anterior é reposta sozinha.">
+          <?= act_fields('db_tune') ?>
+          <div class="fgrid">
+            <label class="fld">Memória para dados (MB)<input class="in" name="bp" value="<?= h((string)($pg['db_bp'] ?? 'auto')) ?>" placeholder="auto"><small>auto = <?= (int)($pg['db_bp_auto'] ?? 128) ?> MB (servidor com <?= number_format((int)($pg['ram_mb'] ?? 0) / 1024, 1, ',', '') ?> GB de RAM)</small></label>
+            <label class="fld">Registar consultas lentas<select class="in" name="slow"><option value="on"<?= !empty($pg['db_slow']) ? ' selected' : '' ?>>Sim</option><option value="off"<?= empty($pg['db_slow']) ? ' selected' : '' ?>>Não</option></select></label>
+            <label class="fld">Consulta lenta a partir de (s)<input class="in" name="slow_t" inputmode="numeric" value="<?= (int)($pg['db_slow_t'] ?? 2) ?>"></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Aplicar</button></div>
+        </form>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>Consultas mais lentas</h2><p>Agrupadas por forma (os valores trocados por N), ordenadas pelo tempo total. Atualizado de hora a hora<?= !empty($slow['ts']) ? ' · última vez às ' . h(gmdate('H:i', (int)$slow['ts'] + tz_off(live_stats()))) : '' ?>.</p></div>
+          <form method="post"><?= act_fields('db_slow_report') ?><button class="btn sm sec" type="submit">Atualizar</button></form></div>
+        <?php if (empty($slow['rows'])): ?><div class="empty">Sem consultas lentas registadas<?= empty($pg['db_slow']) ? ' (o registo está desligado)' : '' ?>.</div>
+        <?php else: ?><div class="row-list"><?php foreach (array_slice($slow['rows'], 0, 10) as $q): ?>
+          <div class="item"><div class="grow"><div class="mono pr-cmd" title="<?= h((string)$q['query']) ?>" style="max-width:100%"><?= h((string)$q['query']) ?></div>
+            <div class="mu"><?= (int)$q['count'] ?>× · média <?= h(str_replace('.', ',', (string)$q['avg'])) ?> s · total <?= h(str_replace('.', ',', (string)$q['total'])) ?> s · <?= h((string)$q['user']) ?></div></div></div>
+        <?php endforeach; ?></div><?php endif; ?>
+      </section>
+      </div>
       <section class="card">
         <div class="row-list">
           <div class="item">
@@ -3077,6 +3149,17 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     if ($sel === null && $phps) $sel = $phps[0];
     $sv = $sel !== null ? (string)($sel['version'] ?? '') : '';
 ?>
+      <?php $pg = is_array($state['perf'] ?? null) ? $state['perf'] : []; ?>
+      <section class="card">
+        <div class="card-h"><div><h2>OPcache</h2><p>Guarda o código PHP já compilado em memória, em todas as versões. Depois de atualizar um site por FTP, as alterações aparecem no máximo ao fim do tempo de verificação (ou de imediato com "Limpar OPcache").</p></div>
+          <form method="post"><?= act_fields('opcache_reset') ?><button class="btn sm sec" type="submit">Limpar OPcache</button></form></div>
+        <form method="post" class="card-b" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+          <?= act_fields('opcache_settings') ?>
+          <label class="fld" style="min-width:220px">Memória<select class="in" name="mem"><option value="auto"<?= ($pg['opc_mem'] ?? 'auto') === 'auto' ? ' selected' : '' ?>>Automática (<?= (int)($pg['opc_mem_auto'] ?? 128) ?> MB)</option><?php foreach ([128, 256, 512, 1024] as $mb): ?><option value="<?= $mb ?>"<?= (string)($pg['opc_mem'] ?? '') === (string)$mb ? ' selected' : '' ?>><?= $mb ?> MB</option><?php endforeach; ?></select></label>
+          <label class="fld" style="min-width:260px">Verificar alterações aos ficheiros<select class="in" name="reval"><?php foreach (['0' => 'Em cada pedido (mais lento)', '2' => 'A cada 2 segundos', '60' => 'A cada minuto (recomendado)', '300' => 'A cada 5 minutos'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)($pg['opc_reval'] ?? 60) === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select></label>
+          <button class="btn" type="submit">Guardar</button>
+        </form>
+      </section>
       <section class="card">
         <div class="card-h"><h2>Versões instaladas</h2><p>Para acrescentar versões, volta a correr o instalador com --php.</p></div>
         <?php if (!$phps): ?>
@@ -4085,12 +4168,24 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <form method="post"><?= act_fields('update_check') ?><button class="btn sec" type="submit"><?= ic('reload') ?>Procurar atualizações</button></form>
             <?php if (!empty($up['newer'])): ?>
             <form method="post" data-confirm="Atualizar o painel para a v<?= h($up['latest']) ?>? É guardada uma cópia da versão atual e, se algo falhar, é reposta automaticamente."><?= act_fields('update_start') ?>
-              <?php if (!$hasKey): ?><label class="chk" style="margin-bottom:8px"><input type="checkbox" name="unsigned" value="1" required> Instalar sem verificação de assinatura (não recomendado)</label><div class="fgrid" style="margin-bottom:10px"><?= reauth_fields($auth) ?></div><?php endif; ?>
+              <?php if (!$hasKey): ?><label class="chk" style="margin-bottom:8px"><input type="checkbox" name="unsigned" value="1" required> Instalar sem assinatura<?= !empty($up['sha256']) ? ' (SHA-256 <span class="mono">' . h(substr((string)$up['sha256'], 0, 16)) . '…</span>)' : '' ?>: confirmo que publiquei esta versão</label><div class="fgrid" style="margin-bottom:10px"><?= reauth_fields($auth) ?></div><?php endif; ?>
               <button class="btn" type="submit"><?= ic('download') ?>Atualizar para v<?= h($up['latest']) ?></button></form>
             <?php endif; ?>
           </div>
         </div>
         <div class="card-f mu">Antes de atualizar: verifica a assinatura e o SHA-256, guarda uma cópia do painel e da configuração e, depois, confirma que o painel responde. Se não responder, repõe a versão anterior sozinho. Os sites, bases de dados, email e backups não são tocados.</div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><div><h2>Repositório no GitHub</h2><p>De onde vêm as atualizações. Com um token só de leitura, o repositório pode ficar sempre privado.</p></div>
+          <span class="pill <?= !empty($up['token']) ? 'p-ok' : 'p-off' ?>"><?= !empty($up['token']) ? 'Token configurado' : 'Sem token (repositório público)' ?></span></div>
+        <form method="post" class="card-b">
+          <?= act_fields('update_token', ['op' => 'set']) ?>
+          <label class="fld">Token do GitHub (só leitura)<input class="in mono" type="password" name="token" required autocomplete="off" placeholder="github_pat_…"><small>GitHub → Settings → Developer settings → Fine-grained tokens: só este repositório, permissão "Contents: Read-only". Fica guardado só para o root.</small></label>
+          <div class="fgrid" style="margin-top:12px"><?= reauth_fields($auth) ?></div>
+          <div style="display:flex;gap:8px;margin-top:14px"><button class="btn" type="submit"><?= !empty($up['token']) ? 'Substituir token' : 'Guardar token' ?></button></div>
+        </form>
+        <?php if (!empty($up['token'])): ?><form method="post" class="card-f" data-confirm="Remover o token? Se o repositório for privado, deixa de ser possível procurar atualizações."><?= act_fields('update_token', ['op' => 'clear']) ?><div class="fgrid" style="margin-bottom:10px"><?= reauth_fields($auth) ?></div><button class="btn sm sec" type="submit">Remover token</button></form><?php endif; ?>
       </section>
 
       <section class="card">
@@ -4168,12 +4263,12 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     $names = [];
     foreach ($sites as $s) { $sn0 = (string)($s['name'] ?? ''); if (valid_site($sn0)) $names[] = $sn0; }
     $lgSite = in_array(qget('site'), $names, true) ? qget('site') : ($names[0] ?? '');
-    $lgT = in_array(qget('t'), ['access', 'error', 'php', 'cron'], true) ? qget('t') : 'access';
+    $lgT = in_array(qget('t'), ['access', 'error', 'php', 'slow', 'cron'], true) ? qget('t') : 'access';
     $lgDir = MP_SITE_LOGS . '/' . $lgSite;
     $lgSum = ($lgSite !== '' && $lgT === 'access') ? log_summary($lgDir . '/access.log') : null;
     $lgFiles = [];
-    if ($lgSite !== '' && in_array($lgT, ['access', 'error'], true)) {
-        foreach ((array)glob($lgDir . '/' . $lgT . '.log*') as $lf) { if (is_file((string)$lf)) $lgFiles[] = ['n' => basename((string)$lf), 's' => (int)filesize((string)$lf), 'm' => (int)filemtime((string)$lf)]; }
+    if ($lgSite !== '' && in_array($lgT, ['access', 'error', 'slow'], true)) {
+        foreach ((array)glob($lgDir . '/' . ($lgT === 'slow' ? 'php-slow' : $lgT) . '.log*') as $lf) { if (is_file((string)$lf)) $lgFiles[] = ['n' => basename((string)$lf), 's' => (int)filesize((string)$lf), 'm' => (int)filemtime((string)$lf)]; }
         usort($lgFiles, function ($a, $b) { return $b['m'] <=> $a['m']; });
     }
     $crons = is_array($state['crons'] ?? null) ? array_values(array_filter($state['crons'], function ($c) use ($lgSite) { return ($c['site'] ?? '') === $lgSite; })) : [];
@@ -4185,7 +4280,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <select class="in" onchange="location.href='?p=logs&amp;t=<?= $lgT ?>&amp;site='+encodeURIComponent(this.value)" aria-label="Site" style="height:40px;min-width:200px;width:auto">
           <?php foreach ($names as $sn): ?><option value="<?= h($sn) ?>"<?= $sn === $lgSite ? ' selected' : '' ?>><?= h($sn) ?></option><?php endforeach; ?>
         </select>
-        <?php foreach (['access' => 'Acessos', 'error' => 'Erros do servidor', 'php' => 'Erros do PHP', 'cron' => 'Tarefas agendadas'] as $tk => $tl): ?>
+        <?php foreach (['access' => 'Acessos', 'error' => 'Erros do servidor', 'php' => 'Erros do PHP', 'slow' => 'PHP lento', 'cron' => 'Tarefas agendadas'] as $tk => $tl): ?>
           <a class="chip<?= $lgT === $tk ? ' prim' : '' ?>" href="?p=logs&amp;site=<?= h(rawurlencode($lgSite)) ?>&amp;t=<?= $tk ?>"><?= $tl ?></a>
         <?php endforeach; ?>
         <label class="chk" style="margin-left:auto"><input type="checkbox" id="lg-live"> Ao vivo</label>
@@ -4196,7 +4291,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="stat"><span class="tile t-blue"><?= ic('world') ?></span><div><div class="k">Pedidos (24 h)</div><div class="v"><?= number_format($lgSum['total'], 0, ',', ' ') ?> <small><?= h(fmt_bytes((float)$lgSum['bytes'])) ?></small></div></div></div>
         <div class="stat"><span class="tile t-acc"><?= ic('check') ?></span><div><div class="k">Sucesso (2xx / 3xx)</div><div class="v"><?= $lgSum['c']['2'] ?> <small>/ <?= $lgSum['c']['3'] ?></small></div></div></div>
         <div class="stat"><span class="tile t-warn"><?= ic('ban') ?></span><div><div class="k">Erros 4xx / 5xx</div><div class="v"><?= $lgSum['c']['4'] ?> <small>/ <b style="color:<?= $lgSum['c']['5'] > 0 ? 'var(--err)' : 'inherit' ?>"><?= $lgSum['c']['5'] ?></b></small></div></div></div>
-        <div class="stat"><span class="tile t-vio"><?= ic('server') ?></span><div><div class="k">Robôs</div><div class="v"><?= $lgSum['total'] ? round($lgSum['bots'] * 100 / $lgSum['total']) : 0 ?>%</div></div></div>
+        <div class="stat"><span class="tile t-vio"><?= ic('clock') ?></span><div><div class="k">Tempo médio (páginas)</div><div class="v"><?= $lgSum['rtn'] ? (int)round($lgSum['rts'] * 1000 / $lgSum['rtn']) . ' <small>ms</small>' : '—' ?></div></div></div>
+        <?php $ch = $lgSum['cache']; $cht = array_sum($ch); if ($cht): ?><div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Cache de página</div><div class="v"><?= (int)round(($ch['HIT'] ?? 0) * 100 / $cht) ?>% <small>servido da cache · <?= $lgSum['total'] ? round($lgSum['bots'] * 100 / $lgSum['total']) : 0 ?>% robôs</small></div></div></div><?php endif; ?>
       </section>
       <div class="grid3">
         <?php foreach (['e5xx' => ['Erros 5xx (servidor/PHP)', 'Sem erros 5xx nas últimas 24 h.'], 'e404' => ['Páginas não encontradas (404)', 'Sem 404 nas últimas 24 h.']] as $k => $lbl): ?>
@@ -4205,6 +4301,10 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php foreach ($lgSum[$k] as $u => $cnt): ?><div class="item"><div class="grow mono lg-url" title="<?= h($u) ?>"><?= h($u) ?></div><b><?= (int)$cnt ?></b></div><?php endforeach; ?></div><?php endif; ?>
         </section>
         <?php endforeach; ?>
+        <section class="card"><div class="card-h"><h2>Páginas mais lentas</h2></div>
+          <?php if (!$lgSum['slow']): ?><div class="empty">Sem dados de tempo ainda (o registo de tempos começa com esta versão).</div><?php else: ?><div class="row-list">
+          <?php foreach ($lgSum['slow'] as $u => $v): ?><div class="item"><div class="grow mono lg-url" title="<?= h($u) ?>"><?= h($u) ?></div><span class="mu"><?= (int)$v[0] ?>×</span><b style="<?= $v[1] / $v[0] >= 1 ? 'color:var(--err)' : '' ?>"><?= (int)round($v[1] * 1000 / $v[0]) ?> ms</b></div><?php endforeach; ?></div><?php endif; ?>
+        </section>
         <section class="card"><div class="card-h"><h2>IPs mais ativos</h2></div>
           <?php if (!$lgSum['ips']): ?><div class="empty">Sem pedidos nas últimas 24 h.</div><?php else: ?><div class="row-list">
           <?php foreach ($lgSum['ips'] as $ip => $cnt): ?><div class="item"><div class="grow mono"><?= h($ip) ?></div><b><?= (int)$cnt ?></b>
@@ -4214,7 +4314,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   <?php endif; ?>
 
       <section class="card" id="lg" data-site="<?= h($lgSite) ?>" data-t="<?= $lgT ?>">
-        <div class="card-h"><div><h2><?= ['access' => 'Acessos', 'error' => 'Erros do servidor (nginx)', 'php' => 'Erros do PHP', 'cron' => 'Saída das tarefas agendadas'][$lgT] ?></h2><p class="mono"><?= h(['access' => MP_SITE_LOGS . "/$lgSite/access.log", 'error' => MP_SITE_LOGS . "/$lgSite/error.log", 'php' => "/srv/www/$lgSite/logs/php-error.log", 'cron' => "/srv/www/$lgSite/logs/cron-<id>.log"][$lgT]) ?></p></div>
+        <div class="card-h"><div><h2><?= ['access' => 'Acessos', 'error' => 'Erros do servidor (nginx)', 'php' => 'Erros do PHP', 'slow' => 'Scripts PHP lentos (ficheiro e função em curso)', 'cron' => 'Saída das tarefas agendadas'][$lgT] ?></h2><p class="mono"><?= h(['access' => MP_SITE_LOGS . "/$lgSite/access.log", 'error' => MP_SITE_LOGS . "/$lgSite/error.log", 'php' => "/srv/www/$lgSite/logs/php-error.log", 'slow' => MP_SITE_LOGS . "/$lgSite/php-slow.log (Sites → ⋮ → Desempenho)", 'cron' => "/srv/www/$lgSite/logs/cron-<id>.log"][$lgT]) ?></p></div>
           <div class="lg-filters">
             <?php if ($lgT === 'access'): ?>
             <select class="in" id="lg-st" aria-label="Código"><option value="">Todos os códigos</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option></select>
@@ -4764,6 +4864,30 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 </dialog>
 
 <?php foreach ($sites as $s): $n = (string)($s['name'] ?? ''); if (!valid_site($n)) continue; $L = site_limits($s); ?>
+<dialog class="drawer" id="dlg-perf-<?= h($n) ?>">
+  <form method="post">
+    <?= act_fields('site_perf', ['site' => $n]) ?>
+    <?php $pf = is_array($s['perf'] ?? null) ? $s['perf'] : ['cache' => 0, 'pm' => 'ondemand', 'maxch' => 10, 'slow' => 5]; ?>
+    <div class="dlg-h"><div><h3>Desempenho de <?= h($n) ?></h3><p>Cache de página, processos PHP e registo de scripts lentos.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+    <div class="dlg-b">
+      <label class="fld">Cache de página<select class="in" name="cache">
+        <?php foreach (['0' => 'Desligada', '60' => '1 minuto', '300' => '5 minutos', '600' => '10 minutos', '1800' => '30 minutos', '3600' => '1 hora'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)$pf['cache'] === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?>
+      </select><small>As páginas ficam guardadas e são servidas sem executar o PHP. Nunca entram em cache: sessões iniciadas, carrinhos, checkout, áreas de cliente e de administração, formulários (POST).</small></label>
+      <div class="fgrid">
+        <label class="fld">Processos PHP<select class="in" name="pm"><option value="ondemand"<?= $pf['pm'] !== 'dynamic' ? ' selected' : '' ?>>A pedido (poupa memória)</option><option value="dynamic"<?= $pf['pm'] === 'dynamic' ? ' selected' : '' ?>>Sempre prontos (mais rápido)</option></select><small>"Sempre prontos" evita o atraso da primeira visita depois de uma pausa</small></label>
+        <label class="fld">Máximo de processos<input class="in" name="maxch" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)$pf['maxch'] ?>"><small>Visitas atendidas em simultâneo (cada processo usa até ao limite de memória do site)</small></label>
+      </div>
+      <label class="fld">Registar scripts lentos<select class="in" name="slow">
+        <?php foreach (['0' => 'Não registar', '1' => 'Acima de 1 segundo', '3' => 'Acima de 3 segundos', '5' => 'Acima de 5 segundos', '10' => 'Acima de 10 segundos'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)$pf['slow'] === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?>
+      </select><small>Mostra o ficheiro e a função que estava a correr quando o pedido demorou (Logs → PHP lento)</small></label>
+    </div>
+    <div class="dlg-f">
+      <?php if ((int)$pf['cache'] > 0): ?><button class="btn sec" type="submit" form="cache-purge-<?= h($n) ?>" style="margin-right:auto">Limpar cache</button><?php endif; ?>
+      <button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button>
+    </div>
+  </form>
+</dialog>
+<form method="post" id="cache-purge-<?= h($n) ?>" style="display:none"><?= act_fields('cache_purge', ['site' => $n]) ?></form>
 <dialog class="drawer" id="dlg-ftp-<?= h($n) ?>">
   <form method="post" autocomplete="off">
     <?= act_fields('site_ftp', ['site' => $n]) ?>
@@ -4945,15 +5069,15 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   }
   function load() {
     var n = $('lg-n').value, q = $('lg-q').value.trim(), url;
-    if (t === 'access' || t === 'error') {
+    if (t === 'access' || t === 'error' || t === 'slow') {
       url = '?logs=json&site=' + encodeURIComponent(site) + '&t=' + t + '&n=' + n + '&q=' + encodeURIComponent(q);
       if (t === 'access') url += '&st=' + encodeURIComponent($('lg-st').value) + '&ip=' + encodeURIComponent($('lg-ip').value.trim());
       fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
-        if (t === 'error') return raw(d.lines || []);
+        if (t !== 'access') return raw(d.lines || []);
         var rows = d.rows || [];
         if (!rows.length) { body.innerHTML = '<div class="empty">Sem pedidos com estes filtros.</div>'; return; }
-        body.innerHTML = '<table class="list cards lg-tab"><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
-          rows.slice().reverse().map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido"><span class="mu">' + esc(r.m) + '</span> <span class="mono lg-url" title="' + esc(r.u) + '">' + esc(r.u) + '</span></td><td data-label="Código">' + pill(r.s) + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>';
+        body.innerHTML = '<table class="list cards lg-tab"><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tempo</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
+          rows.slice().reverse().map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido"><span class="mu">' + esc(r.m) + '</span> <span class="mono lg-url" title="' + esc(r.u) + '">' + esc(r.u) + '</span></td><td data-label="Código">' + pill(r.s) + (r.cs ? ' <span class="mu" title="Cache">' + esc(r.cs) + '</span>' : '') + '</td><td class="r" data-label="Tempo">' + (r.rt === null || r.rt === undefined ? '—' : '<span' + (r.rt >= 1 ? ' style="color:var(--err)"' : '') + '>' + Math.round(r.rt * 1000) + ' ms</span>') + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>';
       }).catch(function () { body.innerHTML = '<div class="empty">Não foi possível ler o log.</div>'; });
     } else {
       var f = t === 'php' ? 'php-error.log' : ('cron-' + (($('lg-cron') || {}).value || 'x') + '.log');
@@ -7904,7 +8028,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.10.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.11.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -8344,11 +8468,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.10.0
+#  mpanel — IDDigital Hosting CLI v2.11.1
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.10.0"
+MP_VERSION="2.11.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -8480,6 +8604,17 @@ lim_opt_key(){ case "$1" in --memory) echo MEM ;; --upload) echo UPLOAD ;; --exe
 lim_get(){ local v; v=$(site_get "$1" "$2"); [ -n "$v" ] || v=$(lim_default "$2"); echo "$v"; }
 lim_check(){ local lo hi; read -r lo hi <<<"$(lim_range "$1")"; [ "$2" -ge "$lo" ] && [ "$2" -le "$hi" ]; }
 
+perf_pool_pm(){ # site -> linhas do gestor de processos
+  local mc pm; mc=$(site_get "$1" MAXCH); [[ "$mc" =~ ^[0-9]+$ ]] || mc=10; pm=$(site_get "$1" PM)
+  if [ "$pm" = dynamic ]; then
+    local sp=$(( mc < 4 ? mc : 4 ))
+    printf 'pm = dynamic\npm.max_children = %s\npm.start_servers = %s\npm.min_spare_servers = 1\npm.max_spare_servers = %s' "$mc" "$(( sp > 1 ? 2 : 1 ))" "$sp"
+  else printf 'pm = ondemand\npm.max_children = %s\npm.process_idle_timeout = 10s' "$mc"; fi
+}
+perf_pool_slow(){ # site -> registo de scripts lentos (numa pasta do root, nunca na pasta do site)
+  local sl; sl=$(site_get "$1" SLOW); [[ "$sl" =~ ^[0-9]+$ ]] || sl=5
+  if [ "$sl" -gt 0 ]; then printf 'request_slowlog_timeout = %ss\nslowlog = %s/%s/php-slow.log' "$sl" "$SITE_LOGS" "$1"; fi
+}
 write_pool(){
   local n=$1 v=$2 f
   f="$(php_pool_dir "$v")/mp-$n.conf"
@@ -8492,10 +8627,9 @@ listen = $(php_sock "$v" "$n")
 listen.owner = $WEB_USER
 listen.group = $WEB_GROUP
 listen.mode = 0660
-pm = ondemand
-pm.max_children = 10
-pm.process_idle_timeout = 10s
+$(perf_pool_pm "$n")
 pm.max_requests = 500
+$(perf_pool_slow "$n")
 chdir = /
 php_admin_value[open_basedir] = $WWW_ROOT/$n/
 php_admin_value[upload_tmp_dir] = $WWW_ROOT/$n/tmp
@@ -8524,6 +8658,7 @@ write_nginx(){
   inc="$NGX_INC/mp-$n.inc"
   install -d -m 755 "$NGX_INC"
   logs_dir_site "$n"
+  perf_ngx_write
   [ "$p" = 80 ] && dflt=" default_server"
   if [ "${IPV6:-0}" = 1 ]; then l6="    listen [::]:$p$dflt;"; fi
   up=$(lim_get "$n" UPLOAD)
@@ -8533,7 +8668,7 @@ write_nginx(){
     root $WWW_ROOT/$n/public_html;
     index index.php index.html index.htm;
     client_max_body_size ${up}M;
-    access_log $SITE_LOGS/$n/access.log;
+    access_log $SITE_LOGS/$n/access.log mpcombined;
     error_log  $SITE_LOGS/$n/error.log;
 
     location ~ /\.(?!well-known) { deny all; }
@@ -8552,6 +8687,7 @@ write_nginx(){
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         fastcgi_param PATH_INFO \$fastcgi_path_info;
         fastcgi_read_timeout ${rt}s;
+$(perf_ngx_cache "$n")
     }
 EOF
   chmod 644 "$inc"
@@ -8770,7 +8906,7 @@ cmd_site_del(){
   if [ "$PANEL_PHP" != "$v" ]; then apply_php "$PANEL_PHP" || warn "Verifica o PHP-FPM $PANEL_PHP."; fi
   rm -f "/var/lib/minipainel/stats/traffic/$n.csv" "/var/lib/minipainel/stats/traffic/$n.pos"
   rm -rf "/etc/cron.d/minipainel-$n" "${CRON_DIR:?}/$n" "$CRON_DIR/$n.json"; touch /etc/cron.d 2>/dev/null
-  rm -rf "${SITE_LOGS:?}/$n"; logs_rotate_conf
+  rm -rf "${SITE_LOGS:?}/$n" "${CACHE_ROOT:?}/$n"; logs_rotate_conf
   rm -rf "${MSPOOL:?}/$n" "${MLIB:?}/rejected/$n" "$MLIB/rejected/$n.log" "$MLIB/sent/$n"
   if [ -s "$DBMAP" ]; then jq --arg s "$n" 'with_entries(select(.value != $s))' "$DBMAP" > "$DBMAP.tmp" && mv -f "$DBMAP.tmp" "$DBMAP"; fi
   sleep 1
@@ -11423,6 +11559,35 @@ UPD_STATE=$DATA/stats/update.json
 OSU_STATE=$DATA/stats/os-updates.json
 UPD_RUN=$DATA/stats/update-run.json
 upd_url(){ local v; v=$(grep -m1 '^URL=' "$UPD_CONF" 2>/dev/null | cut -d= -f2-); echo "${v:-https://raw.githubusercontent.com/naoavr/painel-alojamento-nao/main}"; }
+UPD_TOKEN=/etc/minipainel/update.token
+upd_get(){ # url ficheiro [segundos] -> código HTTP (token do GitHub lido de um descritor, nunca na linha de comandos)
+  local u=$1 out=$2 t=${3:-60} tok=""
+  [ -s "$UPD_TOKEN" ] && tok=$(cat "$UPD_TOKEN")
+  if [ -n "$tok" ] && [[ "$u" == https://raw.githubusercontent.com/* || "$u" == https://api.github.com/* ]]; then
+    curl -sSL -m "$t" -o "$out" -w '%{http_code}' -K <(printf 'header = "Authorization: Bearer %s"\n' "$tok") "$u" 2>/dev/null
+  else
+    curl -sSL -m "$t" -o "$out" -w '%{http_code}' "$u" 2>/dev/null
+  fi
+}
+upd_err(){ # código -> explicação
+  case "$1" in
+    401|403) echo "o GitHub recusou o acesso (token inválido, expirado ou sem permissão de leitura do conteúdo)" ;;
+    404) if [ -s "$UPD_TOKEN" ]; then echo "ficheiro não encontrado (o token tem acesso a este repositório?)"; else echo "ficheiro não encontrado (se o repositório for privado, configura o token do GitHub em Atualizações)"; fi ;;
+    000) echo "sem ligação ao GitHub" ;;
+    *) echo "erro HTTP $1" ;;
+  esac
+}
+cmd_update_token(){ # set <token> | clear
+  case "${1:-}" in
+    set) local t="${2:-}"; [[ "$t" =~ ^(github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255})$ ]] || die "Token inválido (começa por github_pat_ ou ghp_)."
+         ( umask 077; printf '%s\n' "$t" > "$UPD_TOKEN" ); chmod 600 "$UPD_TOKEN"
+         local tmp c; tmp=$(mktemp); c=$(upd_get "$(upd_url)/install.sh" "$tmp" 30); rm -f "$tmp"
+         if [ "$c" = 200 ]; then echo "Token guardado: o repositório está acessível."; else echo "Token guardado, mas o teste falhou: $(upd_err "$c")."; fi ;;
+    clear) rm -f "$UPD_TOKEN"; echo "Token do GitHub removido." ;;
+    *) die "Usa: mpanel update-token set <token> | clear" ;;
+  esac
+  return 0
+}
 upd_status(){ # passo em curso (texto) ou vazio para terminar
   if [ -n "${1:-}" ]; then jq -n --arg s "$1" --arg k "${2:-painel}" --arg t "$EPOCHSECONDS" '{step:$s, kind:$k, since:($t|tonumber)}' > "$UPD_RUN.tmp" && chown root:"$PANEL_SYSUSER" "$UPD_RUN.tmp" && chmod 640 "$UPD_RUN.tmp" && mv -f "$UPD_RUN.tmp" "$UPD_RUN"
   else rm -f "$UPD_RUN"; fi
@@ -11434,7 +11599,7 @@ upd_newer(){ [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | ta
 upd_verify(){ # pasta -> 0 assinatura válida; 2 sem chave configurada; 1 falha
   local d=$1 sum
   sum=$(sha256sum "$d/install.sh" | awk '{print $1}')
-  [ "$sum" = "$(jq -r '.sha256 // ""' "$d/version.json" 2>/dev/null)" ] || return 1
+  if [ -s "$d/version.json" ]; then [ "$sum" = "$(jq -r '.sha256 // ""' "$d/version.json" 2>/dev/null)" ] || return 1; fi
   [ -s "$UPD_PUB" ] || return 2
   [ -s "$d/install.sh.sig" ] || return 1
   base64 -d "$d/install.sh.sig" > "$d/sig.bin" 2>/dev/null || return 1
@@ -11442,18 +11607,30 @@ upd_verify(){ # pasta -> 0 assinatura válida; 2 sem chave configurada; 1 falha
   return 0
 }
 cmd_update_check(){
-  local u j latest notes signed=false
-  u=$(upd_url)
-  j=$(curl -fsSL -m 20 "$u/version.json" 2>/dev/null) || j=""
-  if [ -z "$j" ] || ! jq -e '.version' >/dev/null 2>&1 <<<"$j"; then
-    upd_save "$UPD_STATE" "$(jq -n --arg c "$MP_VERSION" --arg t "$EPOCHSECONDS" --arg u "$u" '{current:$c, latest:null, checked:($t|tonumber), error:"Não foi possível obter version.json de \($u)", key:false}' | jq --argjson k "$([ -s "$UPD_PUB" ] && echo true || echo false)" '.key = $k')"
-    die "Não foi possível obter $u/version.json (o repositório ainda não publica version.json?)."
+  local u j="" latest notes signed=false tmp c sum="" src=version.json
+  u=$(upd_url); tmp=$(mktemp)
+  c=$(upd_get "$u/version.json" "$tmp" 20)
+  if [ "$c" = 200 ] && jq -e '.version' "$tmp" >/dev/null 2>&1; then j=$(cat "$tmp")
+  else
+    # sem version.json: lê a versão do próprio instalador
+    c=$(upd_get "$u/install.sh" "$tmp" 120)
+    if [ "$c" = 200 ] && latest=$(grep -m1 -oE '^MP_VERSION="[0-9]+(\.[0-9]+)+"' "$tmp" | cut -d'"' -f2) && [ -n "$latest" ]; then
+      sum=$(sha256sum "$tmp" | awk '{print $1}'); src=install.sh
+      j=$(jq -n --arg v "$latest" --arg s "$sum" --arg n "$(grep -m1 -E '^# NOTAS:' "$tmp" | sed 's/^# NOTAS:[[:space:]]*//')" '{version:$v, sha256:$s, notes:$n, date:""}')
+    fi
   fi
-  latest=$(jq -r '.version' <<<"$j"); notes=$(jq -r '.notes // ""' <<<"$j")
+  rm -f "$tmp"
+  if [ -z "$j" ]; then
+    upd_save "$UPD_STATE" "$(jq -n --arg c "$MP_VERSION" --arg t "$EPOCHSECONDS" --arg e "Não foi possível obter a versão publicada em $u: $(upd_err "$c")." --argjson k "$([ -s "$UPD_PUB" ] && echo true || echo false)" --argjson tk "$([ -s "$UPD_TOKEN" ] && echo true || echo false)" \
+      '{current:$c, latest:null, checked:($t|tonumber), error:$e, key:$k, token:$tk}')"
+    die "Não foi possível obter a versão publicada em $u: $(upd_err "$c")."
+  fi
+  latest=$(jq -r '.version' <<<"$j"); notes=$(jq -r '.notes // ""' <<<"$j"); sum=$(jq -r '.sha256 // ""' <<<"$j")
   [ -s "$UPD_PUB" ] && signed=true
   upd_save "$UPD_STATE" "$(jq -n --arg c "$MP_VERSION" --arg l "$latest" --arg n "$notes" --arg d "$(jq -r '.date // ""' <<<"$j")" --arg t "$EPOCHSECONDS" --argjson k "$signed" \
+     --argjson tk "$([ -s "$UPD_TOKEN" ] && echo true || echo false)" --arg sh "$sum" --arg src "$src" \
      --argjson nw "$(upd_newer "$MP_VERSION" "$latest" && echo true || echo false)" \
-     '{current:$c, latest:$l, notes:$n, date:$d, checked:($t|tonumber), newer:$nw, key:$k, error:null}')"
+     '{current:$c, latest:$l, notes:$n, date:$d, checked:($t|tonumber), newer:$nw, key:$k, token:$tk, sha256:$sh, source:$src, error:null}')"
   if upd_newer "$MP_VERSION" "$latest"; then echo "Há uma versão nova: $latest (instalada: $MP_VERSION)."; else echo "O painel está atualizado ($MP_VERSION)."; fi
   return 0
 }
@@ -11507,9 +11684,12 @@ cmd_update_run(){
   exec 6>/run/minipainel-update.lock; flock -n 6 || die "Já está a decorrer uma atualização."
   u=$(upd_url); d="$UPD_DIR/novo"; rm -rf "$d"; install -d -m 700 "$d"
   upd_status "A descarregar a versão nova" painel
-  curl -fsSL -m 120 -o "$d/version.json" "$u/version.json" && curl -fsSL -m 300 -o "$d/install.sh" "$u/install.sh" || { upd_finish false "Atualização falhou: não foi possível descarregar de $u."; die "Falhou o download."; }
-  curl -fsSL -m 60 -o "$d/install.sh.sig" "$u/install.sh.sig" 2>/dev/null
-  v=$(jq -r '.version // ""' "$d/version.json")
+  local c; c=$(upd_get "$u/install.sh" "$d/install.sh" 300)
+  [ "$c" = 200 ] || { rm -f "$d/install.sh"; upd_finish false "Atualização falhou: não foi possível descarregar o instalador de $u ($(upd_err "$c"))."; die "Falhou o download."; }
+  [ "$(upd_get "$u/version.json" "$d/version.json" 60)" = 200 ] && jq -e . "$d/version.json" >/dev/null 2>&1 || rm -f "$d/version.json"
+  [ "$(upd_get "$u/install.sh.sig" "$d/install.sh.sig" 60)" = 200 ] || rm -f "$d/install.sh.sig"
+  v=$(jq -r '.version // ""' "$d/version.json" 2>/dev/null); [ -n "$v" ] || v=$(grep -m1 -oE '^MP_VERSION="[0-9]+(\.[0-9]+)+"' "$d/install.sh" | cut -d'"' -f2)
+  [ -n "$v" ] || { upd_finish false "Atualização recusada: o ficheiro descarregado não parece ser o instalador do painel."; die "Instalador inválido."; }
   upd_status "A verificar a assinatura" painel
   upd_verify "$d"; rc=$?
   if [ "$rc" = 1 ]; then upd_finish false "Atualização para $v recusada: o ficheiro não corresponde ao version.json ou a assinatura é inválida."; die "Verificação falhou."; fi
@@ -12146,7 +12326,7 @@ logs_rotate_conf(){ # rotação diária; os logs dentro da pasta do site são ro
   local d n; d=$(logs_days)
   {
     echo "# IDDigital Hosting — rotação dos logs dos sites (gerado pelo painel; guarda $d dias)"
-    printf '%s/*/access.log %s/*/error.log {\n    daily\n    rotate %s\n    maxage %s\n    missingok\n    notifempty\n    compress\n    delaycompress\n    dateext\n    sharedscripts\n    postrotate\n        [ -s /run/nginx.pid ] && kill -USR1 "$(cat /run/nginx.pid)" 2>/dev/null || true\n    endscript\n}\n' "$SITE_LOGS" "$SITE_LOGS" "$d" "$d"
+    printf '%s/*/access.log %s/*/error.log %s/*/php-slow.log {\n    daily\n    rotate %s\n    maxage %s\n    missingok\n    notifempty\n    compress\n    delaycompress\n    dateext\n    sharedscripts\n    postrotate\n        [ -s /run/nginx.pid ] && kill -USR1 "$(cat /run/nginx.pid)" 2>/dev/null || true\n    endscript\n}\n' "$SITE_LOGS" "$SITE_LOGS" "$SITE_LOGS" "$d" "$d"
     for n in $(site_names); do
       printf '%s/%s/logs/*.log {\n    su mp_%s mp_%s\n    daily\n    rotate %s\n    maxage %s\n    missingok\n    notifempty\n    compress\n    delaycompress\n    dateext\n    copytruncate\n}\n' "$WWW_ROOT" "$n" "$n" "$n" "$d" "$d"
     done
@@ -12616,6 +12796,174 @@ cmd_sentinel_settings(){
   echo "Sentinela: definições guardadas."; return 0
 }
 
+# ============================ DESEMPENHO =====================================
+CACHE_ROOT=/var/cache/minipainel/fcgi
+PERF_NGX=/etc/nginx/minipainel/conf.d/perf.conf
+perf_ngx_write(){ # formato de log com tempos, regras de exclusão da cache e zonas por site
+  local n
+  install -d -m 755 /etc/nginx/minipainel/conf.d
+  {
+    echo "# IDDigital Hosting — desempenho (gerado pelo painel; não editar à mão)"
+    echo "log_format mpcombined '\$remote_addr - \$remote_user [\$time_local] \"\$request\" \$status \$body_bytes_sent \"\$http_referer\" \"\$http_user_agent\" rt=\$request_time urt=\$upstream_response_time cs=\$upstream_cache_status';"
+    cat <<'EOF'
+# nunca guardar em cache: pedidos que não sejam GET/HEAD, sessões iniciadas, carrinhos e áreas privadas
+map $request_method $mp_nc_m { default 1; GET 0; HEAD 0; }
+map $http_cookie $mp_nc_c { default 0; "~*(wordpress_logged_in|wordpress_sec|wp-postpass|comment_author|woocommerce_items_in_cart|woocommerce_cart_hash|wp_woocommerce_session|edd_items_in_cart|PrestaShop-|OCSESSID|PHPSESSID|mp_nocache)" 1; }
+map $request_uri $mp_nc_u { default 0; "~*(/wp-admin|/wp-login\.php|/xmlrpc\.php|/wp-json/|/wc-api/|/cart|/carrinho|/checkout|/finalizar|/my-account|/minha-conta|/admin|/administrator|route=(checkout|account)|add-to-cart=|preview=true|/feed)" 1; }
+map "$mp_nc_m$mp_nc_c$mp_nc_u" $mp_nocache { default 1; "000" 0; }
+EOF
+    for n in $(site_names); do
+      [ "$(site_get "$n" CACHE)" -gt 0 ] 2>/dev/null || continue
+      install -d -o "$WEB_USER" -g "$WEB_GROUP" -m 750 "$CACHE_ROOT/$n"
+      echo "fastcgi_cache_path $CACHE_ROOT/$n levels=1:2 keys_zone=mp_$n:16m max_size=1g inactive=2h use_temp_path=off;"
+    done
+  } > "$PERF_NGX"
+  chmod 644 "$PERF_NGX"
+}
+perf_ngx_cache(){ # site -> linhas da cache para o bloco PHP (vazio se desligada)
+  local n=$1 ttl; ttl=$(site_get "$n" CACHE); [[ "$ttl" =~ ^[0-9]+$ ]] && [ "$ttl" -gt 0 ] || return 0
+  cat <<EOF
+        fastcgi_cache mp_$n;
+        fastcgi_cache_key "\$scheme\$request_method\$host\$request_uri";
+        fastcgi_cache_valid 200 301 302 ${ttl}s;
+        fastcgi_cache_valid 404 60s;
+        fastcgi_cache_use_stale error timeout updating invalid_header http_500 http_503;
+        fastcgi_cache_background_update on;
+        fastcgi_cache_lock on;
+        fastcgi_cache_bypass \$mp_nocache;
+        fastcgi_no_cache \$mp_nocache;
+        add_header X-Cache \$upstream_cache_status always;
+EOF
+}
+cmd_site_perf(){ # site [--cache 0|60|600|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
+  local n="${1:-}" c pm mc sl; [ $# -gt 0 ] && shift
+  valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
+  c=$(site_get "$n" CACHE); pm=$(site_get "$n" PM); mc=$(site_get "$n" MAXCH); sl=$(site_get "$n" SLOW)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --cache) c="${2:-}"; shift 2 || shift ;; --pm) pm="${2:-}"; shift 2 || shift ;;
+      --max-children) mc="${2:-}"; shift 2 || shift ;; --slowlog) sl="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  c=${c:-0}; pm=${pm:-ondemand}; mc=${mc:-10}; sl=${sl:-5}
+  [[ "$c" =~ ^(0|60|300|600|1800|3600)$ ]] || die "Cache: 0 (desligada), 60, 300, 600, 1800 ou 3600 segundos."
+  [[ "$pm" =~ ^(ondemand|dynamic)$ ]] || die "Processos: ondemand (a pedido) ou dynamic (sempre prontos)."
+  [[ "$mc" =~ ^[0-9]{1,3}$ ]] && [ "$mc" -ge 2 ] && [ "$mc" -le 200 ] || die "Máximo de processos entre 2 e 200."
+  [[ "$sl" =~ ^[0-9]{1,2}$ ]] && [ "$sl" -le 60 ] || die "Registo de scripts lentos: 0 (desligado) a 60 segundos."
+  site_set "$n" CACHE "$c"; site_set "$n" PM "$pm"; site_set "$n" MAXCH "$mc"; site_set "$n" SLOW "$sl"
+  write_pool "$n" "$(site_get "$n" PHP)"; apply_php "$(site_get "$n" PHP)"
+  write_nginx "$n" "$(site_get "$n" PORT)" "$(site_get "$n" PHP)" "$(ngx_file "$n")"
+  [ "$c" = 0 ] && rm -rf "${CACHE_ROOT:?}/$n"
+  apply_nginx || die "Configuração do nginx inválida."
+  echo "Desempenho de $n: cache $([ "$c" = 0 ] && echo desligada || echo "de $c s"); processos PHP $([ "$pm" = dynamic ] && echo 'sempre prontos' || echo 'a pedido') (máx. $mc); scripts lentos $([ "$sl" = 0 ] && echo 'não registados' || echo "registados acima de $sl s")."
+  return 0
+}
+cmd_perf_sync(){ # reescreve os pools PHP de todos os sites (atualizações)
+  local n v; for n in $(site_names); do write_pool "$n" "$(site_get "$n" PHP)"; done
+  for v in $(php_installed); do apply_php "$v" >/dev/null 2>&1; done
+  echo "Pools PHP dos sites atualizados."; return 0
+}
+cmd_cache_purge(){ local n="${1:-}"
+  valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
+  if [ -d "$CACHE_ROOT/$n" ]; then find "$CACHE_ROOT/$n" -mindepth 1 -delete 2>/dev/null; fi
+  echo "Cache do site $n limpa."; return 0; }
+# ---------- OPcache (por versão de PHP) ----------
+php_confd(){ if [ "$OS_FAMILY" = debian ]; then echo "/etc/php/$1/fpm/conf.d"; else echo "/etc/opt/remi/php$(php_vv "$1")/php.d"; fi; }
+opc_mem_auto(){ local m; m=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo); [ "$m" -ge 3500 ] && echo 256 || echo 128; }
+opcache_write(){
+  local v mem rv d
+  mem=$(srv_get OPC_MEM auto); [ "$mem" = auto ] && mem=$(opc_mem_auto); rv=$(srv_get OPC_REVAL 60)
+  for v in $(php_installed); do
+    d=$(php_confd "$v"); [ -d "$d" ] || continue
+    printf '; IDDigital Hosting — desempenho do PHP (gerado pelo painel; não editar à mão)\nopcache.enable=1\nopcache.memory_consumption=%s\nopcache.interned_strings_buffer=16\nopcache.max_accelerated_files=30000\nopcache.validate_timestamps=1\nopcache.revalidate_freq=%s\nopcache.save_comments=1\nrealpath_cache_size=4096K\nrealpath_cache_ttl=600\n' "$mem" "$rv" > "$d/99-minipainel.ini"
+    chmod 644 "$d/99-minipainel.ini"
+  done
+}
+cmd_opcache_settings(){
+  local mem rv
+  mem=$(srv_get OPC_MEM auto); rv=$(srv_get OPC_REVAL 60)
+  while [ $# -gt 0 ]; do case "$1" in --memory) mem="${2:-}"; shift 2 || shift ;; --revalidate) rv="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
+  [ "$mem" = auto ] || { [[ "$mem" =~ ^[0-9]{2,4}$ ]] && [ "$mem" -ge 64 ] && [ "$mem" -le 2048 ]; } || die "Memória do OPcache: auto ou 64 a 2048 MB."
+  [[ "$rv" =~ ^[0-9]{1,4}$ ]] && [ "$rv" -le 3600 ] || die "Verificação de alterações: 0 a 3600 segundos."
+  srv_set OPC_MEM "$mem"; srv_set OPC_REVAL "$rv"; opcache_write
+  local v; for v in $(php_installed); do apply_php "$v" >/dev/null 2>&1; done
+  echo "OPcache: $([ "$mem" = auto ] && echo "$(opc_mem_auto) MB (automático)" || echo "$mem MB"); alterações aos ficheiros detetadas $([ "$rv" = 0 ] && echo 'em cada pedido' || echo "a cada $rv s")."
+  return 0
+}
+cmd_opcache_reset(){ local v; for v in $(php_installed); do systemctl reload "$(php_service "$v")" >/dev/null 2>&1; done; echo "OPcache limpo em todas as versões de PHP."; return 0; }
+# ---------- MariaDB ----------
+db_cnf(){ if [ -d /etc/mysql/mariadb.conf.d ]; then echo /etc/mysql/mariadb.conf.d/90-minipainel.cnf; else echo /etc/my.cnf.d/90-minipainel.cnf; fi; }
+db_slowlog(){ if [ -d /var/log/mysql ]; then echo /var/log/mysql/mariadb-slow.log; else echo /var/log/mariadb/mariadb-slow.log; fi; }
+db_svc(){ if systemctl list-unit-files mariadb.service 2>/dev/null | grep -q '^mariadb.service'; then echo mariadb; else echo mysql; fi; }
+db_bp_auto(){ # 25% da RAM com email ativo, 35% sem; entre 128 MB e 70%
+  local m p; m=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo); p=35; mail_on && p=25
+  local b=$(( m * p / 100 / 64 * 64 )); [ "$b" -lt 128 ] && b=128; echo "$b"
+}
+cmd_db_tune(){ # [--buffer auto|MB] [--slow on|off] [--slow-time S]
+  local bp st stt cnf old tmp m
+  bp=$(srv_get DB_BP auto); st=$(srv_get DB_SLOW 1); stt=$(srv_get DB_SLOW_T 2)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --buffer) bp="${2:-}"; shift 2 || shift ;;
+      --slow) case "${2:-}" in on) st=1 ;; off) st=0 ;; *) die "--slow on|off" ;; esac; shift 2 || shift ;;
+      --slow-time) stt="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  m=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  [ "$bp" = auto ] || { [[ "$bp" =~ ^[0-9]{3,6}$ ]] && [ "$bp" -ge 128 ] && [ "$bp" -le $(( m * 70 / 100 )) ]; } || die "Memória para dados: auto ou entre 128 MB e $(( m * 70 / 100 )) MB (70% da RAM)."
+  [[ "$stt" =~ ^[0-9]{1,2}$ ]] && [ "$stt" -ge 1 ] || die "Tempo das consultas lentas: 1 a 99 segundos."
+  srv_set DB_BP "$bp"; srv_set DB_SLOW "$st"; srv_set DB_SLOW_T "$stt"
+  local b=$bp; [ "$b" = auto ] && b=$(db_bp_auto)
+  cnf=$(db_cnf); install -d -m 755 "$(dirname "$cnf")"; old=$(mktemp); [ -f "$cnf" ] && cp -p "$cnf" "$old" || : > "$old"
+  install -d -o mysql -g adm -m 2750 "$(dirname "$(db_slowlog)")" 2>/dev/null || install -d -o mysql -m 750 "$(dirname "$(db_slowlog)")"
+  cat > "$cnf" <<EOF
+# IDDigital Hosting — desempenho do MariaDB (gerado pelo painel; não editar à mão)
+[mysqld]
+innodb_buffer_pool_size = ${b}M
+innodb_flush_method = O_DIRECT
+max_connections = 200
+table_open_cache = 4000
+tmp_table_size = 64M
+max_heap_table_size = 64M
+slow_query_log = $([ "$st" = 1 ] && echo ON || echo OFF)
+slow_query_log_file = $(db_slowlog)
+long_query_time = $stt
+EOF
+  chmod 644 "$cnf"
+  echo "A reiniciar o MariaDB (alguns segundos)..."
+  if ! systemctl restart "$(db_svc)" >/dev/null 2>&1 || ! mysql -uroot -N -e 'SELECT 1' >/dev/null 2>&1; then
+    # não arrancou: repõe a configuração anterior
+    if [ -s "$old" ]; then cp -p "$old" "$cnf"; else rm -f "$cnf"; fi
+    systemctl restart "$(db_svc)" >/dev/null 2>&1; rm -f "$old"
+    die "O MariaDB não arrancou com a configuração nova; foi reposta a anterior. Detalhe: journalctl -u $(db_svc) -n 30"
+  fi
+  rm -f "$old"
+  local real; real=$(mysql -uroot -N -e 'SELECT @@innodb_buffer_pool_size DIV 1048576' 2>/dev/null)
+  [ "$real" = "$b" ] || warn "O MariaDB respondeu, mas ainda está com ${real:-?} MB para dados (esperado: $b MB). Reinicia-o: systemctl restart $(db_svc)"
+  echo "MariaDB: ${b} MB para dados$([ "$bp" = auto ] && echo ' (automático)'); consultas lentas $([ "$st" = 1 ] && echo "registadas acima de $stt s" || echo 'não registadas')."
+  return 0
+}
+cmd_db_slow_report(){ # resumo das consultas lentas para o painel
+  local f out=$DATA/stats/db-slow.json; f=$(db_slowlog)
+  if [ ! -s "$f" ] || ! command -v mysqldumpslow >/dev/null 2>&1; then echo '{"ts":'"$EPOCHSECONDS"',"rows":[]}' > "$out"
+  else
+    { mysqldumpslow -s t -t 25 "$f" 2>/dev/null || true; } | awk -v ts="$EPOCHSECONDS" '
+      function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, " ", s); return s }
+      /^Count: / { if (q != "") emit(); match($0, /Count: [0-9]+/); c = substr($0, RSTART + 7, RLENGTH - 7)
+        match($0, /Time=[0-9.]+s \([0-9.]+s\)/); t = substr($0, RSTART, RLENGTH); split(t, a, /[=s( )]+/); avg = a[2]; tot = a[3]
+        rows = 0; if (match($0, /Rows(_sent)?=[0-9.]+/)) { rows = substr($0, RSTART, RLENGTH); sub(/.*=/, "", rows) }
+        if (avg == "") avg = 0; if (tot == "") tot = 0
+        u = $0; sub(/.*, /, "", u); q = " "; next }
+      { if (q != "") q = q " " $0 }
+      function emit() { gsub(/[ ]+/, " ", q); out = out (n++ ? "," : "") sprintf("{\"count\":%d,\"avg\":%s,\"total\":%s,\"rows\":%s,\"user\":\"%s\",\"query\":\"%s\"}", c, avg, tot, rows, esc(u), esc(substr(q, 2, 600))); q = "" }
+      BEGIN { out = ""; n = 0 } END { if (q != "") emit(); printf "{\"ts\":%s,\"rows\":[%s]}\n", ts, out }' > "$out.tmp" && mv -f "$out.tmp" "$out"
+  fi
+  chown root:"$PANEL_SYSUSER" "$out"; chmod 640 "$out"
+  echo "Relatório de consultas lentas atualizado."; return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -12624,12 +12972,14 @@ write_state(){
         --arg mem "$(lim_get "$n" MEM)" --arg up "$(lim_get "$n" UPLOAD)" --arg ex "$(lim_get "$n" EXEC)" \
         --arg it "$(lim_get "$n" INPUT_TIME)" --arg iv "$(lim_get "$n" INPUT_VARS)" --arg de "$(lim_get "$n" DISPLAY_ERRORS)" \
         --arg doms "$(site_get "$n" DOMAINS)" --arg ssl "$(site_get "$n" SSL)" --arg hs "$(site_get "$n" HTTPS)" --arg www "$(site_get "$n" WWW)" \
+        --arg pc "$(site_get "$n" CACHE)" --arg ppm "$(site_get "$n" PM)" --arg pmc "$(site_get "$n" MAXCH)" --arg psl "$(site_get "$n" SLOW)" \
         --arg ftp "$(site_get "$n" FTP)" --arg sexp "$(cert_expiry "mp-$n")" --arg cok "$( [ -n "$(site_get "$n" DOMAINS)" ] && [ "$(site_get "$n" SSL)" != none ] && cert_files "mp-$n" >/dev/null && echo 1)" \
         '{name:$name, port:($port|tonumber), php:$php, enabled:($en=="1"), root:$root,
           limits:{memory:($mem|tonumber), upload:($up|tonumber), exec:($ex|tonumber),
                   input_time:($it|tonumber), input_vars:($iv|tonumber), display_errors:($de=="1")},
           domains:$doms, ssl:(if $ssl == "" then "none" else $ssl end), https:(if $hs == "" then "1" else $hs end), www:(if $www == "" then "keep" else $www end),
-          ssl_exp:(if $sexp == "" then null else ($sexp|tonumber) end), https_ok:($cok == "1"), ftp:($ftp == "1")}'
+          ssl_exp:(if $sexp == "" then null else ($sexp|tonumber) end), https_ok:($cok == "1"), ftp:($ftp == "1"),
+          perf:{cache:(($pc | tonumber?) // 0), pm:(if $ppm == "" then "ondemand" else $ppm end), maxch:(($pmc | tonumber?) // 10), slow:(($psl | tonumber?) // 5)}}'
     done | jq -cs '.')
   pkg_cache_load
   phps=$(for v in $(php_installed); do
@@ -12689,6 +13039,8 @@ write_state(){
     --argjson jgeo "$(jv geo "$(geo_state_json 2>/dev/null)" '{}')" \
     --argjson jal "$(jv alerts "$(alerts_state_json 2>/dev/null)" '{}')" \
     --arg snr "$(snget REPAIR 1)" --arg sns "$(snget SITES 1)" --arg sno "$(snget OFF '')" \
+    --arg pf_opm "$(srv_get OPC_MEM auto)" --arg pf_opa "$(opc_mem_auto)" --arg pf_opr "$(srv_get OPC_REVAL 60)" --arg pf_dbp "$(srv_get DB_BP auto)" --arg pf_dba "$(db_bp_auto)" \
+    --arg pf_dbs "$(srv_get DB_SLOW 1)" --arg pf_dbt "$(srv_get DB_SLOW_T 2)" --arg pf_ram "$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)" \
     --arg prs "$(pget SSH 1)" --arg prsf "$(pget SSH_FAILS 5)" --arg prpf "$(pget PANEL_FAILS 10)" --arg praf "$(pget AUTH_FAILS "$(mail_get AUTH_FAILS 10)")" \
     --arg prw "$(pget WINDOW 10)" --arg prb1 "$(pget BAN1 1h)" --arg prb2 "$(pget BAN2 24h)" --arg prb3 "$(pget BAN3 7d)" \
     --arg prr "$(awk -v s=$(( EPOCHSECONDS - 86400 )) '$1 >= s' "$DATA/stats/ban-history.txt" 2>/dev/null | wc -l)" \
@@ -12706,6 +13058,7 @@ write_state(){
       pma_settings:{session:($pss|tonumber), exec:($pse|tonumber), upload:($psu|tonumber)},
       dns:$jdns, log_days:($ldays|tonumber), geo:$jgeo, alerts:$jal,
       sentinel:{repair:($snr == "1"), sites:($sns == "1"), off:$sno},
+      perf:{opc_mem:$pf_opm, opc_mem_auto:($pf_opa|tonumber), opc_reval:($pf_opr|tonumber), db_bp:$pf_dbp, db_bp_auto:($pf_dba|tonumber), db_slow:($pf_dbs == "1"), db_slow_t:($pf_dbt|tonumber), ram_mb:($pf_ram|tonumber)},
       protect:{ssh:($prs == "1"), ssh_fails:($prsf|tonumber), panel_fails:($prpf|tonumber), auth_fails:($praf|tonumber), window:($prw|tonumber), ban1:$prb1, ban2:$prb2, ban3:$prb3, recent:($prr|tonumber)},
       server:{mode:$smode, email:$semail, panel_domain:$spd, panel_ssl:$spssl, panel_ssl_exp:(if $spexp == "" then null else ($spexp|tonumber) end), ports_access:$spa, panel_allow:$spal},
       system:{hostname:$host, ip:$ip, os:$os, uptime:($up|tonumber), disk:($disk|tonumber), ram:($ram|tonumber),
@@ -12739,7 +13092,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -12757,7 +13110,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.10.0 (mpanel)
+IDDigital Hosting — CLI v2.11.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -12797,6 +13150,13 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
   dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
   dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
 
+Desempenho
+  site-perf <site> [--cache 0|60|300|600|1800|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
+  cache-purge <site>                   limpa a cache de página do site
+  opcache-settings [--memory auto|MB] [--revalidate S] · opcache-reset
+  db-tune [--buffer auto|MB] [--slow on|off] [--slow-time S]   afina o MariaDB (reinicia-o; repõe se falhar)
+  db-slow-report                       resume as consultas lentas para o painel
+
 Sentinela (testa todos os serviços a cada minuto; repara e alerta)
   sentinel-run                         corre todos os testes agora
   sentinel-settings [--repair on|off] [--sites on|off] [--off "id id"]
@@ -12834,7 +13194,8 @@ FTP / SFTP (uma conta por site; a mesma password nos dois)
   pma-settings [--session MIN] [--exec S] [--upload MB]   tempos e limites do phpMyAdmin
 
 Atualizações
-  update-check                         procura uma versão nova do painel (version.json no GitHub)
+  update-token set <github_pat_…> | clear   token do GitHub só de leitura (repositório privado)
+  update-check                         procura uma versão nova do painel (version.json ou, se não existir, o install.sh)
   update-start [--allow-unsigned]      atualiza o painel (cópia automática e reposição se falhar)
   update-rollback [ficheiro]           repõe uma cópia anterior do painel
   update-key set "<PEM>" | clear       chave pública que assina as versões
@@ -12990,6 +13351,13 @@ dispatch(){
     alerts-settings)   cmd_alerts_settings "$@" ;;
     proc-kill)         cmd_proc_kill "$@" ;;
     sentinel-settings) cmd_sentinel_settings "$@" ;;
+    site-perf)         cmd_site_perf "$@" ;;
+    cache-purge)       cmd_cache_purge "$@" ;;
+    perf-sync)         cmd_perf_sync ;;
+    opcache-settings)  cmd_opcache_settings "$@" ;;
+    opcache-reset)     cmd_opcache_reset ;;
+    db-tune)           cmd_db_tune "$@" ;;
+    db-slow-report)    cmd_db_slow_report ;;
     sentinel-run)      cmd_sentinel_run ;;
     proc-kill-site)    cmd_proc_kill_site "$@" ;;
     alerts-test)       cmd_alerts_test ;;
@@ -13001,6 +13369,7 @@ dispatch(){
     update-start)      cmd_update_start "$@" ;;
     update-rollback)   cmd_update_rollback "$@" ;;
     update-key)        cmd_update_key "$@" ;;
+    update-token)      cmd_update_token "$@" ;;
     os-check)          cmd_os_check ;;
     os-start)          cmd_os_start "$@" ;;
     os-auto)           cmd_os_auto "$@" ;;
@@ -13092,7 +13461,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.10.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.11.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -13603,7 +13972,7 @@ while :; do
     sentinel_watch
     mail_vol_tick
     h=$(( EPOCHSECONDS / 3600 ))
-    if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; fi
+    if [ "$h" -ne "$last_hour" ]; then update_disk; DISK_TS=$EPOCHSECONDS; last_hour=$h; ( setsid /usr/local/sbin/mpanel db-slow-report >/dev/null 2>&1 < /dev/null & ); fi
     write_sites_json
     acc_n=0; a_cpu=0; a_mem=0; a_swap=0; a_disk=0; a_load=0; a_rx=0; a_tx=0
     cur_min=$m
@@ -13639,7 +14008,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.10.0
+#  mp-sendmail — IDDigital Hosting v2.11.1
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -13711,7 +14080,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.10.0
+#  mpanel-term — IDDigital Hosting v2.11.1
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -13736,7 +14105,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.10.0
+#  mpanel-cron — IDDigital Hosting v2.11.1
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -13906,6 +14275,11 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel ngx-sync >/dev/null || warn "Não foi possível regenerar a configuração nginx dos sites (mpanel ngx-sync)."
 /usr/local/sbin/mpanel pma-settings --apply >/dev/null 2>&1 || true
 /usr/local/sbin/mpanel conf-lock >/dev/null 2>&1 || true
+/usr/local/sbin/mpanel opcache-settings >/dev/null 2>&1 || warn "Não foi possível configurar o OPcache."
+/usr/local/sbin/mpanel perf-sync >/dev/null 2>&1 || true
+if [ ! -f /etc/mysql/mariadb.conf.d/90-minipainel.cnf ] && [ ! -f /etc/my.cnf.d/90-minipainel.cnf ]; then
+  say "A afinar o MariaDB à memória do servidor..."; /usr/local/sbin/mpanel db-tune | tail -1 || warn "Não foi possível afinar o MariaDB (a configuração anterior foi mantida)."
+fi
 [ -f /var/lib/minipainel/geoip/v4.bin ] || /usr/local/sbin/mpanel geoip-update >/dev/null 2>&1 || warn "Não foi possível descarregar a base de países (tenta: mpanel geoip-update)."
 [ -f /etc/minipainel/protect.conf ] || /usr/local/sbin/mpanel protect-settings >/dev/null 2>&1 || true
 command -v pure-pw >/dev/null 2>&1 && { /usr/local/sbin/mpanel ftp-settings >/dev/null 2>&1 || warn "Não foi possível reaplicar a configuração do FTP."; }
