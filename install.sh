@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Desempenho: Redis por site, cache no browser, Brotli, WebP automático e rede afinada (TCP BBR).
+# NOTAS: Interface: as páginas de Sistema passam para o menu "Sistema" no canto superior direito.
 # =============================================================================
-#  IDDigital Hosting v2.12.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.12.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.12.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.12.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.12.0"
+MP_VERSION="2.12.1"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -545,7 +545,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.12.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.12.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -553,7 +553,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.12.0';
+const MP_VERSION = '2.12.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1395,6 +1395,8 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line-2)}
 .kv span{color:var(--ink-2)}
 .dd-menu a[aria-current]{background:var(--hover);font-weight:700}
+details.dd.sys .dd-menu{min-width:230px}
+details.dd>summary.chip.cur{box-shadow:inset 0 0 0 2px var(--acc);color:var(--acc)}
 .fm-pre{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;white-space:nowrap;flex:0 0 auto}
 .fm-pre + .crumbs{margin-left:-6px}
 .fm-pre a{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);text-decoration:none;font-weight:600}
@@ -2754,7 +2756,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   <aside class="side" id="side">
     <a class="brand" href="?p=resumo" aria-label="IDDigital Hosting — Resumo"><?= brand_logo() ?></a>
     <nav class="nav">
-      <?php foreach ($groups as $gl => $keys): ?>
+      <?php foreach ($groups as $gl => $keys): if ($gl === 'Sistema') continue; ?>
         <div class="nav-sec"><?= h($gl) ?></div>
         <?php foreach ($keys as $k): $pd = $pages[$k]; ?>
           <a href="?p=<?= h($k) ?>"<?= $k === $page ? ' class="on" aria-current="page"' : '' ?>><?= ic($pd[1]) ?><?= h($pd[0]) ?></a>
@@ -2790,6 +2792,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <span class="chip sm hide-m">v<?= h(MP_VERSION) ?></span>
         <span class="chip ghost hide-m"><?= h($today) ?></span>
         <button class="chip icon" type="button" data-theme-toggle title="Mudar tema" aria-label="Mudar tema"><?= ic('moon') ?></button>
+        <details class="dd sys">
+          <summary class="chip<?= $section === 'Sistema' && !in_array($page, ['conta', 'definicoes'], true) ? ' cur' : '' ?>" aria-label="Sistema"><?= ic('server') ?><span class="lbl">Sistema</span><?= ic('chev', 'chev') ?></summary>
+          <div class="dd-menu">
+            <?php foreach ($groups['Sistema'] as $k): $pd = $pages[$k]; ?>
+              <a href="?p=<?= h($k) ?>"<?= $k === $page ? ' aria-current="page"' : '' ?>><?= ic($pd[1]) ?><?= h($pd[0]) ?></a>
+            <?php endforeach; ?>
+          </div>
+        </details>
         <details class="dd me">
           <summary class="chip" aria-label="Conta"><span class="av-me"><?= h(substr((string)$_SESSION['user'], 0, 1)) ?></span><span class="lbl"><?= h($_SESSION['user']) ?></span><?= ic('chev', 'chev') ?></summary>
           <div class="dd-menu">
@@ -8074,7 +8084,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.12.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.12.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -8514,12 +8524,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.12.0
+#  mpanel — IDDigital Hosting CLI v2.12.1
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.12.0"
+MP_VERSION="2.12.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -13324,7 +13334,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.12.0 (mpanel)
+IDDigital Hosting — CLI v2.12.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -13683,7 +13693,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.12.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.12.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -14231,7 +14241,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.12.0
+#  mp-sendmail — IDDigital Hosting v2.12.1
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -14303,7 +14313,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.12.0
+#  mpanel-term — IDDigital Hosting v2.12.1
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -14328,7 +14338,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.12.0
+#  mpanel-cron — IDDigital Hosting v2.12.1
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
