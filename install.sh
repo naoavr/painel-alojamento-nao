@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: DNS: remove as zonas falsas (bin, boot, dev…) criadas por erro e página DNS mais clara (o que pertence a quê).
+# NOTAS: Gestão de DNS refeita (como no Cloudflare): editar registos, modelos de email, importar/exportar BIND, propagação e saúde do servidor DNS.
 # =============================================================================
-#  IDDigital Hosting v2.12.4 — instalador (MiniPainel)
+#  IDDigital Hosting v2.13.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.12.4.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.13.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.12.4"
+MP_VERSION="2.13.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -864,21 +864,38 @@ O DNS diz à Internet para onde vai cada nome (`loja.pt` → IP do servidor). H�
 
 Nos nameservers onde o domínio está, cria um registo A para cada nome que uses (domínio, `www`, subdomínios) com o IP do servidor. Um registo genérico `*.host` cobre todos os subdomínios de `host.iddigital.pt` de uma vez. Os registos do email (MX, SPF, DKIM, DMARC) também se criam lá.
 
-### Opção B: DNS neste servidor (página DNS)
+### Opção B: DNS neste servidor (página DNS) — servidor autónomo
 
-1. **Ativar:** indica dois nameservers (ex.: `ns1.host.iddigital.pt` e `ns2.host.iddigital.pt`), o IP público e o email do responsável. O painel instala o NSD, que só responde pelas tuas zonas (nunca resolve domínios de terceiros).
-2. **Glue records:** na zona onde esses nomes vivem (ex.: `iddigital.pt`, no ISPmanager), cria `ns1.host` e `ns2.host` como registos A com o IP do servidor.
-3. **Adicionar zona:** escreve o domínio. São criados sozinhos os registos do domínio e do `www`, dos subdomínios dos sites, do email (MX, SPF, DKIM, DMARC) e um CAA para o Let's Encrypt.
-4. **No registador**, aponta os nameservers do domínio para `ns1.…` e `ns2.…`.
-5. Carrega em **Verificar delegação** até aparecer "Aponta para aqui".
+A página DNS tem dois separadores: **Domínios** (os teus domínios e os seus registos) e **Servidor DNS** (o próprio servidor).
 
-Com um só servidor, os dois nameservers apontam para a mesma máquina: cumpre o mínimo do `.pt`, mas se o servidor parar, os domínios deixam de resolver (incluindo o email).
+**Pôr o servidor a funcionar (uma vez):**
 
-### Registos manuais
+1. Separador **Servidor DNS** → indica os dois nameservers (ex.: `ns1.host.iddigital.pt` e `ns2.host.iddigital.pt`), o IP público e o email do responsável. O painel instala o NSD, que só responde pelas tuas zonas (nunca resolve domínios de terceiros).
+2. Na zona onde esses nomes vivem (ex.: `iddigital.pt`, no ISPmanager), cria `ns1.host` e `ns2.host` como registos A com o IP do servidor.
+3. Carrega em **Verificar agora**: todos os testes devem ficar OK (serviço a correr, nameservers visíveis na Internet, resposta por UDP e TCP, transferência de zona recusada, sem resolver aberto). A porta 53 (UDP e TCP) tem de estar aberta na firewall do Proxmox e do fornecedor.
 
-Na zona → **Novo registo**: nome (`@` = o próprio domínio, ou `www`, `loja`…), tipo, valor, TTL e prioridade (MX e SRV).
+**Cada domínio:**
 
-| Tipo | Para que serve | Exemplo de valor |
+1. Separador **Domínios** → **Adicionar domínio**. Os registos do site, do email (MX, SPF, DKIM, DMARC) e um CAA para o Let's Encrypt são criados sozinhos.
+2. No registador, muda os nameservers do domínio para `ns1…` e `ns2…` (nos `.pt`, cria primeiro a zona aqui: o DNS.PT verifica-a antes de aceitar a mudança).
+3. Abre o domínio → **Verificar nameservers**: o estado passa de "Pendente" a "Ativo".
+
+Com um só servidor, os dois nameservers apontam para a mesma máquina: se o servidor parar, os domínios deixam de resolver (incluindo o email).
+
+### Gerir os registos de um domínio
+
+Abre o domínio (**Gerir DNS**). Funciona como no Cloudflare:
+
+- **Adicionar:** no topo, escolhe o tipo, o nome (`@` = o próprio domínio, ou `www`, `loja`…), o conteúdo e o TTL (**Auto** usa o valor predefinido do servidor). Os campos e a ajuda mudam com o tipo (o MX e o SRV pedem prioridade).
+- **Editar / Apagar:** em cada linha. Os registos marcados **painel** são criados a partir dos sites e do email; se os editares ou apagares, passam a ser teus e o painel deixa de os alterar.
+- **Procurar e filtrar** por tipo ou texto.
+- **Verificar propagação:** compara o que este servidor responde com o que a Internet (Google, 8.8.8.8) vê — "Igual", "Diferente" ou "Ainda não".
+- **Mais →**
+  - **Email do domínio:** *Este servidor*, *Google Workspace* ou *Microsoft 365* (troca o MX e o SPF; no Microsoft 365 também cria o `autodiscover`).
+  - **Exportar / Importar zona (BIND):** para levar ou trazer domínios de outros sistemas (ISPmanager, Cloudflare). Na importação, os registos repetidos são ignorados e o SOA/NS vêm deste servidor.
+  - **Repor registos predefinidos:** volta a pôr os registos do site e do email como o painel os cria.
+
+| Tipo | Para que serve | Exemplo de conteúdo |
 | --- | --- | --- |
 | A | Nome → IPv4 | `91.209.16.24` |
 | AAAA | Nome → IPv6 | `2a01:…` |
@@ -889,7 +906,11 @@ Na zona → **Novo registo**: nome (`@` = o próprio domínio, ou `www`, `loja`�
 | SRV | Serviços (VoIP, Teams…) | `5 5060 sip.loja.pt` (prioridade 10) |
 | CAA | Quem pode emitir certificados | `0 issue "letsencrypt.org"` |
 
-Os registos automáticos atualizam-se sozinhos quando mudas sites ou email; os manuais mantêm-se. Cada alteração é verificada antes de ser ativada: um registo inválido é recusado e a zona fica como estava.
+Cada alteração é verificada antes de ser ativada: um registo inválido é recusado e a zona fica como estava.
+
+### Valores predefinidos (Servidor DNS)
+
+TTL predefinido (o "Auto" dos registos) e os tempos do SOA (refresh, retry, expire, TTL negativo) de todas as zonas. Os valores de origem servem para quase todos os casos.
 
 ### Testar o DNS
 
@@ -1471,7 +1492,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.12.4 — painel web (MiniPainel)
+ * IDDigital Hosting v2.13.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1479,7 +1500,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.12.4';
+const MP_VERSION = '2.13.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2418,6 +2439,24 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dns-g-email{background:color-mix(in srgb,#7c3aed 15%,transparent);color:#7c3aed}
 .dns-g-certificados{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 @media (max-width:900px){.dns-arrow{display:none}}
+.dz-prio[hidden]{display:none!important}
+.dz-h{flex-wrap:wrap;gap:12px}
+.dz-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dz-act form{margin:0}
+.dd-lbl{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px 4px}
+.dz-ban{display:flex;gap:12px;align-items:flex-start;margin:0 24px 16px;padding:14px 16px;border-radius:14px;line-height:1.7}
+.dz-ban.ok{background:color-mix(in srgb,var(--ok) 12%,transparent);color:var(--ok);font-weight:600;align-items:center}
+.dz-ban.warn{background:color-mix(in srgb,var(--warn) 12%,transparent)}
+.dz-ns{display:inline-flex;gap:6px;align-items:center;margin:0 6px}.dz-ns code{font-weight:700}
+.dz-add{display:grid;grid-template-columns:120px minmax(160px,1fr) minmax(220px,2fr) 110px 120px auto;gap:10px;align-items:end;padding:16px 24px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--line-2)}
+.dz-add .fld{margin:0}.dz-add .btn{height:42px}
+.dz-add .dz-hint{grid-column:1/-1;margin:0;font-size:12.5px}
+.dz-name{display:flex;align-items:center;gap:6px}.dz-name .in{flex:1;min-width:0}.dz-name .mu{white-space:nowrap;font-size:12.5px}
+.dz-filter{display:flex;gap:10px;align-items:center;padding:14px 24px}
+.dz-filter .in{height:38px;width:auto}.dz-filter #dz-q{width:280px}
+.dz-t{table-layout:fixed;width:100%}.dz-t td{vertical-align:middle}
+.dz-auto{display:inline-block;font-size:10.5px;font-weight:700;padding:0 7px;border-radius:99px;background:var(--line-2);color:var(--mu);margin-left:6px;cursor:help}
+.dz-btns{display:flex;gap:6px;justify-content:flex-end}.dz-btns form{margin:0}
+@media (max-width:1100px){.dz-add{grid-template-columns:1fr 1fr}.dz-t{table-layout:auto}}
 .pr-sum{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px 24px}
 .pr-o{border:1px solid var(--line);border-radius:16px;padding:12px 14px}
 .pr-o .nm{margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
@@ -2704,6 +2743,25 @@ if (qget('stats') === 'conns') {
     exit;
 }
 
+if (qget('dnsexport') !== '') {
+    if (empty($_SESSION['user'])) { http_response_code(401); exit; }
+    $st0 = jload(MP_STATE) ?? []; $dn0 = (array)($st0['dns'] ?? []); $ze = strtolower(qget('dnsexport')); $zz = null;
+    foreach ((array)($dn0['zones'] ?? []) as $z0) { if ((string)$z0['name'] === $ze) $zz = $z0; }
+    if ($zz === null) { http_response_code(404); exit('Zona não encontrada.'); }
+    $fq = function ($v) { return substr($v, -1) === '.' ? $v : $v . '.'; };
+    $o = "; Zona $ze — exportada do IDDigital Hosting em " . gmdate('Y-m-d H:i') . " UTC\n\$ORIGIN $ze.\n\$TTL " . (int)($dn0['soa']['ttl'] ?? 3600) . "\n";
+    $o .= "@ IN SOA " . $fq((string)$dn0['ns1']) . ' ' . $fq(str_replace('@', '.', (string)($dn0['hostmaster'] ?: 'hostmaster.' . $ze))) . ' ( ' . (int)$zz['serial'] . ' ' . (int)($dn0['soa']['refresh'] ?? 10800) . ' ' . (int)($dn0['soa']['retry'] ?? 3600) . ' ' . (int)($dn0['soa']['expire'] ?? 1209600) . ' ' . (int)($dn0['soa']['minimum'] ?? 3600) . " )\n";
+    $o .= "@ IN NS " . $fq((string)$dn0['ns1']) . "\n@ IN NS " . $fq((string)$dn0['ns2']) . "\n";
+    foreach ((array)$zz['records'] as $r) {
+        $t = (string)$r['type']; $v = (string)$r['value']; $ttl = (int)($r['ttl'] ?? 0) >= 60 ? (int)$r['ttl'] . ' ' : '';
+        if ($t === 'TXT') $v = implode(' ', array_map(function ($c) { return '"' . addcslashes($c, '"\\') . '"'; }, str_split($v, 255) ?: ['']));
+        elseif (in_array($t, ['CNAME', 'NS', 'MX'], true)) $v = $fq($v);
+        elseif ($t === 'SRV') { $pp = explode(' ', $v); $pp[2] = $fq($pp[2] ?? ''); $v = implode(' ', $pp); }
+        if ($t === 'MX' || $t === 'SRV') $v = (int)($r['prio'] ?? 0) . ' ' . $v;
+        $o .= str_pad((string)$r['name'], 24) . ' ' . $ttl . 'IN ' . $t . ' ' . $v . "\n";
+    }
+    header('Content-Type: text/plain; charset=utf-8'); header('Content-Disposition: attachment; filename="' . $ze . '.zone"'); echo $o; exit;
+}
 if (qget('manual') === 'dl') {
     if (empty($_SESSION['user'])) { http_response_code(401); exit; }
     if (!is_readable(MP_MANUAL)) { http_response_code(404); exit('Manual não encontrado.'); }
@@ -3270,8 +3328,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!preg_match($re, $n1) || !preg_match($re, $n2) || $n1 === $n2) { $bad('Indica dois nameservers diferentes.'); break; }
             if ($ip !== '' && !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $bad('IP inválido.'); break; }
             if ($hm !== '' && !filter_var($hm, FILTER_VALIDATE_EMAIL)) { $bad('Email inválido.'); break; }
-            $args = ['--ns1', $n1, '--ns2', $n2]; if ($ip !== '') array_push($args, '--ip', $ip); if ($hm !== '') array_push($args, '--hostmaster', $hm);
-            job_submit('dns-enable', $args, 'Ativar o DNS');
+            $ip6 = post('ip6'); if ($ip6 !== '' && !filter_var($ip6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) { $bad('IPv6 inválido.'); break; }
+            $args = ['--ns1', $n1, '--ns2', $n2]; if ($ip !== '') array_push($args, '--ip', $ip); if ($ip6 !== '') array_push($args, '--ip6', $ip6); if ($hm !== '') array_push($args, '--hostmaster', $hm);
+            job_submit('dns-enable', $args, 'Servidor DNS: nameservers'); $back = ['t' => 'servidor'];
             break;
         case 'dns_zone_add':
         case 'dns_zone_del':
@@ -3288,15 +3347,47 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             if (!preg_match('/^[a-z0-9.-]+$/', $zn) || !in_array($rt, ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'], true)) { $bad('Pedido inválido.'); break; }
             $val = trim(str_replace(["\r", "\n"], ' ', post_raw('value')));
             if ($val === '' || strlen($val) > 2000) { $bad('Valor inválido.'); break; }
-            $ttl = ctype_digit(post('ttl')) ? post('ttl') : '3600'; $pr = ctype_digit(post('prio')) ? post('prio') : '10';
+            $ttl = ctype_digit(post('ttl')) ? post('ttl') : '0'; $pr = ctype_digit(post('prio')) ? post('prio') : '10';
             job_submit('dns-rec-add', [$zn, strtolower(post('name')), $rt, $val, '--ttl', $ttl, '--prio', $pr], 'Registo ' . $rt . ' em ' . $zn);
             $back = ['zone' => $zn];
             break;
         case 'dns_rec_del':
             $zn = strtolower(post('zone')); $rid = post('id');
-            if (!preg_match('/^[a-z0-9.-]+$/', $zn) || !preg_match('/^[A-Za-z0-9]{6,16}$/', $rid)) { $bad('Pedido inválido.'); break; }
+            if (!preg_match('/^[a-z0-9.-]+$/', $zn) || !preg_match('/^[A-Za-z0-9]{3,16}$/', $rid)) { $bad('Pedido inválido.'); break; }
             job_submit('dns-rec-del', [$zn, $rid], 'Apagar registo de ' . $zn);
             $back = ['zone' => $zn];
+            break;
+        case 'dns_rec_edit':
+            $zn = strtolower(post('zone')); $rid = post('id'); $rt = strtoupper(post('type'));
+            if (!preg_match('/^[a-z0-9.-]+$/', $zn) || !preg_match('/^[A-Za-z0-9]{3,16}$/', $rid) || !in_array($rt, ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'], true)) { $bad('Pedido inválido.'); break; }
+            $val = trim(str_replace(["\r", "\n"], ' ', post_raw('value')));
+            if ($val === '' || strlen($val) > 2000) { $bad('Valor inválido.'); break; }
+            $ttl = ctype_digit(post('ttl')) ? post('ttl') : '0'; $pr = ctype_digit(post('prio')) ? post('prio') : '10';
+            job_submit('dns-rec-edit', [$zn, $rid, strtolower(post('name')), $rt, $val, '--ttl', $ttl, '--prio', $pr], 'Editar registo em ' . $zn);
+            $back = ['zone' => $zn];
+            break;
+        case 'dns_template':
+        case 'dns_reset':
+        case 'dns_propagation':
+        case 'dns_import':
+            $zn = strtolower(post('zone'));
+            if (!preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $zn)) { $bad('Domínio inválido.'); break; }
+            if ($a === 'dns_template') { $tp = post('tpl'); if (!in_array($tp, ['local', 'google', 'microsoft'], true)) { $bad('Modelo inválido.'); break; } job_submit('dns-template', [$zn, $tp], 'Email de ' . $zn . ': ' . ['local' => 'este servidor', 'google' => 'Google Workspace', 'microsoft' => 'Microsoft 365'][$tp]); }
+            elseif ($a === 'dns_reset') job_submit('dns-reset', [$zn], 'Repor os registos de ' . $zn);
+            elseif ($a === 'dns_propagation') job_submit('dns-propagation', [$zn], 'Propagação de ' . $zn);
+            else { $zt = (string)post_raw('zonetxt'); if (trim($zt) === '' || strlen($zt) > 200000) { $bad('Cola o ficheiro de zona (até 200 KB).'); break; } job_submit('dns-import', [$zn, $zt], 'Importar registos para ' . $zn); }
+            $back = ['zone' => $zn];
+            break;
+        case 'dns_settings':
+            $sa = [];
+            foreach (['ttl', 'refresh', 'retry', 'expire', 'minimum'] as $k) { $v = post($k); if (!ctype_digit($v) || (int)$v < 60 || (int)$v > 99999999) { $bad('Valores em segundos, mínimo 60.'); break 2; } array_push($sa, '--' . $k, $v); }
+            job_submit('dns-settings', $sa, 'Valores predefinidos do DNS'); $back = ['t' => 'servidor'];
+            break;
+        case 'dns_restart':
+            job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
+            break;
+        case 'dns_server_check':
+            job_submit('dns-server-check', [], 'Verificar o servidor DNS'); $back = ['t' => 'servidor'];
             break;
         case 'logs_settings':
             $ld = post('days');
@@ -5462,120 +5553,212 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 
 <?php elseif ($page === 'dns'):
     $dn = is_array($state['dns'] ?? null) ? $state['dns'] : ['enabled' => false];
-    $dzs = is_array($dn['zones'] ?? null) ? $dn['zones'] : [];
-    $dz = null; foreach ($dzs as $z) { if (($z['name'] ?? '') === qget('zone')) $dz = $z; }
+    $dzs = (array)($dn['zones'] ?? []);
+    $dzName = strtolower(qget('zone')); $dz = null;
+    foreach ($dzs as $z0) { if ((string)$z0['name'] === $dzName) $dz = $z0; }
+    $dtab = (qget('t') === 'servidor' || empty($dn['enabled'])) ? 'servidor' : 'dominios';
+    $srvChk = jload(MP_STATS . '/dns-server.json') ?? [];
+    $propAll = jload(MP_STATS . '/dns-prop.json') ?? [];
+    $soa = is_array($dn['soa'] ?? null) ? $dn['soa'] : ['ttl' => 3600, 'refresh' => 10800, 'retry' => 3600, 'expire' => 1209600, 'minimum' => 3600];
+    $ttlL = function ($t) use ($soa) { $t = (int)$t; if ($t <= 0) return 'Auto'; if ($t % 86400 === 0) return ($t / 86400) . ' d'; if ($t % 3600 === 0) return ($t / 3600) . ' h'; if ($t % 60 === 0) return ($t / 60) . ' min'; return $t . ' s'; };
+    $zst = function ($z) { $ck = is_array($z['check'] ?? null) ? $z['check'] : null; return $ck === null ? ['p-off', 'Não verificado'] : (!empty($ck['delegated']) ? ['p-ok', 'Ativo'] : ['p-warn', 'Pendente: nameservers por mudar']); };
+    $types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'];
 ?>
-<?php if (empty($dn['enabled'])): ?>
-      <section class="card">
-        <div class="card-h"><div><h2>Ativar o DNS</h2><p>O servidor passa a responder pelo DNS dos domínios que indicares (NSD, só autoritativo: nunca faz resolução para terceiros).</p></div></div>
-        <form method="post" class="card-b">
-          <?= act_fields('dns_enable') ?>
-          <div class="fgrid">
-            <label class="fld">Nameserver 1<input class="in mono" name="ns1" required placeholder="ns1.host.iddigital.pt" autocomplete="off"></label>
-            <label class="fld">Nameserver 2<input class="in mono" name="ns2" required placeholder="ns2.host.iddigital.pt" autocomplete="off"></label>
-            <label class="fld">IP público do servidor<input class="in mono" name="ip" placeholder="vazio = detetar automaticamente" autocomplete="off"></label>
-            <label class="fld">Email do responsável (SOA)<input class="in" type="email" name="hm" value="<?= h($srv['email'] ?? '') ?>" placeholder="dns@iddigital.pt"></label>
-          </div>
-          <div class="warnbox" style="margin-top:14px">Os dois nameservers vão apontar para este mesmo servidor: cumpre o mínimo exigido pelo .pt, mas não há redundância. Se o servidor parar, os domínios deixam de resolver (incluindo o email).</div>
-          <div style="margin-top:16px"><button class="btn" type="submit">Instalar e ativar o DNS</button></div>
-        </form>
-      </section>
-<?php else: ?>
-      <section class="card">
-        <div class="card-h"><div><h2>Servidor DNS</h2><p><span class="mono"><?= h($dn['ns1']) ?></span> e <span class="mono"><?= h($dn['ns2']) ?></span> → <span class="mono"><?= h($dn['ip']) ?></span><?= !empty($dn['ip6']) ? ' · <span class="mono">' . h($dn['ip6']) . '</span>' : '' ?></p></div>
-          <span class="pill <?= !empty($dn['active']) ? 'p-ok' : 'p-err' ?>"><?= !empty($dn['active']) ? 'A correr' : 'Parado' ?></span></div>
-        <div class="card-b mu">Para usar estes nameservers num domínio: (1) cria os registos A de <span class="mono"><?= h($dn['ns1']) ?></span> e <span class="mono"><?= h($dn['ns2']) ?></span> com o IP <span class="mono"><?= h($dn['ip']) ?></span> na zona onde esses nomes estão (ou como "glue records" no registador); (2) adiciona aqui a zona do domínio; (3) no registador, aponta os nameservers do domínio para os dois nomes acima.</div>
-      </section>
+      <?php if ($dz === null && !empty($dn['enabled'])): ?>
+      <nav class="tabs" aria-label="Secções">
+        <a class="chip<?= $dtab === 'dominios' ? ' prim' : '' ?>" href="?p=dns">Domínios <span class="sn-cnt"><?= count($dzs) ?></span></a>
+        <a class="chip<?= $dtab === 'servidor' ? ' prim' : '' ?>" href="?p=dns&amp;t=servidor">Servidor DNS<?php $sf = count(array_filter((array)($srvChk['rows'] ?? []), function ($r) { return ($r['status'] ?? '') === 'fail'; })); if ($sf || empty($dn['active'])): ?> <span class="sn-b sn-b-f"><?= max($sf, 1) ?></span><?php endif; ?></a>
+      </nav>
+      <?php endif; ?>
 
+<?php if ($dz !== null):   /* ===================== UM DOMÍNIO ===================== */
+      $zn = (string)$dz['name']; [$zpc, $zpl] = $zst($dz); $ck = is_array($dz['check'] ?? null) ? $dz['check'] : null;
+      $prop = []; foreach ((array)($propAll[$zn]['rows'] ?? []) as $pr) $prop[$pr['name'] . '|' . $pr['type']] = $pr;
+      $recs = (array)$dz['records'];
+      $tOrd = array_flip($types); usort($recs, function ($a, $b) use ($tOrd) { return [$tOrd[$a['type']] ?? 9, $a['name'] === '@' ? '' : $a['name'], (int)($a['prio'] ?? 0)] <=> [$tOrd[$b['type']] ?? 9, $b['name'] === '@' ? '' : $b['name'], (int)($b['prio'] ?? 0)]; });
+      $full = function ($n) use ($zn) { return $n === '@' ? $zn : $n . '.' . $zn; };
+?>
       <section class="card">
-        <details class="dns-help"<?= !$dzs ? ' open' : '' ?>>
-          <summary><span class="tile t-blue"><?= ic('world') ?></span><span><b>Como funciona o DNS</b><span class="mu"> · o que pertence a quê</span></span><?= ic('chev', 'chev') ?></summary>
-          <div class="dns-flow">
-            <div class="dns-step"><b>1. Este servidor DNS</b><span class="mono"><?= h($dn['ns1']) ?> · <?= h($dn['ns2']) ?></span><p>Responde à Internet sobre os domínios que tens aqui.</p></div>
-            <span class="dns-arrow">→</span>
-            <div class="dns-step"><b>2. Zonas</b><span class="mono">ex.: pontoderede.pt</span><p>Uma zona por domínio. É a "ficha" desse domínio.</p></div>
-            <span class="dns-arrow">→</span>
-            <div class="dns-step"><b>3. Registos</b><span class="mono">www → 91.209.16.24</span><p>Cada linha diz para onde vai um nome: o site, o email, os certificados…</p></div>
+        <div class="card-h dz-h">
+          <div><nav class="crumbs fm-pre"><a href="?p=dns"><?= ic('home') ?>Domínios</a><span>›</span><b><?= h($zn) ?></b></nav>
+            <p style="margin-top:6px"><span class="pill <?= $zpc ?>"><?= h($zpl) ?></span> · <?= count($recs) + 2 ?> registos · última alteração <?= h(dns_serial_date((string)$dz['serial'])) ?></p></div>
+          <div class="dz-act">
+            <form method="post"><?= act_fields('dns_check', ['zone' => $zn]) ?><button class="btn sm sec" type="submit">Verificar nameservers</button></form>
+            <form method="post"><?= act_fields('dns_propagation', ['zone' => $zn]) ?><button class="btn sm sec" type="submit">Verificar propagação</button></form>
+            <details class="dd">
+              <summary class="btn sm sec">Mais <?= ic('chev', 'chev') ?></summary>
+              <div class="dd-menu">
+                <div class="dd-lbl">Email do domínio</div>
+                <form method="post" data-confirm="O email de <?= h($zn) ?> passa a ser recebido por este servidor (MX e SPF do painel). Continuar?"><?= act_fields('dns_template', ['zone' => $zn, 'tpl' => 'local']) ?><button type="submit"><?= ic('mail') ?>Este servidor</button></form>
+                <form method="post" data-confirm="Substituir o MX e o SPF de <?= h($zn) ?> pelos da Google Workspace?"><?= act_fields('dns_template', ['zone' => $zn, 'tpl' => 'google']) ?><button type="submit"><?= ic('mail') ?>Google Workspace</button></form>
+                <form method="post" data-confirm="Substituir o MX e o SPF de <?= h($zn) ?> pelos da Microsoft 365 (e criar o autodiscover)?"><?= act_fields('dns_template', ['zone' => $zn, 'tpl' => 'microsoft']) ?><button type="submit"><?= ic('mail') ?>Microsoft 365</button></form>
+                <hr>
+                <a href="?dnsexport=<?= h(rawurlencode($zn)) ?>"><?= ic('download') ?>Exportar zona (BIND)</a>
+                <button type="button" data-open="dlg-dz-import"><?= ic('upload') ?>Importar zona (BIND)</button>
+                <form method="post" data-confirm="Repor os registos predefinidos de <?= h($zn) ?>? Os registos do site e do email voltam aos valores do painel; os teus registos com outros nomes mantêm-se."><?= act_fields('dns_reset', ['zone' => $zn]) ?><button type="submit"><?= ic('reload') ?>Repor registos predefinidos</button></form>
+                <hr>
+                <form method="post" data-confirm="Apagar a zona <?= h($zn) ?>? Se o domínio usar este servidor DNS, deixa de funcionar."><?= act_fields('dns_zone_del', ['zone' => $zn]) ?><button type="submit" class="dan"><?= ic('trash') ?>Apagar domínio do DNS</button></form>
+              </div>
+            </details>
           </div>
-          <div class="dns-notes">
-            <p><b>Para um domínio usar este servidor</b>, o registador do domínio (onde o compraste) tem de apontar os nameservers para <span class="mono"><?= h($dn['ns1']) ?></span> e <span class="mono"><?= h($dn['ns2']) ?></span>. Até lá, a coluna "O domínio usa este servidor?" diz "Ainda não" e a zona não tem efeito nenhum.</p>
-            <p><b>Não precisas desta página</b> se o DNS dos teus domínios está noutro sítio (ISPmanager, registador, Cloudflare): nesse caso os registos criam-se lá, e aqui não há nada a fazer.</p>
-            <p>Os registos dos sites e do email são <b>criados e atualizados sozinhos</b> (marcados "Automático"). Só precisas de criar à mão casos especiais (ex.: verificação do Google ou da Microsoft).</p>
-          </div>
-        </details>
-      </section>
-
-      <?php if ($dz === null): ?>
-      <section class="card">
-        <div class="card-h"><div><h2>Zonas</h2><p>Uma zona por domínio. Clica num domínio para ver os seus registos.</p></div><button class="chip sm soft" type="button" data-open="dlg-dz-new">Adicionar zona</button></div>
-        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há zonas</b>Adiciona o primeiro domínio.</div>
+        </div>
+        <?php if ($ck !== null && !empty($ck['delegated'])): ?>
+          <div class="dz-ban ok"><?= ic('check') ?> Este domínio usa este servidor DNS: as alterações têm efeito na Internet em poucos minutos.</div>
         <?php else: ?>
-        <table class="list cards">
-          <thead><tr><th>Domínio</th><th class="r">Registos</th><th>Última alteração</th><th>O domínio usa este servidor?</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
-          <tbody>
-          <?php foreach ($dzs as $z): $ck = is_array($z['check'] ?? null) ? $z['check'] : null; ?>
-            <tr>
-              <td class="first" data-label="Domínio"><a class="who" href="?p=dns&amp;zone=<?= h(rawurlencode($z['name'])) ?>" style="text-decoration:none;color:inherit"><span class="av <?= tone($z['name']) ?>"><?= ic('world') ?></span><span class="nm"><?= h($z['name']) ?></span></a></td>
-              <td class="r" data-label="Registos"><?= count((array)$z['records']) + 3 ?></td>
-              <td data-label="Última alteração"><?= h(dns_serial_date((string)$z['serial'])) ?></td>
-              <td data-label="O domínio usa este servidor?"><?= $ck === null ? '<span class="pill p-off" title="Abre o domínio e carrega em Verificar">Não verificado</span>' : (!empty($ck['delegated']) ? '<span class="pill p-ok">Sim</span>' : '<span class="pill p-warn" title="Os nameservers do domínio, no registador, ainda apontam para outro sítio">Ainda não</span>') ?></td>
-              <td class="act r"><a class="btn sm sec" href="?p=dns&amp;zone=<?= h(rawurlencode($z['name'])) ?>">Gerir</a></td>
-            </tr>
-          <?php endforeach; ?>
-          </tbody>
-        </table>
+          <div class="dz-ban warn"><?= ic('bell') ?><div><b><?= $ck === null ? 'Ainda não verificado se o domínio usa este servidor.' : 'Este domínio ainda não usa este servidor DNS' . (!empty($ck['found']) ? ' (usa: ' . h(trim((string)$ck['found'])) . ')' : '') . '.' ?></b>
+            No registador do domínio, muda os nameservers para:
+            <span class="dz-ns"><code><?= h((string)$dn['ns1']) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ns1']) ?>">Copiar</button></span>
+            <span class="dz-ns"><code><?= h((string)$dn['ns2']) ?></code><button type="button" class="chip sm" data-copy="<?= h((string)$dn['ns2']) ?>">Copiar</button></span>
+            Depois carrega em "Verificar nameservers".</div></div>
         <?php endif; ?>
-      </section>
-      <dialog id="dlg-dz-new"><form method="post"><?= act_fields('dns_zone_add') ?>
-        <div class="dlg-h"><h3>Adicionar zona</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
-        <div class="dlg-b"><label class="fld">Domínio<input class="in mono" name="zone" required placeholder="dominio.pt" autocomplete="off"><small>São criados os registos do domínio e do www, dos sites e do email que usem este domínio, e um CAA para o Let's Encrypt</small></label></div>
-        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
-      </form></dialog>
 
-      <?php else: $ck = is_array($dz['check'] ?? null) ? $dz['check'] : null; ?>
-      <section class="card">
-        <div class="card-h"><div><nav class="crumbs fm-pre"><a href="?p=dns"><?= ic('home') ?>Zonas</a><span>›</span><b><?= h($dz['name']) ?></b></nav>
-            <p style="margin-top:6px">Última alteração <?= h(dns_serial_date((string)$dz['serial'])) ?> · <?= $ck === null ? 'ainda não verificado se o domínio usa este servidor' : (!empty($ck['delegated']) ? '<b style="color:var(--ok)">o domínio usa este servidor</b>' : 'o domínio <b>ainda não usa</b> este servidor (no registador, os nameservers apontam para outro sítio)') ?></p></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <form method="post"><?= act_fields('dns_check', ['zone' => (string)$dz['name']]) ?><button class="btn sm sec" type="submit">Verificar delegação</button></form>
-            <form method="post"><?= act_fields('dns_sync', ['zone' => (string)$dz['name']]) ?><button class="btn sm sec" type="submit">Sincronizar</button></form>
-            <button class="btn sm" type="button" data-open="dlg-dr-new">Novo registo</button>
-          </div></div>
-        <table class="list cards dnsrec">
-          <thead><tr><th>Nome</th><th>Para que serve</th><th>Tipo</th><th>Valor</th><th>Origem</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
-          <tbody>
-            <tr><td class="first" data-label="Nome"><span class="mono"><?= h((string)$dz['name']) ?></span></td><td data-label="Para que serve">Nameservers deste domínio</td><td data-label="Tipo"><span class="pill p-off">NS</span></td><td class="mono" data-label="Valor"><?= h($dn['ns1']) ?>. · <?= h($dn['ns2']) ?>.</td><td><span class="mu">Servidor</span></td><td></td></tr>
-            <?php $recs = (array)$dz['records']; $gOrd = ['Site' => 0, 'Email' => 1, 'Certificados' => 2, 'Outros' => 3]; usort($recs, function ($a, $b) use ($gOrd) { return [$gOrd[dns_purpose($a)[0]] ?? 9, $a['name'] === '@' ? '' : $a['name'], $a['type']] <=> [$gOrd[dns_purpose($b)[0]] ?? 9, $b['name'] === '@' ? '' : $b['name'], $b['type']]; }); [$pgList, $pgN, $pgPages, $pgTot] = paginate($recs, 100); foreach ($pgList as $r): ?>
-            <tr>
-              <?php $pp = dns_purpose($r); ?>
-              <td class="first" data-label="Nome"><span class="mono"><?= h($r['name'] === '@' ? (string)$dz['name'] : $r['name'] . '.' . $dz['name']) ?></span></td>
-              <td data-label="Para que serve"><span class="dns-g dns-g-<?= h(strtolower($pp[0])) ?>"><?= h($pp[0]) ?></span> <?= h(ucfirst((string)preg_replace('/^(Site|Email|Certificados): /', '', $pp[1]))) ?></td>
-              <td data-label="Tipo"><span class="pill p-me"><?= h($r['type']) ?></span></td>
-              <td data-label="Valor"><div class="dnsval mono"><?= (in_array($r['type'], ['MX', 'SRV'], true) ? (int)$r['prio'] . ' ' : '') . h($r['value']) ?></div></td>
-              <td data-label="Origem"><?= !empty($r['auto']) ? '<span class="pill p-ok">Automático</span>' : '<span class="mu">Manual</span>' ?></td>
-              <td class="act r"><?php if (empty($r['auto'])): ?><form method="post" data-confirm="Apagar este registo?"><?= act_fields('dns_rec_del', ['zone' => (string)$dz['name'], 'id' => (string)$r['id']]) ?><button class="btn sm sec" type="submit">Apagar</button></form><?php endif; ?></td>
+        <form method="post" class="dz-add" id="dz-add">
+          <?= act_fields('dns_rec_add', ['zone' => $zn]) ?>
+          <label class="fld">Tipo<select class="in" name="type" data-rtype><?php foreach (['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'] as $t): ?><option><?= $t ?></option><?php endforeach; ?></select></label>
+          <label class="fld">Nome<div class="dz-name"><input class="in mono" name="name" placeholder="@ ou www" required autocomplete="off"><span class="mu">.<?= h($zn) ?></span></div></label>
+          <label class="fld dz-val">Conteúdo<input class="in mono" name="value" required autocomplete="off" data-rval></label>
+          <label class="fld dz-prio" hidden>Prioridade<input class="in" name="prio" value="10" inputmode="numeric"></label>
+          <label class="fld">TTL<select class="in" name="ttl"><option value="0">Auto</option><option value="300">5 min</option><option value="1800">30 min</option><option value="3600">1 h</option><option value="86400">1 dia</option></select></label>
+          <button class="btn" type="submit">Adicionar</button>
+          <p class="mu dz-hint" data-rhint></p>
+        </form>
+
+        <div class="dz-filter">
+          <select class="in" id="dz-ft"><option value="">Todos os tipos</option><?php foreach ($types as $t): ?><option><?= $t ?></option><?php endforeach; ?></select>
+          <input class="in" id="dz-q" type="search" placeholder="Procurar nome ou conteúdo…">
+          <?php if (!empty($propAll[$zn]['ts'])): ?><span class="mu" style="margin-left:auto">Propagação verificada <?= h(gmdate('d/m H:i', (int)$propAll[$zn]['ts'] + tz_off(live_stats()))) ?></span><?php endif; ?>
+        </div>
+        <table class="list dz-t">
+          <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:80px"><col style="width:120px"><col style="width:150px"></colgroup>
+          <thead><tr><th>Tipo</th><th>Nome</th><th>Conteúdo</th><th>Prioridade</th><th>TTL</th><th>Propagação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody id="dz-rows">
+            <?php foreach ([(string)$dn['ns1'], (string)$dn['ns2']] as $nsx): ?>
+            <tr data-type="NS" data-s="<?= h($zn . ' ' . $nsx) ?>"><td><span class="pill p-off">NS</span></td><td class="mono"><?= h($zn) ?></td><td class="mono"><?= h($nsx) ?></td><td>—</td><td><?= h($ttlL(0)) ?></td><td>—</td><td class="r mu" title="Os nameservers vêm do Servidor DNS">🔒 Servidor</td></tr>
+            <?php endforeach; ?>
+            <?php foreach ($recs as $r): $k = $r['name'] . '|' . $r['type']; $pp = $prop[$k] ?? null; ?>
+            <tr data-type="<?= h($r['type']) ?>" data-s="<?= h(strtolower($full($r['name']) . ' ' . $r['value'])) ?>">
+              <td><span class="pill p-me"><?= h($r['type']) ?></span></td>
+              <td><span class="mono"><?= h($full($r['name'])) ?></span><?= !empty($r['auto']) ? ' <span class="dz-auto" title="Criado pelo painel a partir dos sites e do email. Se o editares, passa a manual e o painel deixa de o alterar.">painel</span>' : '' ?></td>
+              <td><div class="dnsval mono"><?= h((string)$r['value']) ?></div></td>
+              <td><?= in_array($r['type'], ['MX', 'SRV'], true) ? (int)$r['prio'] : '—' ?></td>
+              <td><?= h($ttlL($r['ttl'] ?? 0)) ?></td>
+              <td><?= $pp === null ? '<span class="mu">—</span>' : (!empty($pp['ok']) ? '<span class="pill p-ok">Igual</span>' : '<span class="pill p-warn" title="' . h('Este servidor: ' . ($pp['local'] ?: 'nada') . ' · Internet (Google): ' . ($pp['public'] ?: 'nada')) . '">' . ($pp['public'] === '' ? 'Ainda não' : 'Diferente') . '</span>') ?></td>
+              <td class="act r"><div class="dz-btns">
+                <button class="btn sm sec" type="button" data-edit='<?= h((string)json_encode(['id' => $r['id'], 'name' => $r['name'], 'type' => $r['type'], 'value' => $r['value'], 'ttl' => (int)($r['ttl'] ?? 0), 'prio' => (int)($r['prio'] ?? 0)])) ?>'>Editar</button>
+                <form method="post" data-confirm="Apagar o registo <?= h($r['type'] . ' ' . $full($r['name'])) ?>?<?= !empty($r['auto']) ? ' É um registo do painel: não volta a ser criado (usa Repor registos predefinidos para o recuperar).' : '' ?>"><?= act_fields('dns_rec_del', ['zone' => $zn, 'id' => (string)$r['id']]) ?><button class="btn sm sec" type="submit" aria-label="Apagar"><?= ic('trash') ?></button></form>
+              </div></td>
             </tr>
             <?php endforeach; ?>
           </tbody>
         </table>
-        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'registos') ?></div><?php endif; ?>
-        <form method="post" class="card-f" data-confirm="Apagar a zona <?= h($dz['name']) ?>? O domínio deixa de resolver neste servidor."><?= act_fields('dns_zone_del', ['zone' => (string)$dz['name']]) ?><span class="mu" style="margin-right:12px">Os registos automáticos atualizam-se sozinhos quando mudas sites ou email; os manuais mantêm-se.</span><button class="btn sm dan" type="submit">Apagar zona</button></form>
+        <div class="card-f"><span class="mu" id="dz-cnt"></span></div>
       </section>
-      <dialog id="dlg-dr-new"><form method="post"><?= act_fields('dns_rec_add', ['zone' => (string)$dz['name']]) ?>
-        <div class="dlg-h"><h3>Novo registo em <?= h($dz['name']) ?></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+
+      <dialog class="drawer" id="dlg-dr-edit"><form method="post">
+        <?= act_fields('dns_rec_edit', ['zone' => $zn]) ?><input type="hidden" name="id">
+        <div class="dlg-h"><div><h3>Editar registo</h3><p class="mu" data-edit-note></p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
         <div class="dlg-b">
+          <label class="fld">Tipo<select class="in" name="type" data-rtype><?php foreach (['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA', 'NS'] as $t): ?><option><?= $t ?></option><?php endforeach; ?></select></label>
+          <label class="fld">Nome<div class="dz-name"><input class="in mono" name="name" required><span class="mu">.<?= h($zn) ?></span></div></label>
+          <label class="fld">Conteúdo<textarea class="in mono" name="value" rows="3" required data-rval></textarea></label>
+          <p class="mu dz-hint" data-rhint></p>
           <div class="fgrid">
-            <label class="fld">Nome<input class="in mono" name="name" required placeholder="@ ou www ou loja" autocomplete="off"><small>@ = o próprio domínio</small></label>
-            <label class="fld">Tipo<select class="in" name="type"><?php foreach (['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA'] as $t): ?><option><?= $t ?></option><?php endforeach; ?></select></label>
-          </div>
-          <label class="fld">Valor<input class="in mono" name="value" required autocomplete="off" placeholder="91.209.16.24 · destino.dominio.pt · v=spf1 …"></label>
-          <div class="fgrid">
-            <label class="fld">TTL (segundos)<input class="in" name="ttl" inputmode="numeric" value="3600"></label>
-            <label class="fld">Prioridade (MX/SRV)<input class="in" name="prio" inputmode="numeric" value="10"></label>
+            <label class="fld dz-prio">Prioridade<input class="in" name="prio" inputmode="numeric"></label>
+            <label class="fld">TTL<select class="in" name="ttl"><option value="0">Auto</option><option value="300">5 min</option><option value="1800">30 min</option><option value="3600">1 h</option><option value="86400">1 dia</option></select></label>
           </div>
         </div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+      </form></dialog>
+      <dialog class="drawer" id="dlg-dz-import"><form method="post">
+        <?= act_fields('dns_import', ['zone' => $zn]) ?>
+        <div class="dlg-h"><div><h3>Importar zona</h3><p>Cola o conteúdo de um ficheiro de zona (formato BIND), por exemplo exportado do ISPmanager ou do Cloudflare.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b"><label class="fld">Ficheiro de zona<textarea class="in mono" name="zonetxt" rows="16" required placeholder="www  3600  IN  A  91.209.16.24&#10;@    3600  IN  MX 10 host.iddigital.pt."></textarea></label>
+          <p class="mu">Os registos são acrescentados aos que já existem (os repetidos são ignorados). O SOA e os nameservers do domínio não são importados: vêm deste servidor.</p></div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Importar</button></div>
+      </form></dialog>
+
+<?php elseif ($dtab === 'dominios'):   /* ===================== LISTA DE DOMÍNIOS ===================== */ ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Domínios</h2><p>Cada domínio tem a sua zona de DNS neste servidor. Os registos dos sites e do email são criados sozinhos.</p></div><button class="btn sm" type="button" data-open="dlg-dz-new"><?= ic('plus') ?>Adicionar domínio</button></div>
+        <?php if (!$dzs): ?><div class="empty"><b>Ainda não há domínios</b>Adiciona o primeiro domínio. Depois, no registador, aponta os nameservers para <span class="mono"><?= h((string)$dn['ns1']) ?></span> e <span class="mono"><?= h((string)$dn['ns2']) ?></span>.</div>
+        <?php else: [$zl, $zpg, $zpages, $ztot] = paginate($dzs, 50); ?>
+        <table class="list">
+          <colgroup><col><col style="width:260px"><col style="width:110px"><col style="width:160px"><col style="width:140px"></colgroup>
+          <thead><tr><th>Domínio</th><th>Estado</th><th class="r">Registos</th><th>Última alteração</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody><?php foreach ($zl as $z): [$pc, $pl] = $zst($z); ?>
+            <tr><td><a class="who" href="?p=dns&amp;zone=<?= h(rawurlencode((string)$z['name'])) ?>" style="text-decoration:none;color:inherit"><span class="av <?= tone((string)$z['name']) ?>"><?= ic('world') ?></span><span class="nm"><?= h((string)$z['name']) ?></span></a></td>
+              <td><span class="pill <?= $pc ?>"><?= h($pl) ?></span></td><td class="r"><?= count((array)$z['records']) + 2 ?></td><td><?= h(dns_serial_date((string)$z['serial'])) ?></td>
+              <td class="r"><a class="btn sm sec" href="?p=dns&amp;zone=<?= h(rawurlencode((string)$z['name'])) ?>">Gerir DNS</a></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <?php if ($zpages > 1): ?><div class="card-f"><?= pager($zpg, $zpages, $ztot, 'pg', 'domínios') ?></div><?php endif; ?>
+        <?php endif; ?>
+      </section>
+      <dialog class="drawer" id="dlg-dz-new"><form method="post">
+        <?= act_fields('dns_zone_add') ?>
+        <div class="dlg-h"><div><h3>Adicionar domínio</h3><p>Cria a zona com os registos do site e do email já preenchidos.</p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b"><label class="fld">Domínio<input class="in mono" name="zone" required placeholder="exemplo.pt" autocomplete="off"></label>
+          <p class="mu">Depois, no registador do domínio, aponta os nameservers para <span class="mono"><?= h((string)$dn['ns1']) ?></span> e <span class="mono"><?= h((string)$dn['ns2']) ?></span>. Nos domínios <span class="mono">.pt</span>, cria a zona aqui <b>antes</b> de mudar no registador.</p></div>
         <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Adicionar</button></div>
       </form></dialog>
+
+<?php else:   /* ===================== SERVIDOR DNS ===================== */ ?>
+      <?php if (empty($dn['enabled'])): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Ativar o servidor DNS</h2><p>O servidor passa a responder pelo DNS dos teus domínios (NSD, só autoritativo: nunca faz resolução para terceiros).</p></div></div>
+        <form method="post" class="card-b"><?= act_fields('dns_enable') ?>
+          <div class="fgrid">
+            <label class="fld">Nameserver 1<input class="in mono" name="ns1" required placeholder="ns1.host.iddigital.pt"></label>
+            <label class="fld">Nameserver 2<input class="in mono" name="ns2" required placeholder="ns2.host.iddigital.pt"></label>
+            <label class="fld">IP público (IPv4)<input class="in mono" name="ip" placeholder="automático"></label>
+            <label class="fld">Email do responsável<input class="in" name="hm" type="email" placeholder="dns@iddigital.pt"></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Ativar</button></div>
+        </form>
+      </section>
+      <?php else: $rows = (array)($srvChk['rows'] ?? []); ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Estado do servidor DNS</h2><p><span class="pill <?= !empty($dn['active']) ? 'p-ok' : 'p-err' ?>"><?= !empty($dn['active']) ? 'A correr' : 'Parado' ?></span> · <?= count($dzs) ?> domínios<?= !empty($srvChk['ts']) ? ' · verificado ' . h(gmdate('d/m H:i', (int)$srvChk['ts'] + tz_off(live_stats()))) : '' ?></p></div>
+          <div class="dz-act">
+            <form method="post"><?= act_fields('dns_server_check') ?><button class="btn sm" type="submit">Verificar agora</button></form>
+            <form method="post" data-confirm="Reiniciar o servidor DNS? Fica alguns segundos sem responder."><?= act_fields('dns_restart') ?><button class="btn sm sec" type="submit">Reiniciar</button></form>
+          </div></div>
+        <?php if (!$rows): ?><div class="empty">Carrega em "Verificar agora" para testar o servidor DNS.</div>
+        <?php else: ?>
+        <table class="list sn-t"><colgroup><col style="width:110px"><col style="width:300px"><col></colgroup>
+          <thead><tr><th>Estado</th><th>Teste</th><th>Resultado</th></tr></thead>
+          <tbody><?php foreach ($rows as $r): ?><tr><td><?= ($r['status'] ?? '') === 'ok' ? '<span class="pill p-ok">OK</span>' : (($r['status'] ?? '') === 'warn' ? '<span class="pill p-warn">Aviso</span>' : '<span class="pill p-err">Falha</span>') ?></td><td><b><?= h((string)$r['name']) ?></b></td><td class="sn-msg"><?= h((string)$r['msg']) ?></td></tr><?php endforeach; ?></tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+      <div class="grid2e" style="align-items:stretch">
+        <section class="card">
+          <div class="card-h"><div><h2>Nameservers</h2><p>Os nomes com que a Internet chega a este servidor DNS. Na zona do domínio-mãe (ex.: <span class="mono"><?= h(preg_replace('/^[^.]+\.[^.]+\./', '', (string)$dn['ns1'])) ?></span>) têm de existir os registos A destes nomes com o IP abaixo.</p></div></div>
+          <form method="post" class="card-b" data-confirm="Guardar os nameservers? Todas as zonas são atualizadas."><?= act_fields('dns_enable') ?>
+            <div class="fgrid">
+              <label class="fld">Nameserver 1<input class="in mono" name="ns1" required value="<?= h((string)$dn['ns1']) ?>"></label>
+              <label class="fld">Nameserver 2<input class="in mono" name="ns2" required value="<?= h((string)$dn['ns2']) ?>"></label>
+              <label class="fld">IP público (IPv4)<input class="in mono" name="ip" required value="<?= h((string)$dn['ip']) ?>"></label>
+              <label class="fld">IPv6 (opcional)<input class="in mono" name="ip6" value="<?= h((string)($dn['ip6'] ?? '')) ?>"></label>
+              <label class="fld">Email do responsável<input class="in" name="hm" type="email" value="<?= h((string)($dn['hostmaster'] ?? '')) ?>"></label>
+            </div>
+            <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+          </form>
+        </section>
+        <section class="card">
+          <div class="card-h"><div><h2>Valores predefinidos</h2><p>TTL "Auto" dos registos e tempos do SOA de todas as zonas. Os valores atuais servem para quase todos os casos.</p></div></div>
+          <form method="post" class="card-b"><?= act_fields('dns_settings') ?>
+            <div class="fgrid">
+              <label class="fld">TTL predefinido (s)<input class="in" name="ttl" inputmode="numeric" value="<?= (int)$soa['ttl'] ?>"><small>Quanto tempo a Internet guarda as respostas (3600 = 1 h)</small></label>
+              <label class="fld">Refresh (s)<input class="in" name="refresh" inputmode="numeric" value="<?= (int)$soa['refresh'] ?>"></label>
+              <label class="fld">Retry (s)<input class="in" name="retry" inputmode="numeric" value="<?= (int)$soa['retry'] ?>"></label>
+              <label class="fld">Expire (s)<input class="in" name="expire" inputmode="numeric" value="<?= (int)$soa['expire'] ?>"></label>
+              <label class="fld">TTL negativo (s)<input class="in" name="minimum" inputmode="numeric" value="<?= (int)$soa['minimum'] ?>"><small>Quanto tempo se lembra de que um nome não existe</small></label>
+            </div>
+            <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
+          </form>
+        </section>
+      </div>
       <?php endif; ?>
 <?php endif; ?>
 
@@ -6360,6 +6543,47 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       .then(function (d) { if (d) { data = d; render(); } }).catch(function () {}).then(function () { setTimeout(poll, 10000); });
   }
   poll();
+})();
+</script>
+<?php endif; ?>
+<?php if ($page === 'dns'): ?>
+<script>
+(function () {
+  var hints = {
+    A: ['Endereço IPv4, ex.: 91.209.16.24', false], AAAA: ['Endereço IPv6, ex.: 2a01:4f8::1', false],
+    CNAME: ['Outro nome, ex.: loja.exemplo.com (não pode ser usado no próprio domínio @)', false],
+    MX: ['Servidor de email, ex.: host.iddigital.pt · prioridade: menor = preferido', true],
+    TXT: ['Texto, ex.: v=spf1 mx ~all ou google-site-verification=…', false],
+    SRV: ['peso porta destino, ex.: 5 5060 sip.exemplo.pt · prioridade em campo próprio', true],
+    CAA: ['ex.: 0 issue "letsencrypt.org"', false], NS: ['Nameserver de um subdomínio, ex.: ns1.outro.pt', false]
+  };
+  function bindType(form) {
+    var sel = form.querySelector('[data-rtype]'); if (!sel) return;
+    function upd() { var hh = hints[sel.value] || ['', false]; var hEl = form.querySelector('[data-rhint]'); if (hEl) hEl.textContent = hh[0];
+      var v = form.querySelector('[data-rval]'); if (v) v.placeholder = hh[0].replace(/^.*ex\.: /, '').split(' · ')[0];
+      form.querySelectorAll('.dz-prio').forEach(function (p) { p.hidden = !hh[1]; }); }
+    sel.addEventListener('change', upd); upd(); form._upd = upd;
+  }
+  document.querySelectorAll('#dz-add, #dlg-dr-edit form').forEach(bindType);
+  var dlg = document.getElementById('dlg-dr-edit');
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-edit]'); if (b && dlg) {
+      var r = JSON.parse(b.getAttribute('data-edit')), f = dlg.querySelector('form');
+      f.id.value = r.id; f.name.value = r.name; f.type.value = r.type; f.value.value = r.value; f.prio.value = r.prio || 10;
+      f.ttl.value = [0, 300, 1800, 3600, 86400].indexOf(r.ttl) !== -1 ? String(r.ttl) : '0';
+      dlg.querySelector('[data-edit-note]').textContent = r.id.indexOf('auto') === 0 ? 'Registo do painel: ao guardar, passa a manual e o painel deixa de o alterar.' : '';
+      if (f._upd) f._upd(); dlg.showModal(); return;
+    }
+    var c = e.target.closest('[data-copy]'); if (c) { navigator.clipboard && navigator.clipboard.writeText(c.getAttribute('data-copy')); var t = c.textContent; c.textContent = 'Copiado'; setTimeout(function () { c.textContent = t; }, 1200); }
+  });
+  var ft = document.getElementById('dz-ft'), q = document.getElementById('dz-q');
+  if (ft && q) {
+    var rows = Array.prototype.slice.call(document.querySelectorAll('#dz-rows tr')), cnt = document.getElementById('dz-cnt');
+    function filt() { var t = ft.value, v = q.value.trim().toLowerCase(), n = 0;
+      rows.forEach(function (r) { var ok = (!t || r.getAttribute('data-type') === t) && (!v || r.getAttribute('data-s').toLowerCase().indexOf(v) !== -1); r.hidden = !ok; if (ok) n++; });
+      cnt.textContent = n + ' de ' + rows.length + ' registos'; }
+    ft.addEventListener('change', filt); q.addEventListener('input', filt); filt();
+  }
 })();
 </script>
 <?php endif; ?>
@@ -9288,7 +9512,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.12.4 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.13.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -9728,12 +9952,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.12.4
+#  mpanel — IDDigital Hosting CLI v2.13.0
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.12.4"
+MP_VERSION="2.13.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -13363,10 +13587,11 @@ dns_write_zone(){ # gera o ficheiro de zona, verifica-o e só então o ativa
   ns1=$(dns_get NS1); ns2=$(dns_get NS2); hm=$(dns_get HOSTMASTER "hostmaster.$z"); hm=${hm/@/.}
   serial=$(jq -r '.serial' <<<"$j")
   {
-    printf '; IDDigital Hosting — zona %s (gerada pelo painel; não editar à mão)\n$ORIGIN %s.\n$TTL 3600\n' "$z" "$z"
-    printf '@ IN SOA %s %s ( %s 10800 3600 1209600 3600 )\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$hm")" "$serial"
+    printf '; IDDigital Hosting — zona %s (gerada pelo painel; não editar à mão)\n$ORIGIN %s.\n$TTL %s\n' "$z" "$z" "$(dns_get DEF_TTL 3600)"
+    printf '@ IN SOA %s %s ( %s %s %s %s %s )\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$hm")" "$serial" "$(dns_get SOA_REFRESH 10800)" "$(dns_get SOA_RETRY 3600)" "$(dns_get SOA_EXPIRE 1209600)" "$(dns_get SOA_MIN 3600)"
     printf '@ IN NS %s\n@ IN NS %s\n' "$(dns_fqdn "$ns1")" "$(dns_fqdn "$ns2")"
-    jq -r '.records[] | [.name, (.ttl|tostring), .type, (.prio // 0 | tostring), .value] | @tsv' <<<"$j" | while IFS=$'\t' read -r n t ty pr v; do
+    jq -r '.records[] | [.name, (if (.ttl // 0) >= 60 then (.ttl|tostring) else "-" end), .type, (.prio // 0 | tostring), .value] | @tsv' <<<"$j" | while IFS=$'\t' read -r n t ty pr v; do
+      [ "$t" = "-" ] && t=""   # TTL automático: usa o $TTL da zona (um campo vazio deslocaria as colunas)
       case "$ty" in
         TXT) printf '%s %s IN TXT %s\n' "$n" "$t" "$(dns_txt_quote "$v")" ;;
         MX) printf '%s %s IN MX %s %s\n' "$n" "$t" "$pr" "$(dns_fqdn "$v")" ;;
@@ -13414,7 +13639,7 @@ dns_bump(){ # zona json -> grava com serial novo, gera e ativa (repõe o anterio
 dns_auto_records(){ # registos automáticos da zona: sites, email e nameservers que pertencem a ela
   local z=$1 ip ip6 n d rel recs="[]" h
   ip=$(dns_get IP); ip6=$(dns_get IP6)
-  add(){ recs=$(jq -c --arg n "$1" --arg t "$2" --arg v "$3" --argjson p "${4:-0}" '. + [{name:$n, type:$t, value:$v, ttl:3600, prio:$p, auto:true}]' <<<"$recs"); }
+  add(){ recs=$(jq -c --arg n "$1" --arg t "$2" --arg v "$3" --argjson p "${4:-0}" '. + [{name:$n, type:$t, value:$v, ttl:0, prio:$p, auto:true}]' <<<"$recs"); }
   rel(){ if [ "$1" = "$z" ]; then echo "@"; else echo "${1%."$z"}"; fi; }
   add "@" A "$ip"; [ -n "$ip6" ] && add "@" AAAA "$ip6"
   add "www" A "$ip"; [ -n "$ip6" ] && add "www" AAAA "$ip6"
@@ -13439,7 +13664,7 @@ dns_sync_zone(){ # substitui os registos automáticos pelos atuais (mantém os m
   local z=$1 j auto
   [ -f "$DNS_DIR/$z.json" ] || return 0   # nunca cria zonas: só atualiza as que existem
   j=$(dns_load "$z"); auto=$(dns_auto_records "$z")
-  j=$(jq --argjson a "$auto" '.records = ([.records[] | select(.auto != true)] + ($a | to_entries | map(.value + {id: ("auto" + (.key | tostring))})))' <<<"$j")
+  j=$(jq --argjson a "$auto" '(.off // []) as $off | .records = ([.records[] | select(.auto != true)] + ($a | map(select((.name + "|" + .type) as $k | ($off | index($k)) | not)) | to_entries | map(.value + {id: ("auto" + (.key | tostring))})))' <<<"$j")
   dns_bump "$z" "$j"
 }
 dns_autosync(){ # chamado quando muda um site ou o email: atualiza as zonas afetadas
@@ -13457,6 +13682,149 @@ cmd_dns_cleanup(){ # remove zonas cujo nome não é um domínio (ex.: bin, boot�
   done < <(find "$DNS_DIR" -maxdepth 1 -type f -name '*.json' -printf '%f\n')
   if [ "$c" -gt 0 ] && dns_on; then dns_apply >/dev/null 2>&1; fi
   echo "Zonas DNS inválidas removidas: $c."; return 0
+}
+# ---------- DNS: edição, modelos, importação, propagação e servidor ----------
+dns_off_keys(){ dns_load "$1" | jq -c '.off // []'; }   # nome|tipo que o painel deixou de gerir (o utilizador alterou-os)
+dns_rec_norm(){ # zona nome -> nome relativo
+  local z=$1 n; n=$(printf '%s' "$2" | tr 'A-Z' 'a-z'); n=${n%.}; n=${n%."$z"}; [ "$n" = "$z" ] && n="@"; [ -n "$n" ] || n="@"; echo "$n"
+}
+dns_ttl_ok(){ [[ "$1" =~ ^[0-9]{1,6}$ ]] && { [ "$1" = 0 ] || [ "$1" -ge 60 ]; }; }
+cmd_dns_rec_edit(){ # zona id nome tipo valor [--ttl N] [--prio N]
+  local z="${1:-}" id="${2:-}" n="${3:-}" t="${4:-}" v="${5:-}" ttl=0 pr=10 j why old
+  dns_need; [ $# -ge 5 ] && shift 5
+  while [ $# -gt 0 ]; do case "$1" in --ttl) ttl="${2:-}"; shift 2 || shift ;; --prio) pr="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  [[ "$id" =~ ^[A-Za-z0-9]{3,16}$ ]] || die "Identificador inválido."
+  old=$(dns_load "$z" | jq -c --arg id "$id" '.records[] | select(.id == $id)'); [ -n "$old" ] || die "Registo não encontrado."
+  n=$(dns_rec_norm "$z" "$n"); t=$(printf '%s' "$t" | tr 'a-z' 'A-Z')
+  dns_ttl_ok "$ttl" || die "TTL inválido (Auto ou 60 segundos ou mais)."; [[ "$pr" =~ ^[0-9]{1,5}$ ]] || die "Prioridade inválida."
+  why=$(dns_valid_rec "$n" "$t" "$v") || die "$why"
+  # um registo do painel que é alterado passa a manual, e o painel deixa de gerir esse nome+tipo
+  j=$(dns_load "$z" | jq --arg id "$id" --arg n "$n" --arg t "$t" --arg v "$v" --argjson ttl "$ttl" --argjson p "$pr" --arg nid "$(openssl rand -hex 6)" '
+      (.records[] | select(.id == $id)) as $o
+      | .off = ((.off // []) + (if $o.auto == true then [$o.name + "|" + $o.type] else [] end) | unique)
+      | .records = [.records[] | if .id == $id then {id:(if $o.auto == true then $nid else $id end), name:$n, type:$t, value:$v, ttl:$ttl, prio:$p, auto:false} else . end]')
+  dns_bump "$z" "$j" || die "Registo recusado pelo verificador de zonas; nada foi alterado."
+  echo "Registo atualizado em $z."; return 0
+}
+cmd_dns_reset(){ # zona — volta aos registos predefinidos do painel
+  local z="${1:-}" j auto; dns_need
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  auto=$(dns_auto_records "$z")
+  j=$(dns_load "$z" | jq --argjson a "$auto" '($a | map(.name + "|" + .type)) as $k | .off = [] | .records = [.records[] | select(.auto != true) | select((.name + "|" + .type) as $x | ($k | index($x)) | not)]')
+  dns_save "$z" "$j"; dns_sync_zone "$z" || die "Não foi possível repor a zona."
+  echo "Registos predefinidos repostos em $z (os registos manuais de outros nomes mantêm-se)."; return 0
+}
+cmd_dns_template(){ # zona local|google|microsoft
+  local z="${1:-}" tp="${2:-}" j mx spf; dns_need
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  # tira o email atual (MX e SPF), seja do painel ou manual
+  j=$(dns_load "$z" | jq '.records = [.records[] | select(.name != "@" or (.type != "MX" and (.type != "TXT" or ((.value | test("^v=spf1")) | not))))]')
+  case "$tp" in
+    local) j=$(jq '.off = ((.off // []) - ["@|MX", "@|TXT"])' <<<"$j"); dns_save "$z" "$j"; dns_sync_zone "$z" || die "Falhou."; echo "O email de $z passa a ser recebido por este servidor."; return 0 ;;
+    google) mx='[{"v":"smtp.google.com","p":1}]'; spf='v=spf1 include:_spf.google.com ~all' ;;
+    microsoft) mx=$(jq -cn --arg h "$(printf '%s' "$z" | tr '.' '-').mail.protection.outlook.com" '[{v:$h, p:0}]'); spf='v=spf1 include:spf.protection.outlook.com ~all' ;;
+    *) die "Modelo: local, google ou microsoft." ;;
+  esac
+  j=$(jq --argjson mx "$mx" --arg spf "$spf" --arg tp "$tp" '
+      .off = ((.off // []) + ["@|MX", "@|TXT"] | unique)
+      | .records += ($mx | map({id:("t" + (.p|tostring) + (now|floor|tostring)), name:"@", type:"MX", value:.v, ttl:0, prio:.p, auto:false}))
+      | .records += [{id:("s" + (now|floor|tostring)), name:"@", type:"TXT", value:$spf, ttl:0, prio:0, auto:false}]
+      | if $tp == "microsoft" then (.records = [.records[] | select(.name != "autodiscover")] | .records += [{id:("a" + (now|floor|tostring)), name:"autodiscover", type:"CNAME", value:"autodiscover.outlook.com", ttl:0, prio:0, auto:false}]) else . end' <<<"$j")
+  dns_bump "$z" "$j" || die "Não foi possível aplicar o modelo."
+  echo "Modelo de email $( [ "$tp" = google ] && echo 'Google Workspace' || echo 'Microsoft 365') aplicado a $z."; return 0
+}
+cmd_dns_import(){ # zona texto-da-zona (formato BIND) — acrescenta os registos que não existam
+  local z="${1:-}" txt="${2:-}" rows j ok=0 skip=0 bad=0 n t ttl p v why; dns_need
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  [ -n "$txt" ] && [ ${#txt} -le 200000 ] || die "Cola o conteúdo do ficheiro de zona (até 200 KB)."
+  rows=$(printf '%s' "$txt" | "$(php_cli "$PANEL_PHP")" -r '
+    $z = $argv[1]; $origin = $z . "."; $ttl = 0; $last = "@"; $src = stream_get_contents(STDIN);
+    $src = preg_replace_callback("/\\(([^)]*)\\)/s", function ($m) { return " " . str_replace(["\r", "\n"], " ", $m[1]) . " "; }, $src);  // registos em várias linhas (SOA, TXT longos): numa só linha
+    foreach (preg_split("/\\r?\\n/", $src) as $ln) {
+      $out = ""; $q = false; for ($i = 0; $i < strlen($ln); $i++) { $c = $ln[$i]; if ($c === "\"") $q = !$q; if ($c === ";" && !$q) break; $out .= $c; }
+      if (trim($out) === "") continue;
+      if (preg_match("/^\\\$ORIGIN\\s+(\\S+)/i", $out, $m)) { $origin = rtrim($m[1], ".") . "."; continue; }
+      if (preg_match("/^\\\$TTL\\s+(\\d+)/i", $out, $m)) { continue; }
+      $own = preg_match("/^\\s/", $out) ? $last : null;
+      preg_match_all("/\"(?:[^\"\\\\]|\\\\.)*\"|\\S+/", trim($out), $mm); $tk = $mm[0];
+      if ($own === null) { $own = array_shift($tk); $last = $own; }
+      $rt = 0; while ($tk && (ctype_digit($tk[0]) || in_array(strtoupper($tk[0]), ["IN", "CH", "HS"], true))) { $x = array_shift($tk); if (ctype_digit($x)) $rt = (int)$x; }
+      if (!$tk) continue; $type = strtoupper(array_shift($tk));
+      $full = $own === "@" ? $origin : (substr($own, -1) === "." ? $own : $own . "." . $origin);
+      $full = strtolower(rtrim($full, ".")); $zz = strtolower($z);
+      if ($full === $zz) $name = "@"; elseif (substr($full, -strlen($zz) - 1) === "." . $zz) $name = substr($full, 0, -strlen($zz) - 1); else continue;
+      $prio = 0;
+      if ($type === "MX") { $prio = (int)array_shift($tk); $val = rtrim((string)array_shift($tk), "."); }
+      elseif ($type === "SRV") { $prio = (int)array_shift($tk); $val = implode(" ", array_map(function ($x) { return rtrim($x, "."); }, $tk)); }
+      elseif ($type === "TXT") { $val = implode("", array_map(function ($x) { return stripslashes(trim($x, "\"")); }, $tk)); }
+      elseif ($type === "CNAME" || $type === "NS") { $val = rtrim((string)array_shift($tk), "."); if ($type === "NS" && $name === "@") continue; }
+      elseif (in_array($type, ["A", "AAAA", "CAA"], true)) { $val = implode(" ", $tk); }
+      else continue;
+      echo implode("\t", [$name, $type, $rt, $prio, str_replace(["\t", "\n"], " ", $val)]), "\n";
+    }' "$z" 2>/dev/null)
+  j=$(dns_load "$z")
+  while IFS=$'\t' read -r n t ttl p v; do
+    [ -n "$n" ] || continue
+    [ "$ttl" -ge 60 ] 2>/dev/null || ttl=0
+    if ! why=$(dns_valid_rec "$n" "$t" "$v"); then bad=$((bad+1)); continue; fi
+    if [ "$(jq --arg n "$n" --arg t "$t" --arg v "$v" '[.records[] | select(.name == $n and .type == $t and .value == $v)] | length' <<<"$j")" != 0 ]; then skip=$((skip+1)); continue; fi
+    j=$(jq --arg n "$n" --arg t "$t" --arg v "$v" --argjson ttl "$ttl" --argjson p "${p:-0}" --arg id "$(openssl rand -hex 6)" '.records += [{id:$id, name:$n, type:$t, value:$v, ttl:$ttl, prio:$p, auto:false}]' <<<"$j")
+    ok=$((ok+1))
+  done <<<"$rows"
+  [ "$ok" -gt 0 ] && { dns_bump "$z" "$j" || die "A zona importada tem erros; nada foi alterado."; }
+  echo "Importação para $z: $ok registos acrescentados, $skip já existiam, $bad inválidos ignorados."; return 0
+}
+cmd_dns_propagation(){ # zona — compara este servidor com a Google (8.8.8.8)
+  local z="${1:-}" f=$DATA/stats/dns-prop.json rows="[]" n t fq l g ip; dns_need
+  [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
+  ip=$(dns_get IP)
+  while IFS=$'\t' read -r n t; do
+    [ -n "$n" ] || continue
+    if [ "$n" = "@" ]; then fq=$z; else fq="$n.$z"; fi
+    l=$(dig +short +time=3 +tries=1 "$t" "$fq" @"$ip" 2>/dev/null | sed 's/\.$//' | tr -d '"' | sort | tr '\n' ' ' | sed 's/ $//')
+    g=$(dig +short +time=3 +tries=1 "$t" "$fq" @8.8.8.8 2>/dev/null | sed 's/\.$//' | tr -d '"' | sort | tr '\n' ' ' | sed 's/ $//')
+    rows=$(jq -c --arg n "$n" --arg t "$t" --arg l "$l" --arg g "$g" '. + [{name:$n, type:$t, local:$l, public:$g, ok:($l == $g and $l != "")}]' <<<"$rows")
+  done < <(dns_load "$z" | jq -r '[.records[] | [.name, .type]] | unique | .[] | @tsv')
+  [ -s "$f" ] && jq -e . "$f" >/dev/null 2>&1 || echo '{}' > "$f"
+  jq --arg z "$z" --argjson r "$rows" --arg ts "$EPOCHSECONDS" '.[$z] = {ts:($ts|tonumber), rows:$r}' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
+  echo "Propagação de $z: $(jq '[.[] | select(.ok)] | length' <<<"$rows") de $(jq 'length' <<<"$rows") iguais na Internet."; return 0
+}
+cmd_dns_settings(){ # --ttl N --refresh N --retry N --expire N --minimum N
+  local k v; dns_need
+  while [ $# -gt 0 ]; do
+    case "$1" in --ttl) k=DEF_TTL ;; --refresh) k=SOA_REFRESH ;; --retry) k=SOA_RETRY ;; --expire) k=SOA_EXPIRE ;; --minimum) k=SOA_MIN ;; *) die "Opção desconhecida: $1" ;; esac
+    v="${2:-}"; [[ "$v" =~ ^[0-9]{2,8}$ ]] && [ "$v" -ge 60 ] || die "Valor inválido para $1 (segundos, mínimo 60)."
+    dns_set "$k" "$v"; shift 2 || shift
+  done
+  local z; while IFS= read -r z; do [ -n "$z" ] && dns_bump "$z" "$(dns_load "$z")" >/dev/null 2>&1; done < <(dns_zones)
+  echo "Valores predefinidos do DNS guardados e aplicados a todas as zonas."; return 0
+}
+cmd_dns_restart(){ dns_need; systemctl restart nsd >/dev/null 2>&1 && echo "Servidor DNS reiniciado." || die "O NSD não arrancou: journalctl -u nsd -n 30"; return 0; }
+cmd_dns_server_check(){ # saúde do servidor DNS
+  local f=$DATA/stats/dns-server.json r="[]" ip ns z1 a out
+  dns_need; ip=$(dns_get IP); z1=$(dns_zones | head -n 1)
+  chk(){ r=$(jq -c --arg id "$1" --arg n "$2" --arg s "$3" --arg m "$4" '. + [{id:$id, name:$n, status:$s, msg:$m}]' <<<"$r"); }
+  if systemctl is-active --quiet nsd >/dev/null 2>&1; then chk svc "Serviço NSD" ok "A correr"; else chk svc "Serviço NSD" fail "Parado (botão Reiniciar)"; fi
+  if out=$(nsd-checkconf /etc/nsd/nsd.conf 2>&1); then chk conf "Configuração" ok "Válida"; else chk conf "Configuração" fail "$(printf '%s' "$out" | tail -n 1 | cut -c1-160)"; fi
+  for ns in "$(dns_get NS1)" "$(dns_get NS2)"; do
+    a=$(dig +short +time=3 +tries=1 A "$ns" @8.8.8.8 2>/dev/null | tail -n 1)
+    if [ "$a" = "$ip" ]; then chk "ns:$ns" "$ns na Internet" ok "Aponta para $ip"
+    elif [ -z "$a" ]; then chk "ns:$ns" "$ns na Internet" fail "Não existe na Internet: cria o registo A $ns → $ip na zona do domínio-mãe"
+    else chk "ns:$ns" "$ns na Internet" fail "Aponta para $a (devia ser $ip)"; fi
+  done
+  if [ -n "$z1" ]; then
+    if dig +short +time=3 +tries=1 SOA "$z1" @"$ip" 2>/dev/null | grep -q .; then chk udp "Resposta por UDP" ok "Responde ($z1)"; else chk udp "Resposta por UDP" fail "Não responde na porta 53/UDP"; fi
+    if dig +short +tcp +time=3 +tries=1 SOA "$z1" @"$ip" 2>/dev/null | grep -q .; then chk tcp "Resposta por TCP" ok "Responde ($z1)"; else chk tcp "Resposta por TCP" fail "Não responde na porta 53/TCP"; fi
+    if [ "$(jq -r '.[] | select(.id == "udp") | .status' <<<"$r")" != ok ]; then chk axfr "Transferência de zona" warn "Não testado (o servidor não responde)"
+    elif dig AXFR "$z1" @"$ip" +time=3 +tries=1 2>/dev/null | grep -q 'IN[[:space:]]\+SOA'; then chk axfr "Transferência de zona" fail "Qualquer pessoa consegue copiar as zonas (AXFR aberto)"; else chk axfr "Transferência de zona" ok "Recusada (as zonas não podem ser copiadas)"; fi
+  else chk udp "Zonas" warn "Ainda não há zonas para testar"; fi
+  if [ "$(jq -r '.[] | select(.id == "udp") | .status' <<<"$r")" != ok ]; then chk open "Resolver aberto" warn "Não testado (o servidor não responde)"; jq -n --argjson r "$r" --arg ts "$EPOCHSECONDS" '{ts:($ts|tonumber), rows:$r}' > "$f"; chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"; echo "Verificação do servidor DNS: $(jq '[.[] | select(.status == "ok")] | length' <<<"$r") de $(jq 'length' <<<"$r") OK."; return 0; fi
+  out=$(dig +time=3 +tries=1 A google.com @"$ip" 2>/dev/null | grep -o 'status: [A-Z]*' | cut -d' ' -f2)
+  if [ "$out" = NOERROR ] && dig +short +time=3 +tries=1 A google.com @"$ip" 2>/dev/null | grep -q .; then chk open "Resolver aberto" fail "Responde por domínios de terceiros (pode ser usado em ataques)"; else chk open "Resolver aberto" ok "Não (só responde pelas tuas zonas)"; fi
+  jq -n --argjson r "$r" --arg ts "$EPOCHSECONDS" '{ts:($ts|tonumber), rows:$r}' > "$f"; chown root:"$PANEL_SYSUSER" "$f"; chmod 640 "$f"
+  echo "Verificação do servidor DNS: $(jq '[.[] | select(.status == "ok")] | length' <<<"$r") de $(jq 'length' <<<"$r") OK."; return 0
 }
 cmd_dns_enable(){
   local ns1="" ns2="" ip="" ip6="" hm="" a re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$'
@@ -13539,13 +13907,13 @@ cmd_dns_zone_del(){
   echo "Zona $z apagada."; return 0
 }
 cmd_dns_rec_add(){ # zona nome tipo valor [--ttl N] [--prio N]
-  local z="${1:-}" n="${2:-}" t="${3:-}" v="${4:-}" ttl=3600 pr=10 j why
+  local z="${1:-}" n="${2:-}" t="${3:-}" v="${4:-}" ttl=0 pr=10 j why
   dns_need; [ $# -ge 4 ] && shift 4
   while [ $# -gt 0 ]; do case "$1" in --ttl) ttl="${2:-}"; shift 2 || shift ;; --prio) pr="${2:-}"; shift 2 || shift ;; *) die "Opção desconhecida: $1" ;; esac; done
   [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
   n=$(printf '%s' "$n" | tr 'A-Z' 'a-z'); n=${n%."$z"}; n=${n%.}; [ "$n" = "$z" ] && n="@"; [ -n "$n" ] || n="@"
   t=$(printf '%s' "$t" | tr 'a-z' 'A-Z')
-  [[ "$ttl" =~ ^[0-9]{2,6}$ ]] || die "TTL inválido."; [[ "$pr" =~ ^[0-9]{1,5}$ ]] || die "Prioridade inválida."
+  dns_ttl_ok "$ttl" || die "TTL inválido (Auto ou 60 segundos ou mais)."; [[ "$pr" =~ ^[0-9]{1,5}$ ]] || die "Prioridade inválida."
   why=$(dns_valid_rec "$n" "$t" "$v") || die "$why"
   j=$(dns_load "$z" | jq --arg n "$n" --arg t "$t" --arg v "$v" --argjson ttl "$ttl" --argjson p "$pr" --arg id "$(openssl rand -hex 6)" \
       '.records += [{id:$id, name:$n, type:$t, value:$v, ttl:$ttl, prio:$p, auto:false}]')
@@ -13555,9 +13923,9 @@ cmd_dns_rec_add(){ # zona nome tipo valor [--ttl N] [--prio N]
 cmd_dns_rec_del(){
   local z="${1:-}" id="${2:-}" j; dns_need
   [ -f "$(dns_zone_json "$z")" ] || die "A zona $z não existe."
-  [[ "$id" =~ ^[A-Za-z0-9]{6,16}$ ]] || die "Identificador inválido."
-  [ "$(dns_load "$z" | jq --arg id "$id" '[.records[] | select(.id == $id and .auto != true)] | length')" = 1 ] || die "Registo não encontrado (os automáticos atualizam-se com 'Sincronizar')."
-  j=$(dns_load "$z" | jq --arg id "$id" '.records |= map(select(.id != $id))')
+  [[ "$id" =~ ^[A-Za-z0-9]{3,16}$ ]] || die "Identificador inválido."
+  [ "$(dns_load "$z" | jq --arg id "$id" '[.records[] | select(.id == $id)] | length')" = 1 ] || die "Registo não encontrado."
+  j=$(dns_load "$z" | jq --arg id "$id" '(.records[] | select(.id == $id)) as $o | .off = ((.off // []) + (if $o.auto == true then [$o.name + "|" + $o.type] else [] end) | unique) | .records |= map(select(.id != $id))')
   dns_bump "$z" "$j" || die "Não foi possível atualizar a zona."
   echo "Registo apagado de $z."; return 0
 }
@@ -13582,9 +13950,12 @@ cmd_dns_check(){ # a delegação no registador já aponta para este servidor?
 dns_state_json(){
   dns_on || { echo '{"enabled":false}'; return 0; }
   local z zs="[]" chk; chk=$(cat "$DATA/stats/dns-check.json" 2>/dev/null || echo '{}'); jq -e . >/dev/null 2>&1 <<<"$chk" || chk='{}'
-  while IFS= read -r z; do [ -n "$z" ] || continue; zs=$(jq -c --arg z "$z" --argjson d "$(dns_load "$z")" --argjson c "$chk" '. + [{name:$z, serial:$d.serial, records:$d.records, check:($c[$z] // null)}]' <<<"$zs"); done < <(dns_zones)
+  while IFS= read -r z; do [ -n "$z" ] || continue; zs=$(jq -c --arg z "$z" --argjson d "$(dns_load "$z")" --argjson c "$chk" '. + [{name:$z, serial:$d.serial, records:$d.records, off:($d.off // []), check:($c[$z] // null)}]' <<<"$zs"); done < <(dns_zones)
   jq -n --arg ns1 "$(dns_get NS1)" --arg ns2 "$(dns_get NS2)" --arg ip "$(dns_get IP)" --arg ip6 "$(dns_get IP6)" --argjson zs "$zs" \
-    --arg act "$(systemctl is-active nsd 2>/dev/null)" '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, active:($act == "active"), zones:$zs}'
+    --arg act "$(systemctl is-active nsd 2>/dev/null)" --arg hm "$(dns_get HOSTMASTER '')" \
+    --arg st "$(dns_get DEF_TTL 3600) $(dns_get SOA_REFRESH 10800) $(dns_get SOA_RETRY 3600) $(dns_get SOA_EXPIRE 1209600) $(dns_get SOA_MIN 3600)" \
+    '{enabled:true, ns1:$ns1, ns2:$ns2, ip:$ip, ip6:$ip6, hostmaster:$hm, active:($act == "active"), zones:$zs,
+      soa:($st | split(" ") | {ttl:(.[0]|tonumber), refresh:(.[1]|tonumber), retry:(.[2]|tonumber), expire:(.[3]|tonumber), minimum:(.[4]|tonumber)})}'
 }
 # ============================ LOGS DOS SITES =================================
 SITE_LOGS=/var/log/minipainel/sites          # access.log e error.log do nginx (lidos pelo painel)
@@ -14531,7 +14902,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -14549,7 +14920,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.12.4 (mpanel)
+IDDigital Hosting — CLI v2.13.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -14595,6 +14966,15 @@ Desempenho
   site-perf … [--redis on|off] [--redis-mem MB] [--static-days 0|7|30|365] [--webp on|off] [--webp-auto on|off]
   site-webp <site>                     converte as imagens JPG/PNG do site em WebP (imagem.jpg.webp)
   net-tune on|off                      afinação de rede (TCP BBR, filas maiores)
+
+DNS (gestão avançada)
+  dns-rec-edit <zona> <id> <nome> <tipo> <valor> [--ttl N|0] [--prio N]   (0 = TTL automático)
+  dns-reset <zona>                     repõe os registos predefinidos do painel
+  dns-template <zona> local|google|microsoft   email deste servidor, Google Workspace ou Microsoft 365
+  dns-import <zona> "<texto BIND>"     acrescenta os registos de um ficheiro de zona
+  dns-propagation <zona>               compara este servidor com a Google (8.8.8.8)
+  dns-settings [--ttl N] [--refresh N] [--retry N] [--expire N] [--minimum N]
+  dns-restart · dns-server-check       reinicia / verifica a saúde do servidor DNS
   brotli on|off                        compressão Brotli no nginx (além do gzip)
   opcache-settings [--memory auto|MB] [--revalidate S] · opcache-reset
   db-tune [--buffer auto|MB] [--slow on|off] [--slow-time S]   afina o MariaDB (reinicia-o; repõe se falhar)
@@ -14798,6 +15178,14 @@ dispatch(){
     cache-purge)       cmd_cache_purge "$@" ;;
     perf-sync)         cmd_perf_sync ;;
     dns-cleanup)       cmd_dns_cleanup ;;
+    dns-rec-edit)      cmd_dns_rec_edit "$@" ;;
+    dns-reset)         cmd_dns_reset "$@" ;;
+    dns-template)      cmd_dns_template "$@" ;;
+    dns-import)        cmd_dns_import "$@" ;;
+    dns-propagation)   cmd_dns_propagation "$@" ;;
+    dns-settings)      cmd_dns_settings "$@" ;;
+    dns-restart)       cmd_dns_restart ;;
+    dns-server-check)  cmd_dns_server_check ;;
     site-webp)         cmd_site_webp "$@" ;;
     webp-nightly)      cmd_webp_nightly ;;
     net-tune)          cmd_net_tune "$@" ;;
@@ -14909,7 +15297,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.12.4
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.13.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -15457,7 +15845,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.12.4
+#  mp-sendmail — IDDigital Hosting v2.13.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -15529,7 +15917,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.12.4
+#  mpanel-term — IDDigital Hosting v2.13.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -15554,7 +15942,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.12.4
+#  mpanel-cron — IDDigital Hosting v2.13.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
