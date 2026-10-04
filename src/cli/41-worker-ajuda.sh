@@ -32,7 +32,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.13.1 (mpanel)
+IDDigital Hosting — CLI v2.13.2 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites

@@ -1,5 +1,9 @@
 # Registo de alterações
 
+## 2.13.2
+- Bases de dados: separadores Bases de dados · Desempenho · phpMyAdmin (abre na lista).
+- PHP: separadores Versões · Extensões · OPcache (escolher uma versão abre as extensões dela).
+
 ## 2.13.1
 - Interface: cabeçalho em dois níveis em todas as páginas — ferramentas globais em cima; título, descrição e ação principal da página por baixo (o título deixa de ficar espremido).
 - Telemóvel: ferramentas do topo numa só linha; o separador ativo deixava de ficar espremido num círculo.

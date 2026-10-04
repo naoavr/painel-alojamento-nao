@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.13.1 — painel web (MiniPainel)
+ * IDDigital Hosting v2.13.2 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.1';
+const MP_VERSION = '2.13.2';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2801,49 +2801,13 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 
 <?php elseif ($page === 'bd'): ?>
       <?php $pg = is_array($state['perf'] ?? null) ? $state['perf'] : []; $slow = jload(MP_STATS . '/db-slow.json') ?? ['rows' => []]; ?>
-      <div class="grid2e" style="align-items:stretch">
-      <section class="card">
-        <div class="card-h"><div><h2>Desempenho do MariaDB</h2><p>A memória para dados evita leituras ao disco. Por omissão o MariaDB usa só 128 MB.</p></div></div>
-        <form method="post" class="card-b" data-confirm="Aplicar? O MariaDB é reiniciado (os sites ficam alguns segundos sem base de dados). Se não arrancar, a configuração anterior é reposta sozinha.">
-          <?= act_fields('db_tune') ?>
-          <div class="fgrid">
-            <label class="fld">Memória para dados (MB)<input class="in" name="bp" value="<?= h((string)($pg['db_bp'] ?? 'auto')) ?>" placeholder="auto"><small>auto = <?= (int)($pg['db_bp_auto'] ?? 128) ?> MB (servidor com <?= number_format((int)($pg['ram_mb'] ?? 0) / 1024, 1, ',', '') ?> GB de RAM)</small></label>
-            <label class="fld">Registar consultas lentas<select class="in" name="slow"><option value="on"<?= !empty($pg['db_slow']) ? ' selected' : '' ?>>Sim</option><option value="off"<?= empty($pg['db_slow']) ? ' selected' : '' ?>>Não</option></select></label>
-            <label class="fld">Consulta lenta a partir de (s)<input class="in" name="slow_t" inputmode="numeric" value="<?= (int)($pg['db_slow_t'] ?? 2) ?>"></label>
-          </div>
-          <div style="margin-top:16px"><button class="btn" type="submit">Aplicar</button></div>
-        </form>
-      </section>
-      <section class="card">
-        <div class="card-h"><div><h2>Consultas mais lentas</h2><p>Agrupadas por forma (os valores trocados por N), ordenadas pelo tempo total. Atualizado de hora a hora<?= !empty($slow['ts']) ? ' · última vez às ' . h(gmdate('H:i', (int)$slow['ts'] + tz_off(live_stats()))) : '' ?>.</p></div>
-          <form method="post"><?= act_fields('db_slow_report') ?><button class="btn sm sec" type="submit">Atualizar</button></form></div>
-        <?php if (empty($slow['rows'])): ?><div class="empty">Sem consultas lentas registadas<?= empty($pg['db_slow']) ? ' (o registo está desligado)' : '' ?>.</div>
-        <?php else: ?><div class="row-list"><?php foreach (array_slice($slow['rows'], 0, 10) as $q): ?>
-          <div class="item"><div class="grow"><div class="mono pr-cmd" title="<?= h((string)$q['query']) ?>" style="max-width:100%"><?= h((string)$q['query']) ?></div>
-            <div class="mu"><?= (int)$q['count'] ?>× · média <?= h(str_replace('.', ',', (string)$q['avg'])) ?> s · total <?= h(str_replace('.', ',', (string)$q['total'])) ?> s · <?= h((string)$q['user']) ?></div></div></div>
-        <?php endforeach; ?></div><?php endif; ?>
-      </section>
-      </div>
-      <section class="card">
-        <div class="row-list">
-          <div class="item">
-            <span class="av t-acc"><?= ic('table') ?></span>
-            <div class="grow"><div class="nm">phpMyAdmin</div><div class="mu"><?= $pmaOn ? 'Versão ' . h($pma['version'] ?? '') . '. Só abre com sessão iniciada neste painel; o login é feito com um utilizador da base de dados.' : 'Não está instalado. Instala a versão oficial mais recente.' ?></div></div>
-            <div class="svc-acts">
-              <?php if ($pmaOn): ?><a class="btn sm" href="/phpmyadmin/" target="_blank" rel="noopener"><?= ic('ext') ?>Abrir phpMyAdmin</a><?php endif; ?>
-              <form method="post"><?= act_fields('pma_update') ?><button class="btn sm sec" type="submit"><?= ic('reload') ?><?= $pmaOn ? 'Procurar atualização' : 'Instalar' ?></button></form>
-            </div>
-          </div>
-          <div class="item">
-            <span class="av t-warn"><?= ic('shield') ?></span>
-            <div class="grow"><div class="nm mono"><?= h($dbAdmin['user'] ?? 'mpadmin') ?>@localhost</div><div class="mu">Conta de administração com acesso a todas as bases de dados. Só funciona a partir do próprio servidor, por exemplo no phpMyAdmin.</div></div>
-            <div class="svc-acts">
-              <form method="post" data-confirm="<?= !empty($dbAdmin['exists']) ? h('Gerar uma nova password para a conta de administração? A password atual deixa de funcionar.') : '' ?>"><?= act_fields('db_admin_pw') ?><button class="btn sm sec" type="submit"><?= ic('key') ?><?= !empty($dbAdmin['exists']) ? 'Gerar nova password' : 'Criar conta' ?></button></form>
-            </div>
-          </div>
-        </div>
-      </section>
-
+      <?php $btab = in_array(qget('t'), ['lista', 'desempenho', 'pma'], true) ? qget('t') : 'lista'; ?>
+      <nav class="tabs" aria-label="Secções">
+        <a class="chip<?= $btab === 'lista' ? ' prim' : '' ?>" href="?p=bd">Bases de dados <span class="sn-cnt"><?= count($dbs) ?></span></a>
+        <a class="chip<?= $btab === 'desempenho' ? ' prim' : '' ?>" href="?p=bd&amp;t=desempenho">Desempenho</a>
+        <a class="chip<?= $btab === 'pma' ? ' prim' : '' ?>" href="?p=bd&amp;t=pma">phpMyAdmin</a>
+      </nav>
+      <?php if ($btab === 'lista'): ?>
       <section class="card">
         <?php if (!$dbs): ?>
           <div class="empty"><b>Ainda não há bases de dados</b>Cada base de dados é criada com um utilizador próprio.<br><button class="btn" type="button" data-open="dlg-db-new"><?= ic('plus') ?>Nova base de dados</button></div>
@@ -2876,6 +2840,51 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'bases de dados') ?></div><?php endif; ?>
         <?php endif; ?>
       </section>
+      <?php elseif ($btab === 'desempenho'): ?>
+      <div class="grid2e" style="align-items:stretch">
+      <section class="card">
+        <div class="card-h"><div><h2>Desempenho do MariaDB</h2><p>A memória para dados evita leituras ao disco. Por omissão o MariaDB usa só 128 MB.</p></div></div>
+        <form method="post" class="card-b" data-confirm="Aplicar? O MariaDB é reiniciado (os sites ficam alguns segundos sem base de dados). Se não arrancar, a configuração anterior é reposta sozinha.">
+          <?= act_fields('db_tune') ?>
+          <div class="fgrid">
+            <label class="fld">Memória para dados (MB)<input class="in" name="bp" value="<?= h((string)($pg['db_bp'] ?? 'auto')) ?>" placeholder="auto"><small>auto = <?= (int)($pg['db_bp_auto'] ?? 128) ?> MB (servidor com <?= number_format((int)($pg['ram_mb'] ?? 0) / 1024, 1, ',', '') ?> GB de RAM)</small></label>
+            <label class="fld">Registar consultas lentas<select class="in" name="slow"><option value="on"<?= !empty($pg['db_slow']) ? ' selected' : '' ?>>Sim</option><option value="off"<?= empty($pg['db_slow']) ? ' selected' : '' ?>>Não</option></select></label>
+            <label class="fld">Consulta lenta a partir de (s)<input class="in" name="slow_t" inputmode="numeric" value="<?= (int)($pg['db_slow_t'] ?? 2) ?>"></label>
+          </div>
+          <div style="margin-top:16px"><button class="btn" type="submit">Aplicar</button></div>
+        </form>
+      </section>
+      <section class="card">
+        <div class="card-h"><div><h2>Consultas mais lentas</h2><p>Agrupadas por forma (os valores trocados por N), ordenadas pelo tempo total. Atualizado de hora a hora<?= !empty($slow['ts']) ? ' · última vez às ' . h(gmdate('H:i', (int)$slow['ts'] + tz_off(live_stats()))) : '' ?>.</p></div>
+          <form method="post"><?= act_fields('db_slow_report') ?><button class="btn sm sec" type="submit">Atualizar</button></form></div>
+        <?php if (empty($slow['rows'])): ?><div class="empty">Sem consultas lentas registadas<?= empty($pg['db_slow']) ? ' (o registo está desligado)' : '' ?>.</div>
+        <?php else: ?><div class="row-list"><?php foreach (array_slice($slow['rows'], 0, 10) as $q): ?>
+          <div class="item"><div class="grow"><div class="mono pr-cmd" title="<?= h((string)$q['query']) ?>" style="max-width:100%"><?= h((string)$q['query']) ?></div>
+            <div class="mu"><?= (int)$q['count'] ?>× · média <?= h(str_replace('.', ',', (string)$q['avg'])) ?> s · total <?= h(str_replace('.', ',', (string)$q['total'])) ?> s · <?= h((string)$q['user']) ?></div></div></div>
+        <?php endforeach; ?></div><?php endif; ?>
+      </section>
+      </div>
+      <?php else: ?>
+      <section class="card">
+        <div class="row-list">
+          <div class="item">
+            <span class="av t-acc"><?= ic('table') ?></span>
+            <div class="grow"><div class="nm">phpMyAdmin</div><div class="mu"><?= $pmaOn ? 'Versão ' . h($pma['version'] ?? '') . '. Só abre com sessão iniciada neste painel; o login é feito com um utilizador da base de dados.' : 'Não está instalado. Instala a versão oficial mais recente.' ?></div></div>
+            <div class="svc-acts">
+              <?php if ($pmaOn): ?><a class="btn sm" href="/phpmyadmin/" target="_blank" rel="noopener"><?= ic('ext') ?>Abrir phpMyAdmin</a><?php endif; ?>
+              <form method="post"><?= act_fields('pma_update') ?><button class="btn sm sec" type="submit"><?= ic('reload') ?><?= $pmaOn ? 'Procurar atualização' : 'Instalar' ?></button></form>
+            </div>
+          </div>
+          <div class="item">
+            <span class="av t-warn"><?= ic('shield') ?></span>
+            <div class="grow"><div class="nm mono"><?= h($dbAdmin['user'] ?? 'mpadmin') ?>@localhost</div><div class="mu">Conta de administração com acesso a todas as bases de dados. Só funciona a partir do próprio servidor, por exemplo no phpMyAdmin.</div></div>
+            <div class="svc-acts">
+              <form method="post" data-confirm="<?= !empty($dbAdmin['exists']) ? h('Gerar uma nova password para a conta de administração? A password atual deixa de funcionar.') : '' ?>"><?= act_fields('db_admin_pw') ?><button class="btn sm sec" type="submit"><?= ic('key') ?><?= !empty($dbAdmin['exists']) ? 'Gerar nova password' : 'Criar conta' ?></button></form>
+            </div>
+          </div>
+        </div>
+      </section>
+      <?php endif; ?>
 
 <?php elseif ($page === 'php'):
     $selV = qget('v') !== '' ? qget('v') : $defPhp;
@@ -2883,18 +2892,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     foreach ($phps as $p) { if ((string)($p['version'] ?? '') === $selV) $sel = $p; }
     if ($sel === null && $phps) $sel = $phps[0];
     $sv = $sel !== null ? (string)($sel['version'] ?? '') : '';
+    $ptab = in_array(qget('t'), ['versoes', 'extensoes', 'opcache'], true) ? qget('t') : 'versoes';
 ?>
-      <?php $pg = is_array($state['perf'] ?? null) ? $state['perf'] : []; ?>
-      <section class="card">
-        <div class="card-h"><div><h2>OPcache</h2><p>Guarda o código PHP já compilado em memória, em todas as versões. Depois de atualizar um site por FTP, as alterações aparecem no máximo ao fim do tempo de verificação (ou de imediato com "Limpar OPcache").</p></div>
-          <form method="post"><?= act_fields('opcache_reset') ?><button class="btn sm sec" type="submit">Limpar OPcache</button></form></div>
-        <form method="post" class="card-b" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-          <?= act_fields('opcache_settings') ?>
-          <label class="fld" style="min-width:220px">Memória<select class="in" name="mem"><option value="auto"<?= ($pg['opc_mem'] ?? 'auto') === 'auto' ? ' selected' : '' ?>>Automática (<?= (int)($pg['opc_mem_auto'] ?? 128) ?> MB)</option><?php foreach ([128, 256, 512, 1024] as $mb): ?><option value="<?= $mb ?>"<?= (string)($pg['opc_mem'] ?? '') === (string)$mb ? ' selected' : '' ?>><?= $mb ?> MB</option><?php endforeach; ?></select></label>
-          <label class="fld" style="min-width:260px">Verificar alterações aos ficheiros<select class="in" name="reval"><?php foreach (['0' => 'Em cada pedido (mais lento)', '2' => 'A cada 2 segundos', '60' => 'A cada minuto (recomendado)', '300' => 'A cada 5 minutos'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)($pg['opc_reval'] ?? 60) === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select></label>
-          <button class="btn" type="submit">Guardar</button>
-        </form>
-      </section>
+      <nav class="tabs" aria-label="Secções">
+        <a class="chip<?= $ptab === 'versoes' ? ' prim' : '' ?>" href="?p=php">Versões <span class="sn-cnt"><?= count($phps) ?></span></a>
+        <a class="chip<?= $ptab === 'extensoes' ? ' prim' : '' ?>" href="?p=php&amp;t=extensoes<?= $sv !== '' ? '&amp;v=' . h($sv) : '' ?>">Extensões</a>
+        <a class="chip<?= $ptab === 'opcache' ? ' prim' : '' ?>" href="?p=php&amp;t=opcache">OPcache</a>
+      </nav>
+      <?php if ($ptab === 'versoes'): ?>
       <section class="card">
         <div class="card-h"><h2>Versões instaladas</h2><p>Para acrescentar versões, volta a correr o instalador com --php.</p></div>
         <?php if (!$phps): ?>
@@ -2906,7 +2911,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php foreach ($phps as $p): $v = (string)($p['version'] ?? '');
                 $ni = count(array_filter(is_array($p['extensions'] ?? null) ? $p['extensions'] : [], function ($e) { return !empty($e['installed']); })); ?>
             <tr>
-              <td class="first" data-label="Versão"><div class="who"><span class="av t-vio"><?= ic('code') ?></span><div><a class="nm" href="?p=php&amp;v=<?= h(rawurlencode($v)) ?>">PHP <?= h($v) ?></a><?php $sup = php_support($v); ?><div><span class="pill <?= $sup[1] ?>"><?= h($sup[0]) ?></span></div></div></div></td>
+              <td class="first" data-label="Versão"><div class="who"><span class="av t-vio"><?= ic('code') ?></span><div><a class="nm" href="?p=php&amp;t=extensoes&amp;v=<?= h(rawurlencode($v)) ?>">PHP <?= h($v) ?></a><?php $sup = php_support($v); ?><div><span class="pill <?= $sup[1] ?>"><?= h($sup[0]) ?></span></div></div></div></td>
               <td data-label="Serviço"><span class="pill <?= !empty($p['active']) ? 'p-ok' : 'p-err' ?>"><?= !empty($p['active']) ? 'A correr' : 'Parado' ?></span></td>
               <td class="r" data-label="Sites"><?= (int)($bySite[$v] ?? 0) ?></td>
               <td class="r" data-label="Extensões opcionais"><?= $ni ?></td>
@@ -2917,14 +2922,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </table>
         <?php endif; ?>
       </section>
-
+      <?php elseif ($ptab === 'extensoes'): ?>
       <?php if ($sel !== null):
             $exts = is_array($sel['extensions'] ?? null) ? $sel['extensions'] : [];
             $mods = is_array($sel['modules'] ?? null) ? $sel['modules'] : []; ?>
       <section class="card">
         <div class="card-h">
           <h2>Extensões do PHP <?= h($sv) ?></h2>
-          <div class="pills"><?php foreach ($phps as $p): $v = (string)($p['version'] ?? ''); ?><a class="<?= $v === $sv ? 'on' : '' ?>" href="?p=php&amp;v=<?= h(rawurlencode($v)) ?>">PHP <?= h($v) ?></a><?php endforeach; ?></div>
+          <div class="pills"><?php foreach ($phps as $p): $v = (string)($p['version'] ?? ''); ?><a class="<?= $v === $sv ? 'on' : '' ?>" href="?p=php&amp;t=extensoes&amp;v=<?= h(rawurlencode($v)) ?>">PHP <?= h($v) ?></a><?php endforeach; ?></div>
         </div>
         <?php $ns = (int)($bySite[$sv] ?? 0); ?>
         <p class="lead">Aplicam-se a todos os sites com PHP <?= h($sv) ?> (<?= $ns ?> site<?= $ns === 1 ? '' : 's' ?>). Instalar ou remover pode demorar alguns minutos.</p>
@@ -2947,6 +2952,19 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php if ($mods): ?>
           <div class="card-f"><div class="mu" style="margin-bottom:8px">Módulos carregados (<?= count($mods) ?>)</div><div class="chips"><?php foreach ($mods as $m): ?><span class="chip"><?= h($m) ?></span><?php endforeach; ?></div></div>
         <?php endif; ?>
+      </section>
+      <?php endif; ?>
+      <?php else: ?>
+      <?php $pg = is_array($state['perf'] ?? null) ? $state['perf'] : []; ?>
+      <section class="card">
+        <div class="card-h"><div><h2>OPcache</h2><p>Guarda o código PHP já compilado em memória, em todas as versões. Depois de atualizar um site por FTP, as alterações aparecem no máximo ao fim do tempo de verificação (ou de imediato com "Limpar OPcache").</p></div>
+          <form method="post"><?= act_fields('opcache_reset') ?><button class="btn sm sec" type="submit">Limpar OPcache</button></form></div>
+        <form method="post" class="card-b" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+          <?= act_fields('opcache_settings') ?>
+          <label class="fld" style="min-width:220px">Memória<select class="in" name="mem"><option value="auto"<?= ($pg['opc_mem'] ?? 'auto') === 'auto' ? ' selected' : '' ?>>Automática (<?= (int)($pg['opc_mem_auto'] ?? 128) ?> MB)</option><?php foreach ([128, 256, 512, 1024] as $mb): ?><option value="<?= $mb ?>"<?= (string)($pg['opc_mem'] ?? '') === (string)$mb ? ' selected' : '' ?>><?= $mb ?> MB</option><?php endforeach; ?></select></label>
+          <label class="fld" style="min-width:260px">Verificar alterações aos ficheiros<select class="in" name="reval"><?php foreach (['0' => 'Em cada pedido (mais lento)', '2' => 'A cada 2 segundos', '60' => 'A cada minuto (recomendado)', '300' => 'A cada 5 minutos'] as $k => $l): ?><option value="<?= $k ?>"<?= (int)($pg['opc_reval'] ?? 60) === (int)$k ? ' selected' : '' ?>><?= $l ?></option><?php endforeach; ?></select></label>
+          <button class="btn" type="submit">Guardar</button>
+        </form>
       </section>
       <?php endif; ?>
 
