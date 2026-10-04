@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Atualizações a partir de um repositório privado (token do GitHub só de leitura); version.json e assinatura passam a ser opcionais.
+# NOTAS: Correções: tarefas do cron (Sentinela, IPs de confiança) não encontravam os comandos do sistema; terminal preso em "A iniciar".
 # =============================================================================
-#  IDDigital Hosting v2.11.1 — instalador (MiniPainel)
+#  IDDigital Hosting v2.11.2 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.11.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.11.2.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.11.1"
+MP_VERSION="2.11.2"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -545,7 +545,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.11.1 — painel web (MiniPainel)
+ * IDDigital Hosting v2.11.2 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -553,7 +553,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.11.1';
+const MP_VERSION = '2.11.2';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -1624,6 +1624,10 @@ if (qget('stats') === 'conns') {
     exit;
 }
 
+if (qget('term') === 'reset') { // o terminal já terminou no servidor: esquecer a sessão e mostrar o botão Abrir
+    if (!empty($_SESSION['user'])) { unset($_SESSION['term']); flash(true, 'O terminal anterior terminou. Abre um novo.'); }
+    go('terminal');
+}
 if (qget('term') === 'view' || qget('term') === 'dl') {
     if (empty($_SESSION['user'])) { http_response_code(401); exit; }
     session_write_close();
@@ -5155,9 +5159,10 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <script>
 (function () { var f = document.getElementById('term'); if (!f) return; var w = document.getElementById('term-wait'), src = f.getAttribute('data-src'), n = 0;
   function tick() { fetch(src, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
-      if (r.ok) { f.src = src; w.style.display = 'none'; f.style.display = 'block'; }
-      else if (++n < 120) setTimeout(tick, 1000); else w.textContent = 'O terminal não arrancou. Fecha e volta a abrir.'; })
-    .catch(function () { if (++n < 120) setTimeout(tick, 1000); }); }
+      if (r.ok) { f.src = src; w.style.display = 'none'; f.style.display = 'block'; return; }
+      // sem resposta durante 15 s: o terminal desta sessão já terminou (página recarregada, exit ou inatividade)
+      if (++n >= 15) { location.href = '?term=reset'; return; } setTimeout(tick, 1000); })
+    .catch(function () { if (++n >= 15) { location.href = '?term=reset'; return; } setTimeout(tick, 1000); }); }
   tick(); })();
 </script>
 <?php endif; ?>
@@ -8028,7 +8033,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.11.1 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.11.2 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -8468,11 +8473,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.11.1
+#  mpanel — IDDigital Hosting CLI v2.11.2
 # =============================================================================
 set -uo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.11.1"
+MP_VERSION="2.11.2"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -12642,10 +12648,11 @@ sn_check(){ # id grupo nome unidade(ou -) comando… (0 ok, 2 aviso, outro falha
   if [ "$rc" = 2 ]; then sn_res "$id" "$grp" "$name" warn "$msg" 0; return 0; fi
   if [ "$unit" != - ] && sn_repair_ok "$id"; then
     echo "$EPOCHSECONDS $id $unit" >> "$SN_DIR/sentinel-repairs.log"
-    if [ "${unit:0:1}" = : ]; then ${unit:1} >/dev/null 2>&1 5>&- 9>&-; else systemctl restart "$unit" >/dev/null 2>&1 5>&- 9>&-; fi
+    local rout
+    if [ "${unit:0:1}" = : ]; then rout=$(${unit:1} 2>&1 5>&- 9>&- | tail -n 1); else rout=$(systemctl restart "$unit" 2>&1 5>&- 9>&- | tail -n 1); fi
     sleep 4
     local m2; m2=$(sn_run 25 "$@" 2>&1) && { sn_res "$id" "$grp" "$name" ok "Falhou ($msg) e foi reparado automaticamente" 1; return 0; }
-    msg="$msg; a reparação automática não resolveu"
+    msg="$msg; a reparação automática não resolveu${rout:+ ($(printf '%s' "$rout" | cut -c1-120))}"
   elif [ "$unit" != - ] && [ "$(snget REPAIR 1)" = 1 ]; then msg="$msg; já houve 3 reparações na última hora, sem resultado"; fi
   sn_res "$id" "$grp" "$name" fail "$msg" 0
 }
@@ -12748,8 +12755,10 @@ cmd_sentinel_run(){
 }
 sn_finish(){ # estado, incidentes, disponibilidade e alertas
   local t0=$1 st=$SN_DIR/sentinel-state.json res=$SN_DIR/sentinel.json inc=$SN_DIR/sentinel-incidents.log av=$SN_DIR/sentinel-avail.json day now=$EPOCHSECONDS
-  [ -s "$st" ] || echo '{}' > "$st"; [ -s "$av" ] || echo '{}' > "$av"; day=$(date +%Y%m%d)
-  local json; json=$(printf '%s' "$SN_RES" | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | {id:.[0], group:.[1], name:.[2], status:.[3], msg:.[4], repaired:(.[5] == "1")})')
+  jq -e 'type == "object"' "$st" >/dev/null 2>&1 || echo '{}' > "$st"   # ficheiros estragados (ex.: uma passagem interrompida) recomeçam do zero
+  jq -e 'type == "object"' "$av" >/dev/null 2>&1 || echo '{}' > "$av"; day=$(date +%Y%m%d)
+  local json; json=$(printf '%s' "$SN_RES" | iconv -f utf-8 -t utf-8 -c | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | {id:.[0], group:.[1], name:.[2], status:.[3], msg:.[4], repaired:(.[5] == "1")})' 2>/dev/null)
+  jq -e 'type == "array"' >/dev/null 2>&1 <<<"$json" || json='[]'
   printf '{"ts":%s,"took":%s,"repair":%s,"results":%s}\n' "$now" $(( now - t0 )) "$([ "$(snget REPAIR 1)" = 1 ] && echo true || echo false)" "$json" > "$res.tmp" && mv -f "$res.tmp" "$res"
   # disponibilidade por dia (30 dias)
   jq --argjson r "$json" --arg d "$day" --arg lim "$(date -d '-30 days' +%Y%m%d)" '
@@ -12761,6 +12770,7 @@ sn_finish(){ # estado, incidentes, disponibilidade e alertas
   while IFS=$'\t' read -r id _ name status msg rep; do
     [ -n "$id" ] || continue
     prev=$(jq -r --arg i "$id" '.[$i].status // "ok"' <<<"$nst"); since=$(jq -r --arg i "$id" '.[$i].since // 0' <<<"$nst"); sent=$(jq -r --arg i "$id" '.[$i].sent // 0' <<<"$nst")
+    [[ "$since" =~ ^[0-9]+$ ]] || since=0; [[ "$sent" =~ ^[0-9]+$ ]] || sent=0; [[ "$prev" =~ ^(ok|warn|fail)$ ]] || prev=ok
     if [ "$rep" = 1 ]; then
       jq -cn --arg i "$id" --arg n "$name" --arg m "$msg" --argjson t "$now" '{id:$i, name:$n, start:$t, end:$t, msg:$m, repaired:true}' >> "$inc"
       /usr/local/sbin/mpanel alert-send "Sentinela: $name falhou e foi reparado automaticamente." --level ok --key "sn:$id" >/dev/null 2>&1
@@ -13110,7 +13120,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.11.1 (mpanel)
+IDDigital Hosting — CLI v2.11.2 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -13461,7 +13471,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.11.1
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.11.2
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -13474,6 +13484,7 @@ cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 set -uo pipefail
 # shellcheck source=/dev/null
 . /etc/minipainel/minipainel.conf 2>/dev/null
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 DIR=/var/lib/minipainel/stats
 TDIR=$DIR/traffic
@@ -14008,7 +14019,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.11.1
+#  mp-sendmail — IDDigital Hosting v2.11.2
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -14080,7 +14091,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.11.1
+#  mpanel-term — IDDigital Hosting v2.11.2
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -14105,7 +14116,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.11.1
+#  mpanel-cron — IDDigital Hosting v2.11.2
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -14171,6 +14182,7 @@ cat > /etc/systemd/system/minipainel-firewall.service <<'EOF'
 Description=IDDigital Hosting - bloqueios de IPs (nftables)
 After=network-pre.target nftables.service firewalld.service
 Wants=network-pre.target
+PartOf=nftables.service
 
 [Service]
 Type=oneshot
