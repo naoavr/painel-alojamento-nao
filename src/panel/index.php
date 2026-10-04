@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.13.3 — painel web (MiniPainel)
+ * IDDigital Hosting v2.13.4 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.3';
+const MP_VERSION = '2.13.4';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -947,6 +947,9 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .au-t{table-layout:fixed;width:100%}
 .au-t td:nth-child(1),.au-t td:nth-child(2),.au-t td:nth-child(3){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:900px){.au-t{table-layout:auto}.au-f input.in{width:100%}}
+.bk-cfg{display:grid;grid-template-columns:1fr;gap:20px}
+.bk-cfg .fgrid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.up-cfg{display:grid;grid-template-columns:1fr;gap:20px}
 .lg-tab{table-layout:fixed;width:100%}
 .lg-tab td,.lg-tab th{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lg-cut,.lg-ua{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2590,7 +2593,10 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <section class="card">
           <div class="card-h"><div><h2>Serviços</h2><p>Estado atual</p></div><?php if ($svcDown > 0): ?><span class="pill p-err"><?= $svcDown ?> parado<?= $svcDown === 1 ? '' : 's' ?></span><?php else: ?><a class="chip sm soft" href="?p=servicos">Gerir</a><?php endif; ?></div>
           <div class="row-list">
-            <?php foreach ($svcs as $s): $on = !empty($s['active']); ?>
+            <?php if ($svcs && $svcDown === 0): ?>
+              <div class="item"><span class="pill p-ok">Ativos</span><div class="grow nm">Todos os <?= count($svcs) ?> serviços a correr</div><a class="btn sm sec" href="?p=servicos">Ver serviços</a></div>
+            <?php endif; ?>
+            <?php foreach ($svcs as $s): $on = !empty($s['active']); if ($on) continue; ?>
               <div class="item">
                 <span class="pill <?= $on ? 'p-ok' : 'p-err' ?>"><?= $on ? 'Ativo' : 'Parado' ?></span>
                 <div class="grow nm"><?= h($s['name'] ?? '') ?></div>
@@ -2603,6 +2609,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <?php endforeach; ?>
             <?php if (!$svcs): ?><div class="empty">Sem informação dos serviços.</div><?php endif; ?>
           </div>
+          <?php if ($svcs && $svcDown > 0 && $svcDown < count($svcs)): ?><div class="card-f mu" style="display:flex;align-items:center;gap:10px"><span class="grow">Os outros <?= count($svcs) - $svcDown ?> serviços estão a correr.</span><a class="btn sm sec" href="?p=servicos">Ver todos</a></div><?php endif; ?>
         </section>
       </div>
 
@@ -3369,7 +3376,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
 
 <?php endif; if ($btab === 'config'): ?>
-      <div class="grid2e">
+      <div class="bk-cfg">
         <section class="card">
           <div class="card-h"><div><h2>Agendamento e retenção</h2><p>Backup automático diário de todos os sites e bases de dados.</p></div><span class="pill <?= !empty($bkConf['enabled']) ? 'p-ok' : 'p-off' ?>"><?= !empty($bkConf['enabled']) ? 'Ativo' : 'Desativado' ?></span></div>
           <form method="post" class="card-b">
@@ -3550,11 +3557,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           </div>
           <div style="margin-top:16px"><button class="btn" type="submit">Guardar</button></div>
         </form>
-        <form method="post" class="card-f" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><?= act_fields('logs_settings') ?><span>Logs dos sites: guardar</span><input class="in" name="days" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)($state['log_days'] ?? 90) ?>" style="width:90px"><span>dias</span><button class="btn sm sec" type="submit">Guardar</button></form>
         <div class="card-f mu">Nunca são bloqueados o próprio servidor, os IPs de confiança (página Ligações) nem os IPs de onde usaste o painel nos últimos 7 dias. Quem volta a ser apanhado em 30 dias fica bloqueado mais tempo.</div>
       </section>
 
 <?php endif; if ($dtab === 'servicos'): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Logs dos sites</h2><p>Durante quanto tempo se guardam os logs de acessos, erros e scripts lentos de cada site (rodados e comprimidos todos os dias).</p></div></div>
+        <form method="post" class="card-b" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><?= act_fields('logs_settings') ?><span>Logs dos sites: guardar</span><input class="in" name="days" inputmode="numeric" pattern="[0-9]{1,3}" value="<?= (int)($state['log_days'] ?? 90) ?>" style="width:90px"><span>dias</span><button class="btn sm sec" type="submit">Guardar</button></form>
+      </section>
       <?php $pg2 = is_array($state['perf'] ?? null) ? $state['perf'] : []; ?>
       <section class="card">
         <div class="card-h"><div><h2>Rede e compressão</h2><p>Ajustes do servidor que tornam os sites mais rápidos para todos os visitantes.</p></div></div>
@@ -3921,14 +3931,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 ?>
       <?php if ($upRun): ?>
         <div class="card bk-run" data-bk-running><div class="row-list"><div class="item"><span class="spin"></span><div class="grow"><div class="nm"><?= ($upRun['kind'] ?? '') === 'sistema' ? 'Atualização do sistema em curso' : 'Atualização do painel em curso' ?></div><div class="mu"><?= h($upRun['step'] ?? '') ?> · há <?= max(1, (int)ceil((time() - (int)($upRun['since'] ?? time())) / 60)) ?> min</div></div><span class="mu">A página atualiza sozinha. O painel pode ficar indisponível alguns segundos.</span></div></div></div>
-      <?php elseif ($upLast && (int)($upLast['ts'] ?? 0) > time() - 86400): ?>
+      <?php elseif ($upLast && (int)($upLast['ts'] ?? 0) > time() - 86400 && (!empty($upLast['ok']) || !preg_match('/para (\d+(?:\.\d+)+)/', (string)($upLast['msg'] ?? ''), $upM) || version_compare($upM[1], MP_VERSION, '>'))): ?>
         <div class="card"><div class="card-b" style="color:<?= !empty($upLast['ok']) ? 'var(--ok)' : 'var(--err)' ?>"><b><?= !empty($upLast['ok']) ? 'Concluído' : 'Falhou' ?>:</b> <?= h($upLast['msg'] ?? '') ?> <span class="mu">(<?= h(ago((int)$upLast['ts'], time())) ?>)</span></div></div>
       <?php endif; ?>
 
 <?php $utab = in_array(qget('t'), ['painel', 'sistema'], true) ? qget('t') : 'painel'; ?>
       <nav class="tabs" aria-label="Secções"><a class="chip<?= $utab === 'painel' ? ' prim' : '' ?>" href="?p=atualizacoes&amp;t=painel">Painel</a><a class="chip<?= $utab === 'sistema' ? ' prim' : '' ?>" href="?p=atualizacoes&amp;t=sistema">Sistema operativo</a></nav>
 <?php if ($utab === 'painel'): ?>
-      <div class="grid2e">
+      <div class="up-cfg">
       <section class="card">
         <div class="card-h"><div><h2>Painel</h2><p>Versão do IDDigital Hosting e atualizações publicadas no GitHub.</p></div>
           <?php if (!empty($up['newer'])): ?><span class="pill p-warn">Versão nova disponível</span><?php elseif (!empty($up['latest'])): ?><span class="pill p-ok">Atualizado</span><?php endif; ?></div>
@@ -3951,6 +3961,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">Antes de atualizar: verifica a assinatura e o SHA-256, guarda uma cópia do painel e da configuração e, depois, confirma que o painel responde. Se não responder, repõe a versão anterior sozinho. Os sites, bases de dados, email e backups não são tocados.</div>
       </section>
 
+      <div class="grid2e" style="align-items:stretch">
       <section class="card">
         <div class="card-h"><div><h2>Repositório no GitHub</h2><p>De onde vêm as atualizações. Com um token só de leitura, o repositório pode ficar sempre privado.</p></div>
           <span class="pill <?= !empty($up['token']) ? 'p-ok' : 'p-off' ?>"><?= !empty($up['token']) ? 'Token configurado' : 'Sem token (repositório público)' ?></span></div>
@@ -3973,6 +3984,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </form>
         <?php if ($hasKey): ?><form method="post" class="card-f" data-confirm="Remover a chave? As atualizações deixam de ser verificadas."><?= act_fields('update_key', ['op' => 'clear']) ?><div class="fgrid" style="margin-bottom:10px"><?= reauth_fields($auth) ?></div><button class="btn sm sec" type="submit">Remover chave</button></form><?php endif; ?>
       </section>
+      </div>
       </div>
 
 <?php endif; if ($utab === 'sistema'): ?>
@@ -4391,7 +4403,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             </div>
           </div>
         </section>
-        <section class="card">
+        <section class="card" style="display:flex;flex-direction:column">
           <div class="card-h"><div><h2>Email</h2><p>Enviado pelo servidor de email deste servidor<?= empty($al['mail_on']) ? ' (o email não está ativo: ativa-o na página Email para usar este canal)' : '' ?>.</p></div><span class="pill <?= !empty($al['email_on']) && !empty($al['mail_on']) ? 'p-ok' : 'p-off' ?>"><?= !empty($al['email_on']) && !empty($al['mail_on']) ? 'Ativo' : 'Desligado' ?></span></div>
           <div class="card-b">
             <div class="fgrid">
@@ -4399,6 +4411,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
               <label class="fld">Enviar para<input class="in" type="email" name="email_to" value="<?= h((string)($al['email_to'] ?? '')) ?>" placeholder="alertas@iddigital.pt"></label>
             </div>
           </div>
+          <div class="card-f" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:auto"><span class="grow mu">Depois de guardar, confirma que as mensagens chegam (SMS e email).</span><button class="btn sm sec" type="submit" form="al-test">Enviar mensagem de teste</button></div>
         </section>
       </div>
       <section class="card">
@@ -4418,7 +4431,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </div>
       </section>
       </form>
-      <form method="post" class="card" style="padding:18px 24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap"><?= act_fields('alerts_test') ?><span class="grow mu">Depois de guardar, confirma que as mensagens chegam.</span><button class="btn sec" type="submit">Enviar mensagem de teste</button></form>
+      <form method="post" id="al-test" hidden><?= act_fields('alerts_test') ?></form>
 
   <?php elseif ($atab === 'historico'):
       $hist = [];

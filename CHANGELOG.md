@@ -1,5 +1,12 @@
 # Registo de alterações
 
+## 2.13.4
+- Alertas: "Enviar mensagem de teste" no cartão Email (sai o cartão solto).
+- Backups → Agendamento e destinos: os dois a toda a largura.
+- Atualizações: Painel a toda a largura e Repositório | Chave com a mesma altura; a faixa de erro antiga só aparece se a versão instalada for anterior à que falhou.
+- Resumo: Serviços compacto ("todos a correr" ou só os que têm problemas).
+- Definições: "Logs dos sites" passa para o separador Serviços.
+
 ## 2.13.3
 - Logs: indicadores e as 4 listas numa linha (alturas iguais); acessos com 50 por página; datas e IPs sem cortes.
 - Auditoria: filtros (texto, utilizador, resultado) aplicados ao registo todo — antes só à página visível; colunas fixas; 50 por página.
