@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Manual do utilizador no painel (botão Manual no canto superior direito), com índice, pesquisa e descarregamento.
+# NOTAS: Sentinela com resumo dos problemas e separadores por grupo; correções (zonas DNS fantasma, teste dos backups) e acertos de layout.
 # =============================================================================
-#  IDDigital Hosting v2.12.2 — instalador (MiniPainel)
+#  IDDigital Hosting v2.12.3 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.12.2.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.12.3.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.12.2"
+MP_VERSION="2.12.3"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -1471,7 +1471,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.12.2 — painel web (MiniPainel)
+ * IDDigital Hosting v2.12.3 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1479,7 +1479,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.12.2';
+const MP_VERSION = '2.12.3';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2357,6 +2357,31 @@ dialog.drawer{border-radius:24px 0 0 24px}
 @media (max-width:900px){.sn-row{grid-template-columns:1fr}}
 .dlg-sec{margin:18px 0 6px;font-size:14px;padding-top:14px;border-top:1px solid var(--line)}
 .infobox{background:color-mix(in srgb,var(--acc) 8%,var(--card));border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12.5px;line-height:1.6;margin:6px 0}
+/* tabelas: o texto longo (caminhos, comandos) parte-se em vez de empurrar a tabela para fora do cartão */
+.card table.list{width:100%}
+.card table.list td{overflow-wrap:anywhere}
+.card table.list td .mono,.card table.list td code{word-break:break-word}
+@media (max-width:1500px){
+  .card table.list th,.card table.list td{padding-left:12px;padding-right:12px}
+  .card table.list th:first-child,.card table.list td:first-child{padding-left:24px}
+  .card table.list th:last-child,.card table.list td:last-child{padding-right:24px}
+}
+.card table.list td .cron-cmd{white-space:normal;overflow-wrap:anywhere}
+.card table.list .who>div{min-width:0}
+@media (max-width:1250px){.lg-tab{table-layout:auto}.lg-tab col{width:auto!important}.lg-tab th:nth-child(6),.lg-tab td:nth-child(6),.lg-tab th:nth-child(7),.lg-tab td:nth-child(7){display:none}}
+.lg-tab{table-layout:fixed;width:100%}
+.lg-tab td,.lg-tab th{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg-cut,.lg-ua{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sn-t{table-layout:fixed;width:100%}
+.sn-t td{vertical-align:top}
+.sn-msg{overflow-wrap:anywhere;color:var(--mu)}
+.sn-allok{display:flex;align-items:center;gap:10px;padding:22px 24px;color:var(--ok);font-weight:600}
+.sn-tabs{display:flex;gap:8px;flex-wrap:wrap;padding:0 24px 14px}
+.sn-cnt{opacity:.65;font-weight:600;margin-left:4px}
+.sn-b{display:inline-block;min-width:20px;padding:0 6px;border-radius:99px;font-size:11px;line-height:18px;color:#fff;margin-left:4px;text-align:center}
+.sn-b-f{background:var(--err)}.sn-b-w{background:var(--warn)}
+.sn-q{height:38px;width:240px}
+@media (max-width:900px){.sn-t,.lg-tab{table-layout:auto}.sn-q{width:100%}}
 .pr-sum{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px 24px}
 .pr-o{border:1px solid var(--line);border-radius:16px;padding:12px 14px}
 .pr-o .nm{margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
@@ -5686,30 +5711,58 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php foreach (['estado' => 'Estado', 'incidentes' => 'Incidentes', 'disponibilidade' => 'Disponibilidade', 'config' => 'Configuração'] as $tk => $tl): ?><a class="chip<?= $stab === $tk ? ' prim' : '' ?>" href="?p=sentinela&amp;t=<?= $tk ?>"><?= $tl ?></a><?php endforeach; ?>
         <form method="post" style="margin-left:auto"><?= act_fields('sentinel_run') ?><button class="btn sm sec" type="submit"><?= ic('reload') ?>Testar agora</button></form>
       </nav>
-  <?php if ($stab === 'estado'): ?>
+<?php if ($stab === 'estado'):
+      $order = ['Serviços', 'Sites', 'Email', 'DNS', 'Certificados', 'Sistema', 'Painel'];
+      $w = ['fail' => 0, 'warn' => 1, 'ok' => 2];
+      $gs = []; foreach ($snR as $r) { $g = (string)$r['group']; $gs[$g] = $gs[$g] ?? ['n' => 0, 'fail' => 0, 'warn' => 0]; $gs[$g]['n']++; if (isset($gs[$g][$r['status']])) $gs[$g][$r['status']]++; }
+      uksort($gs, function ($a, $b) use ($order) { $ia = array_search($a, $order, true); $ib = array_search($b, $order, true); return ($ia === false ? 99 : $ia) <=> ($ib === false ? 99 : $ib); });
+      $bad = array_values(array_filter($snR, function ($r) { return $r['status'] !== 'ok'; }));
+      usort($bad, function ($a, $b) use ($w) { return [$w[$a['status']] ?? 3, $a['group'], $a['name']] <=> [$w[$b['status']] ?? 3, $b['group'], $b['name']]; });
+      $firstG = ''; foreach ($gs as $g => $c) { if ($c['fail'] || $c['warn']) { $firstG = $g; break; } } if ($firstG === '') $firstG = (string)array_key_first($gs);
+      $since = function ($id) use ($snst, $tzs) { $t = (int)($snst[$id]['since'] ?? 0); return $t ? gmdate('d/m H:i', $t + $tzs) : '—'; };
+      $pill = function ($st) { return $st === 'fail' ? '<span class="pill p-err">Falha</span>' : ($st === 'warn' ? '<span class="pill p-warn">Aviso</span>' : '<span class="pill p-ok">OK</span>'); };
+?>
       <section class="stats">
         <div class="stat"><span class="tile t-acc"><?= ic('check') ?></span><div><div class="k">Testes OK</div><div class="v"><?= $cnt['ok'] ?></div></div></div>
         <div class="stat"><span class="tile t-warn"><?= ic('bell') ?></span><div><div class="k">Avisos</div><div class="v"><?= $cnt['warn'] ?></div></div></div>
         <div class="stat"><span class="tile t-vio"><?= ic('ban') ?></span><div><div class="k">Falhas</div><div class="v" style="<?= $cnt['fail'] ? 'color:var(--err)' : '' ?>"><?= $cnt['fail'] ?></div></div></div>
         <div class="stat"><span class="tile t-blue"><?= ic('clock') ?></span><div><div class="k">Último teste</div><div class="v" style="font-size:17px"><?= empty($sn['ts']) ? 'Nunca' : ($snAge < 120 ? 'há ' . $snAge . ' s' : '<span style="color:var(--err)">há ' . (int)round($snAge / 60) . ' min</span>') ?></div></div></div>
       </section>
-      <?php if (!$snR): ?><section class="card"><div class="empty"><b>O sentinela ainda não correu</b>Corre sozinho a cada minuto. Usa "Testar agora" para o primeiro teste.</div></section><?php endif; ?>
-      <?php $groups = []; foreach ($snR as $r) $groups[$r['group']][] = $r;
-        $order = ['Serviços', 'Sites', 'Email', 'DNS', 'Certificados', 'Sistema', 'Painel']; $opos = function ($g) use ($order) { $i = array_search($g, $order, true); return $i === false ? 99 : $i; }; uksort($groups, function ($a, $b) use ($opos) { return $opos($a) <=> $opos($b); }); ?>
-      <div class="sn-grid">
-      <?php foreach ($groups as $g => $rs): $bad = count(array_filter($rs, function ($r) { return $r['status'] !== 'ok'; })); ?>
-        <section class="card">
-          <div class="card-h"><div><h2><?= h($g) ?></h2></div><span class="pill <?= $bad ? 'p-err' : 'p-ok' ?>"><?= $bad ? $bad . ' com problemas' : 'Tudo OK' ?></span></div>
-          <div class="row-list">
-          <?php usort($rs, function ($a, $b) { $w = ['fail' => 0, 'warn' => 1, 'ok' => 2]; return [$w[$a['status']] ?? 3, $a['name']] <=> [$w[$b['status']] ?? 3, $b['name']]; }); foreach ($rs as $r): $since = (int)($snst[$r['id']]['since'] ?? 0); ?>
-            <div class="item"><span class="sn-dot sn-<?= h($r['status']) ?>" aria-hidden="true"></span>
-              <div class="grow"><div class="nm"><?= h($r['name']) ?><?= !empty($r['repaired']) ? ' <span class="pill p-me">reparado</span>' : '' ?></div><div class="mu"><?= h($r['msg']) ?><?= $r['status'] !== 'ok' && $since ? ' · desde ' . h(gmdate('d/m H:i', $since + $tzs)) : '' ?></div></div></div>
+      <?php if (!$snR): ?><section class="card"><div class="empty"><b>O sentinela ainda não correu</b>Corre sozinho a cada minuto. Usa "Testar agora" para o primeiro teste.</div></section><?php else: ?>
+      <section class="card">
+        <div class="card-h"><div><h2>O que precisa de atenção</h2><p>Só as falhas e os avisos, de todos os grupos.</p></div></div>
+        <?php if (!$bad): ?>
+          <div class="sn-allok"><?= ic('check') ?> Tudo a funcionar: <?= count($snR) ?> testes OK<?= !empty($sn['ts']) ? ' · último teste há ' . ($snAge < 120 ? $snAge . ' s' : (int)round($snAge / 60) . ' min') : '' ?>.</div>
+        <?php else: ?>
+        <table class="list sn-t">
+          <colgroup><col style="width:110px"><col style="width:140px"><col style="width:260px"><col><col style="width:130px"></colgroup>
+          <thead><tr><th>Estado</th><th>Grupo</th><th>Teste</th><th>Detalhe</th><th>Desde</th></tr></thead>
+          <tbody><?php foreach ($bad as $r): ?>
+            <tr><td><?= $pill($r['status']) ?></td><td class="mu"><?= h($r['group']) ?></td><td><b><?= h($r['name']) ?></b></td><td class="sn-msg"><?= h($r['msg']) ?></td><td class="mono mu"><?= h($since($r['id'])) ?></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+      <section class="card" id="sn-all" data-first="<?= h($firstG) ?>">
+        <div class="card-h"><div><h2>Todos os testes</h2><p>Teste completo em <?= (int)($sn['took'] ?? 0) ?> s · reparação automática <?= !empty($sn['repair']) ? 'ativa (até 3 vezes por hora por serviço)' : 'desligada' ?>.</p></div>
+          <input class="in sn-q" id="sn-q" type="search" placeholder="Procurar…" aria-label="Procurar teste"></div>
+        <nav class="sn-tabs" role="tablist">
+          <?php foreach ($gs as $g => $c): ?>
+            <button type="button" class="chip<?= $g === $firstG ? ' prim' : '' ?>" data-g="<?= h($g) ?>"><?= h($g) ?> <span class="sn-cnt"><?= $c['n'] ?></span><?php if ($c['fail']): ?><span class="sn-b sn-b-f"><?= $c['fail'] ?></span><?php endif; ?><?php if ($c['warn']): ?><span class="sn-b sn-b-w"><?= $c['warn'] ?></span><?php endif; ?></button>
           <?php endforeach; ?>
-          </div>
-        </section>
-      <?php endforeach; ?>
-      </div>
-      <?php if ($snR): ?><p class="mu" style="margin:0">Teste completo em <?= (int)($sn['took'] ?? 0) ?> s · reparação automática <?= !empty($sn['repair']) ? 'ativa (até 3 vezes por hora por serviço)' : 'desligada' ?>.</p><?php endif; ?>
+        </nav>
+        <table class="list sn-t">
+          <colgroup><col style="width:110px"><col style="width:300px"><col><col style="width:130px"></colgroup>
+          <thead><tr><th>Estado</th><th>Teste</th><th>Detalhe</th><th>Desde</th></tr></thead>
+          <tbody id="sn-rows">
+          <?php $all = $snR; usort($all, function ($a, $b) use ($w) { return [$w[$a['status']] ?? 3, $a['name']] <=> [$w[$b['status']] ?? 3, $b['name']]; }); foreach ($all as $r): ?>
+            <tr data-g="<?= h($r['group']) ?>"><td><?= $pill($r['status']) ?></td><td><b><?= h($r['name']) ?></b><?= !empty($r['repaired']) ? ' <span class="pill p-me">reparado</span>' : '' ?></td><td class="sn-msg"><?= h($r['msg']) ?></td><td class="mono mu"><?= $r['status'] !== 'ok' ? h($since($r['id'])) : '—' ?></td></tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <div class="card-f" style="display:flex;align-items:center;gap:12px"><span class="mu" id="sn-foot" style="flex:1"></span><nav class="pager" id="sn-pager"></nav></div>
+      </section>
+      <?php endif; ?>
 
   <?php elseif ($stab === 'incidentes'):
       $incs = []; foreach (array_reverse(log_tail(MP_STATS . '/sentinel-incidents.log', 5000)) as $ln) { $j = json_decode($ln, true); if (is_array($j)) $incs[] = $j; }
@@ -6180,8 +6233,8 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         if (t !== 'access') return raw(d.lines || []);
         var rows = d.rows || [];
         if (!rows.length) { body.innerHTML = '<div class="empty">Sem pedidos com estes filtros.</div>'; return; }
-        body.innerHTML = '<table class="list cards lg-tab"><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tempo</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
-          rows.slice().reverse().map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido"><span class="mu">' + esc(r.m) + '</span> <span class="mono lg-url" title="' + esc(r.u) + '">' + esc(r.u) + '</span></td><td data-label="Código">' + pill(r.s) + (r.cs ? ' <span class="mu" title="Cache">' + esc(r.cs) + '</span>' : '') + '</td><td class="r" data-label="Tempo">' + (r.rt === null || r.rt === undefined ? '—' : '<span' + (r.rt >= 1 ? ' style="color:var(--err)"' : '') + '>' + Math.round(r.rt * 1000) + ' ms</span>') + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>';
+        body.innerHTML = '<table class="list cards lg-tab"><colgroup><col style="width:130px"><col style="width:150px"><col><col style="width:110px"><col style="width:80px"><col style="width:90px"><col style="width:220px"></colgroup><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tempo</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
+          rows.slice().reverse().map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido" class="lg-cut" title="' + esc(r.m + ' ' + r.u) + '">' + (/\\x[0-9a-f]{2}/i.test(r.m + r.u) ? '<span class="mu">Pedido inválido (não é HTTP)</span>' : '<span class="mu">' + esc(r.m) + '</span> <span class="mono">' + esc(r.u) + '</span>') + '</td><td data-label="Código">' + pill(r.s) + (r.cs ? ' <span class="mu" title="Cache">' + esc(r.cs) + '</span>' : '') + '</td><td class="r" data-label="Tempo">' + (r.rt === null || r.rt === undefined ? '—' : '<span' + (r.rt >= 1 ? ' style="color:var(--err)"' : '') + '>' + Math.round(r.rt * 1000) + ' ms</span>') + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>';
       }).catch(function () { body.innerHTML = '<div class="empty">Não foi possível ler o log.</div>'; });
     } else {
       var f = t === 'php' ? 'php-error.log' : ('cron-' + (($('lg-cron') || {}).value || 'x') + '.log');
@@ -6252,6 +6305,32 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       .then(function (d) { if (d) { data = d; render(); } }).catch(function () {}).then(function () { setTimeout(poll, 10000); });
   }
   poll();
+})();
+</script>
+<?php endif; ?>
+<?php if ($page === 'sentinela'): ?>
+<script>
+(function () {
+  var box = document.getElementById('sn-all'); if (!box) return;
+  var g = box.getAttribute('data-first'), q = document.getElementById('sn-q'), page = 1, PER = 50;
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#sn-rows tr'));
+  function norm(s) { return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function render() {
+    var v = norm(q.value.trim()), vis = rows.filter(function (r) { return (v ? true : r.getAttribute('data-g') === g) && (!v || norm(r.textContent).indexOf(v) !== -1); });
+    var pages = Math.max(1, Math.ceil(vis.length / PER)); if (page > pages) page = pages;
+    rows.forEach(function (r) { r.hidden = true; });
+    vis.slice((page - 1) * PER, page * PER).forEach(function (r) { r.hidden = false; });
+    var pg = ''; if (pages > 1) for (var i = 1; i <= pages; i++) pg += '<button type="button" class="chip sm' + (i === page ? ' prim' : '') + '" data-p="' + i + '">' + i + '</button>';
+    document.getElementById('sn-pager').innerHTML = pg;
+    document.getElementById('sn-foot').textContent = v ? vis.length + ' testes encontrados em todos os grupos' : vis.length + ' testes em ' + g;
+    document.querySelectorAll('.sn-tabs [data-g]').forEach(function (b) { b.classList.toggle('prim', !v && b.getAttribute('data-g') === g); });
+  }
+  box.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-g]'); if (b && b.tagName === 'BUTTON') { g = b.getAttribute('data-g'); q.value = ''; page = 1; render(); return; }
+    var p = e.target.closest('[data-p]'); if (p) { page = +p.getAttribute('data-p'); render(); }
+  });
+  q.addEventListener('input', function () { page = 1; render(); });
+  render();
 })();
 </script>
 <?php endif; ?>
@@ -9154,7 +9233,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.12.2 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.12.3 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -9594,12 +9673,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.12.2
+#  mpanel — IDDigital Hosting CLI v2.12.3
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.12.2"
+MP_VERSION="2.12.3"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -13213,7 +13292,7 @@ dns_need(){ dns_on || die "O DNS não está ativo. Ativa-o na página DNS ou com
 dns_zone_json(){ echo "$DNS_DIR/$1.json"; }
 dns_load(){ local f; f=$(dns_zone_json "$1"); if [ -s "$f" ]; then cat "$f"; else echo '{"serial":0,"records":[]}'; fi; }
 dns_save(){ install -d -m 700 "$DNS_DIR"; printf '%s\n' "$2" | jq '.' > "$(dns_zone_json "$1").tmp" && chmod 600 "$(dns_zone_json "$1").tmp" && mv -f "$(dns_zone_json "$1").tmp" "$(dns_zone_json "$1")"; }
-dns_zones(){ ls -1 "$DNS_DIR"/*.json 2>/dev/null | sed 's|.*/||; s|\.json$||' | sort; }
+dns_zones(){ [ -d "$DNS_DIR" ] || return 0; find "$DNS_DIR" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sed 's|\.json$||' | grep -E '^[a-z0-9.-]+$' | sort; }
 dns_fqdn(){ case "$1" in *.) echo "$1" ;; *.*) echo "$1." ;; *) echo "$1" ;; esac; }   # valores com domínio completo levam ponto final
 dns_serial(){ local old=$1 d; d=$(date +%Y%m%d); if [ "${old:0:8}" = "$d" ]; then echo $(( old + 1 )); else echo "${d}01"; fi; }
 dns_ips(){ ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1; }
@@ -13821,7 +13900,7 @@ t_fpmmax(){ # aumento das mensagens "reached pm.max_children" desde o último te
 t_collector(){ local a; a=$(( EPOCHSECONDS - $(stat -c %Y "$DATA/stats/live.json" 2>/dev/null || echo 0) )); [ "$a" -lt 120 ] && echo "A recolher dados" || { echo "Sem dados novos há $a s"; return 1; }; }
 t_queue_panel(){ local n; n=$(find "$DATA/queue" -name '*.json' -mmin +10 2>/dev/null | wc -l); [ "$n" = 0 ] && echo "Fila de tarefas a andar" || { echo "$n tarefas paradas há mais de 10 minutos"; return 1; }; }
 t_fw(){ nft list table inet minipainel >/dev/null 2>&1 && echo "Firewall carregada" || { echo "A tabela da firewall do painel não está carregada"; return 1; }; }
-t_backup(){ local t; [ "$(bk_get ENABLED 1)" = 1 ] || { echo "Backups automáticos desligados"; return 0; }
+t_backup(){ local t; [ "$(bk_conf ENABLED 1)" = 1 ] || { echo "Backups automáticos desligados"; return 0; }
   t=$(jq -r 'if (.last.ok // false) then .last.ts else 0 end' "$DATA/stats/backup.json" 2>/dev/null); [[ "$t" =~ ^[0-9]+$ ]] || t=0
   [ $(( EPOCHSECONDS - t )) -lt 93600 ] && echo "Último backup há $(( (EPOCHSECONDS - t) / 3600 )) h" || { echo "Sem backup bem-sucedido nas últimas 26 h"; return 2; }; }
 cmd_sentinel_run(){
@@ -13860,7 +13939,7 @@ cmd_sentinel_run(){
   fi
   if dns_on; then
     sn_check "svc:nsd" "DNS" "NSD" nsd t_unit nsd
-    for n in $(dns_zones); do sn_check "dns:$n" "DNS" "Zona $n" nsd t_zone "$n"; done
+    while IFS= read -r n; do [ -n "$n" ] && sn_check "dns:$n" "DNS" "Zona $n" nsd t_zone "$n"; done < <(dns_zones)
   fi
   [ -s /etc/pure-ftpd/pureftpd.passwd ] && sn_check "svc:ftp" "Serviços" "Pure-FTPd (FTPS)" pure-ftpd t_tcp 127.0.0.1 21 220
   [ -n "$(srv_get PANEL_DOMAIN '')" ] && sn_check "cert:painel" "Certificados" "Domínio do painel" - t_cert mp-painel
@@ -14404,7 +14483,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.12.2 (mpanel)
+IDDigital Hosting — CLI v2.12.3 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -14763,7 +14842,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.12.2
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.12.3
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -15311,7 +15390,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.12.2
+#  mp-sendmail — IDDigital Hosting v2.12.3
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -15383,7 +15462,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.12.2
+#  mpanel-term — IDDigital Hosting v2.12.3
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -15408,7 +15487,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.12.2
+#  mpanel-cron — IDDigital Hosting v2.12.3
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
