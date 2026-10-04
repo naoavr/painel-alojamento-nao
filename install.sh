@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  IDDigital Hosting v2.8.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.9.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.8.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.9.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -17,7 +17,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.8.0"
+MP_VERSION="2.9.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -544,7 +544,7 @@ say "A instalar o painel web..."
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.8.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.9.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -552,7 +552,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.8.0';
+const MP_VERSION = '2.9.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -631,6 +631,8 @@ function act_fields(string $a, array $extra = []): string {
 }
 function flash(bool $ok, string $m, bool $sticky = false): void { $_SESSION['flash'][] = [$ok, $m, $sticky || !$ok]; }
 function go(string $p, array $q = []): void {
+    $ref = (string)($_SERVER['HTTP_REFERER'] ?? '');
+    if (!isset($q['t']) && preg_match('/[?&]p=' . preg_quote($p, '/') . '(&|$)/', $ref) && preg_match('/[?&]t=([a-z]{2,20})(&|$)/', $ref, $mm)) $q['t'] = $mm[1];
     header('Location: ?' . http_build_query(['p' => $p] + $q));
     exit;
 }
@@ -787,6 +789,28 @@ function pager(int $pg, int $pages, int $total, string $param = 'pg', string $wh
     }
     $h .= $pg < $pages ? '<a class="chip sm" href="' . $link($pg + 1) . '">Seguinte ›</a>' : '';
     return $h . '</nav>';
+}
+/* ---------- processos: origem de cada um ---------- */
+function proc_origin(string $user, string $args): array { // [tipo, rótulo, site]
+    if (preg_match('/^mp_([a-z][a-z0-9-]{0,23})$/', $user, $m)) return ['site', 'Site ' . $m[1], $m[1]];
+    if (preg_match('/php-fpm: pool mp-fm-/', $args)) return ['painel', 'Painel (ficheiros)', ''];
+    if (preg_match('/php-fpm: pool mp-([a-z][a-z0-9-]{0,23})\b/', $args, $m)) return ['site', 'Site ' . $m[1], $m[1]];
+    if (preg_match('/^\[.*\]$/', $args)) return ['sistema', 'Kernel', ''];
+    if (strpos($args, 'php-fpm: master') === 0) return ['web', 'PHP (FPM)', ''];
+    if (in_array($user, ['vmail', 'dovecot', 'dovenull', 'postfix', '_rspamd', 'rspamd', 'redis', 'clamav', 'unbound', 'opendkim'], true)
+        || preg_match('#^(/usr/lib/postfix/|/usr/libexec/postfix/|/usr/sbin/(dovecot|rspamd|clamd|freshclam|unbound|postfix)|dovecot/|rspamd:|redis-server|/usr/bin/redis)#', $args)) return ['email', 'Email', ''];
+    if ($user === 'mysql' || preg_match('#(^|/)(mariadbd|mysqld)\b#', $args)) return ['bd', 'Base de dados', ''];
+    if (in_array($user, ['www-data', 'nginx'], true) || strpos($args, 'nginx:') === 0) return ['web', 'Servidor web', ''];
+    if (in_array($user, ['minipainel', 'minipainel-pma', 'mp-webmail'], true) || preg_match('#mpanel|minipainel|ttyd#', $args)) return ['painel', 'Painel', ''];
+    if ($user === 'nsd' || preg_match('#(^|/)nsd\b#', $args)) return ['sistema', 'DNS', ''];
+    if (preg_match('#pure-ftpd#', $args)) return ['sistema', 'FTP', ''];
+    return ['sistema', 'Sistema operativo', ''];
+}
+function proc_protected_php(int $pid, string $comm, string $args, string $user): bool { // só para a interface; o servidor volta a verificar
+    if ($pid <= 2 || preg_match('/^\[.*\]$/', $args)) return true;
+    if (preg_match('/^(systemd|systemd-.*|init|dbus-daemon|dbus-broker|agetty|cron|crond|rsyslogd|journald|udevd|polkitd|mariadbd|mysqld|master|containerd|dockerd)$/', $comm)) return true;
+    if (preg_match('#^(nginx: master|php-fpm: master|php-fpm: pool minipainel|sshd: /usr/sbin/sshd|/usr/sbin/sshd|/usr/sbin/dovecot|/usr/sbin/nsd|nsd -c)#', $args) || preg_match('#mpanel-stats|mpanel worker#', $args) || $args === 'dovecot') return true;
+    return $user === 'minipainel' && strpos($args, 'php-fpm') === 0;
 }
 function valid_net(string $s): bool {
     $ip = $s; $bits = null;
@@ -1322,6 +1346,12 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .bk-run .item{gap:16px}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pager{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.pr-sum{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px 24px}
+.pr-o{border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+.pr-o .nm{margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap}
+.pr-cmd{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+@media (min-width:901px){#pr table{table-layout:fixed;width:100%}
+#pr th:nth-child(1){width:80px}#pr th:nth-child(2){width:180px}#pr th:nth-child(3){width:90px}#pr th:nth-child(4){width:110px}#pr th:nth-child(5){width:80px}#pr th:nth-child(7){width:130px}}
 .pager .mu{margin-right:6px}
 .cc-flag{font-size:18px;line-height:1;font-family:"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif}
 .cbar{height:6px;border-radius:99px;background:var(--line);margin:6px 0 4px;overflow:hidden}
@@ -1532,6 +1562,7 @@ $pages = [
     'atualizacoes' => ['Atualizações', 'download'],
     'terminal' => ['Terminal', 'term'],
     'alertas'  => ['Alertas', 'bell'],
+    'processos' => ['Processos', 'cpu'],
     'definicoes' => ['Definições', 'sliders'],
     'conta'    => ['Conta', 'user'],
 ];
@@ -1589,6 +1620,28 @@ if (qget('term') === 'view' || qget('term') === 'dl') {
     $txt = preg_replace('/[^\x09\x0a\x20-\x7e\x80-\xff]/', '', str_replace("\r\n", "\n", $txt)) ?? $txt;
     header('Content-Type: text/html; charset=utf-8');
     echo '<!doctype html><meta charset="utf-8"><title>Sessão ' . h($tid) . '</title><style>body{margin:0;background:#0f1720;color:#d6e2ee;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace}pre{margin:0;padding:20px;white-space:pre-wrap;word-break:break-word}</style><pre>' . h($txt) . '</pre>';
+    exit;
+}
+
+if (qget('stats') === 'procs') {
+    header('Content-Type: application/json');
+    if (empty($_SESSION['user'])) { http_response_code(401); echo '{}'; exit; }
+    session_write_close();
+    $memt = 0; $li = (array)(jload(MP_STATS . '/live.json') ?? []); $memt = (int)($li['mem']['total'] ?? 0);
+    $rows = []; $sum = [];
+    foreach (log_tail(MP_STATS . '/procs.tsv', 400) as $ln) {
+        $p = explode("\t", $ln); if (count($p) < 8) continue;
+        [$pid, $ppid, $cpu, $rss, $et, $usr, $comm, $args] = $p;
+        [$t, $lab, $site] = proc_origin($usr, $args);
+        $r = ['pid' => (int)$pid, 'cpu' => (float)$cpu, 'rss' => (int)$rss, 'mem' => $memt > 0 ? round((int)$rss * 100 / $memt, 1) : 0, 'et' => (int)$et,
+              'user' => $usr, 'comm' => $comm, 'args' => $args, 't' => $t, 'o' => $lab, 'site' => $site, 'prot' => proc_protected_php((int)$pid, $comm, $args, $usr)];
+        $rows[] = $r;
+        $k = $t === 'site' ? 'site:' . $site : $t;
+        $sum[$k] = $sum[$k] ?? ['k' => $k, 't' => $t, 'o' => $t === 'site' ? 'Site ' . $site : $lab, 'cpu' => 0, 'rss' => 0, 'n' => 0];
+        $sum[$k]['cpu'] += (float)$cpu; $sum[$k]['rss'] += (int)$rss; $sum[$k]['n']++;
+    }
+    usort($sum, function ($a, $b) { return [$b['cpu'], $b['rss']] <=> [$a['cpu'], $a['rss']]; });
+    echo json_encode(['ts' => (int)@file_get_contents(MP_STATS . '/procs.ts'), 'cpus' => (int)($li['cpus'] ?? 1), 'memt' => $memt, 'rows' => $rows, 'sum' => array_values($sum)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 
@@ -1978,6 +2031,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'mail_av':
             job_submit('mail-av', [post('op') === 'off' ? 'off' : 'on'], post('op') === 'off' ? 'Desativar o antivírus' : 'Ativar o antivírus');
             $back = ['t' => 'antispam'];
+            break;
+
+        case 'proc_kill':
+            $pid = post('pid');
+            if (!ctype_digit($pid) || (int)$pid < 3) { $bad('Processo inválido.'); break; }
+            job_submit('proc-kill', post('force') === '1' ? [$pid, '--force'] : [$pid], (post('force') === '1' ? 'Forçar o fim do processo ' : 'Terminar o processo ') . $pid);
+            break;
+        case 'proc_kill_site':
+            if (!valid_site(post('site'))) { $bad('Site inválido.'); break; }
+            job_submit('proc-kill-site', [post('site')], 'Terminar os processos do site ' . post('site'));
             break;
 
         case 'alerts_settings':
@@ -2577,13 +2640,14 @@ $titles = [
     'definicoes' => 'Modo do servidor, acesso pelas portas, IPs autorizados, proteção contra força bruta, phpMyAdmin, FTP, Let\'s Encrypt e domínio do painel.',
     'auditoria'=> 'Quem fez o quê, quando e de onde.',
     'atualizacoes' => 'Atualizações do painel (com assinatura e reposição automática) e do sistema operativo.',
+    'processos' => 'Processos que consomem CPU e memória, com a origem (site, email, base de dados, sistema) e a opção de os terminar.',
     'alertas'  => 'Alertas por SMS e email: CPU, RAM, disco, ligações e volume de email.',
     'terminal' => 'Terminal do servidor (root) no browser. Exige a verificação em dois passos; as sessões ficam gravadas.',
     'email'    => 'Caixas de correio, envio dos sites e antispam.',
     'dns'      => 'DNS autoritativo: zonas dos domínios alojados neste servidor.',
     'logs'     => 'Acessos e erros de cada site: servidor web, PHP e tarefas agendadas.',
 ];
-$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'ligacoes', 'alertas', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
+$groups = ['Geral' => ['resumo', 'recursos'], 'Alojamento' => ['sites', 'ficheiros', 'logs', 'cron', 'email', 'dns', 'bd', 'php'], 'Sistema' => ['servicos', 'processos', 'ligacoes', 'alertas', 'terminal', 'backups', 'auditoria', 'atualizacoes']];
 $section = in_array($page, ['conta', 'definicoes'], true) ? 'Sistema' : 'Geral';
 foreach ($groups as $gl => $keys) { if (in_array($page, $keys, true)) $section = $gl; }
 $lvTop = live_stats();
@@ -2735,7 +2799,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <table class="list cards">
           <thead><tr><th>Site</th><th>Endereço</th><th>PHP</th><th>Limites</th><th>Estado</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>
-          <?php foreach ($sites as $s):
+          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($sites, 50); foreach ($pgList as $s):
                 $n = (string)($s['name'] ?? ''); $port = (int)($s['port'] ?? 0); $on = !empty($s['enabled']); $L = site_limits($s);
                 $url = site_url($host, $port); ?>
             <tr>
@@ -2775,6 +2839,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php endforeach; ?>
           </tbody>
         </table>
+        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'sites') ?></div><?php endif; ?>
         <?php endif; ?>
       </section>
 
@@ -2957,7 +3022,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <table class="list cards">
           <thead><tr><th>Base de dados</th><th>Utilizador</th><th>Site</th><th class="r">Tamanho</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>
-          <?php foreach ($dbs as $d): $n = (string)($d['name'] ?? ''); ?>
+          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($dbs, 50); foreach ($pgList as $d): $n = (string)($d['name'] ?? ''); ?>
             <tr>
               <td class="first" data-label="Base de dados"><div class="who"><span class="av t-blue"><?= ic('db') ?></span><div class="nm mono"><?= h($n) ?></div></div></td>
               <td class="mono" data-label="Utilizador"><?= h($n) ?>@localhost</td>
@@ -2979,6 +3044,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php endforeach; ?>
           </tbody>
         </table>
+        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'bases de dados') ?></div><?php endif; ?>
         <?php endif; ?>
       </section>
 
@@ -3245,7 +3311,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <table class="list cards">
           <thead><tr><th>Tarefa</th><th>Quando</th><th>Última execução</th><th>Estado</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>
-          <?php foreach ($crons as $c):
+          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($crons, 50); foreach ($pgList as $c):
                 $cid = (string)($c['id'] ?? ''); $cs = (string)($c['site'] ?? ''); $on = !empty($c['on']);
                 $run = $runs[$cs . ':' . $cid] ?? null; $rc = $run['rc'] ?? null; ?>
             <tr>
@@ -3284,6 +3350,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php endforeach; ?>
           </tbody>
         </table>
+        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'tarefas') ?></div><?php endif; ?>
         <?php endif; ?>
         <div class="card-f mu">Dentro do comando, <span class="mono">php</span> usa a versão de PHP do site. O comando arranca na pasta public_html do site. A saída fica em logs/cron-&lt;id&gt;.log e o resultado é atualizado a cada minuto.</div>
       </section>
@@ -3354,6 +3421,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       <?php if ($bkRun): ?>
         <div class="card bk-run" data-bk-running><div class="row-list"><div class="item"><span class="spin"></span><div class="grow"><div class="nm">Backup em curso</div><div class="mu"><?= h($bkRun['step'] ?? '') ?> · desde há <?= max(1, (int)ceil((time() - (int)($bkRun['since'] ?? time())) / 60)) ?> min</div></div><span class="mu">A página atualiza sozinha.</span></div></div></div>
       <?php endif; ?>
+<?php $btab = in_array(qget('t'), ['copias', 'config'], true) ? qget('t') : 'copias'; ?>
+      <nav class="tabs" aria-label="Secções"><a class="chip<?= $btab === 'copias' ? ' prim' : '' ?>" href="?p=backups&amp;t=copias">Cópias</a><a class="chip<?= $btab === 'config' ? ' prim' : '' ?>" href="?p=backups&amp;t=config">Agendamento e destinos</a></nav>
+<?php if ($btab === 'copias'): ?>
       <section class="stats">
         <div class="stat"><span class="tile <?= $bkLast && empty($bkLast['ok']) ? 't-warn' : 't-acc' ?>"><?= ic('archive') ?></span><div><div class="k">Último backup</div><div class="v"><?= $bkLast ? (empty($bkLast['ok']) ? 'Com erros' : 'Sucesso') : '—' ?> <small><?= $bkLast ? h(ago((int)$bkLast['ts'], time())) : 'ainda não houve' ?></small></div></div></div>
         <div class="stat"><span class="tile t-blue"><?= ic('clock') ?></span><div><div class="k">Próximo automático</div><div class="v"><?= $next !== '' ? h($next) : 'Desativado' ?></div></div></div>
@@ -3380,7 +3450,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <table class="list cards">
           <thead><tr><th>Conjunto</th><th>Data</th><th>Tipo</th><th>Conteúdo</th><th class="r">Tamanho</th><th>Remoto</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>
-          <?php foreach ($bkSets as $i => $b): $bs = (string)($b['site'] ?? ''); $bid = (string)($b['id'] ?? ''); $tn = $typeName[$b['type'] ?? 'manual'] ?? ['Manual', 'p-me'];
+          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($bkSets, 30); foreach ($pgList as $i => $b): $bs = (string)($b['site'] ?? ''); $bid = (string)($b['id'] ?? ''); $tn = $typeName[$b['type'] ?? 'manual'] ?? ['Manual', 'p-me'];
                 $dbl = is_array($b['dbs'] ?? null) ? $b['dbs'] : []; $did = 'bk' . $i; ?>
             <tr>
               <td class="first" data-label="Conjunto"><div class="who"><span class="av <?= $bs[0] === '_' ? 't-vio' : tone($bs) ?>"><?= $bs[0] === '_' ? ic($bs === '_bd' ? 'db' : 'server') : h(substr($bs, 0, 1)) ?></span><div class="nm"><?= h($setName($bs)) ?></div></div></td>
@@ -3424,10 +3494,12 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php endforeach; ?>
           </tbody>
         </table>
+        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'backups') ?></div><?php endif; ?>
         <?php endif; ?>
         <div class="card-f mu">Local: /var/backups/minipainel. As bases de dados só entram no backup de um site se estiverem associadas a ele (página Bases de dados); as restantes vão para "Bases de dados sem site".</div>
       </section>
 
+<?php endif; if ($btab === 'config'): ?>
       <div class="grid2e">
         <section class="card">
           <div class="card-h"><div><h2>Agendamento e retenção</h2><p>Backup automático diário de todos os sites e bases de dados.</p></div><span class="pill <?= !empty($bkConf['enabled']) ? 'p-ok' : 'p-off' ?>"><?= !empty($bkConf['enabled']) ? 'Ativo' : 'Desativado' ?></span></div>
@@ -3476,6 +3548,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </section>
       </div>
 
+<?php endif; ?>
       <dialog id="dlg-bk-now">
         <form method="post">
           <?= act_fields('bk_now') ?>
@@ -3540,6 +3613,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($page === 'definicoes'):
     $srvMode = (string)($srv['mode'] ?? 'lan');
 ?>
+<?php $dtab = in_array(qget('t'), ['servidor', 'seguranca', 'servicos'], true) ? qget('t') : 'servidor'; ?>
+      <nav class="tabs" aria-label="Secções"><a class="chip<?= $dtab === 'servidor' ? ' prim' : '' ?>" href="?p=definicoes&amp;t=servidor">Servidor e domínio</a><a class="chip<?= $dtab === 'seguranca' ? ' prim' : '' ?>" href="?p=definicoes&amp;t=seguranca">Acesso e segurança</a><a class="chip<?= $dtab === 'servicos' ? ' prim' : '' ?>" href="?p=definicoes&amp;t=servicos">Serviços</a></nav>
+<?php if ($dtab === 'servidor'): ?>
       <section class="card">
         <div class="card-h"><div><h2>Modo do servidor</h2><p>Define como o painel apresenta os sites e o que propõe por omissão. Mudar de modo não altera os sites que já existem.</p></div></div>
         <form method="post" class="card-b">
@@ -3560,6 +3636,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">No modo Internet, cada domínio tem de ter um registo DNS (A ou AAAA) a apontar para o IP público deste servidor, e as portas 80 e 443 têm de chegar a ele (se houver router ou firewall à frente, reencaminha essas portas).</div>
       </section>
 
+<?php endif; if ($dtab === 'seguranca'): ?>
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>Acesso pelas portas dos sites</h2><p>As portas próprias (ex.: :8001) servem os sites em HTTP, sem SSL.</p></div><span class="pill <?= ($srv['ports_access'] ?? 'all') === 'lan' ? 'p-ok' : 'p-off' ?>"><?= ($srv['ports_access'] ?? 'all') === 'lan' ? 'Só rede local' : 'Todos' ?></span></div>
@@ -3608,6 +3685,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">Nunca são bloqueados o próprio servidor, os IPs de confiança (página Ligações) nem os IPs de onde usaste o painel nos últimos 7 dias. Quem volta a ser apanhado em 30 dias fica bloqueado mais tempo.</div>
       </section>
 
+<?php endif; if ($dtab === 'servicos'): ?>
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>phpMyAdmin</h2><p>Tempos e limites. Aumenta-os para importar ou exportar bases de dados grandes.</p></div></div>
@@ -3633,6 +3711,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
       </div>
 
+<?php endif; if ($dtab === 'servidor'): ?>
       <section class="card">
         <div class="card-h"><div><h2>Domínio do painel</h2><p>Acesso ao painel por um nome, por exemplo hosting.iddigital.pt, com certificado válido.</p></div>
           <?php if (($srv['panel_domain'] ?? '') !== ''): ?><span class="pill p-ok"><?= h($srv['panel_domain']) ?></span><?php endif; ?></div>
@@ -3647,6 +3726,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         </form>
       </section>
 
+<?php endif; ?>
 <?php elseif ($page === 'email'):
     $ml = is_array($state['mail'] ?? null) ? $state['mail'] : ['enabled' => false];
     $mOn = !empty($ml['enabled']);
@@ -3965,6 +4045,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card"><div class="card-b" style="color:<?= !empty($upLast['ok']) ? 'var(--ok)' : 'var(--err)' ?>"><b><?= !empty($upLast['ok']) ? 'Concluído' : 'Falhou' ?>:</b> <?= h($upLast['msg'] ?? '') ?> <span class="mu">(<?= h(ago((int)$upLast['ts'], time())) ?>)</span></div></div>
       <?php endif; ?>
 
+<?php $utab = in_array(qget('t'), ['painel', 'sistema'], true) ? qget('t') : 'painel'; ?>
+      <nav class="tabs" aria-label="Secções"><a class="chip<?= $utab === 'painel' ? ' prim' : '' ?>" href="?p=atualizacoes&amp;t=painel">Painel</a><a class="chip<?= $utab === 'sistema' ? ' prim' : '' ?>" href="?p=atualizacoes&amp;t=sistema">Sistema operativo</a></nav>
+<?php if ($utab === 'painel'): ?>
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>Painel</h2><p>Versão do IDDigital Hosting e atualizações publicadas no GitHub.</p></div>
@@ -4000,6 +4083,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
       </div>
 
+<?php endif; if ($utab === 'sistema'): ?>
       <section class="card">
         <div class="card-h"><div><h2>Sistema operativo</h2><p>Pacotes do sistema (nginx, PHP, MariaDB, email…) instalados pelo <?= h(($sys['os'] ?? '') !== '' ? $sys['os'] : 'sistema') ?>.</p></div>
           <div style="display:flex;gap:8px;align-items:center">
@@ -4033,6 +4117,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
 
       <?php if ($snaps): ?>
+<?php endif; if ($utab === 'painel'): ?>
       <section class="card">
         <div class="card-h"><div><h2>Cópias anteriores do painel</h2><p>Guardadas antes de cada atualização (painel, configuração e serviços). Repor volta a pôr essa versão do painel.</p></div></div>
         <div class="row-list">
@@ -4049,6 +4134,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
       <?php endif; ?>
 
+<?php endif; ?>
       <dialog id="dlg-reboot"><form method="post"><?= act_fields('reboot') ?>
         <div class="dlg-h"><h3>Reiniciar o servidor</h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
         <div class="dlg-b"><p style="margin:0">O servidor reinicia dentro de 1 minuto. Os sites, o email e o painel ficam indisponíveis durante o arranque (normalmente 1 a 2 minutos).</p>
@@ -4193,7 +4279,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <thead><tr><th>Nome</th><th>Tipo</th><th>Valor</th><th class="r">TTL</th><th>Origem</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>
             <tr><td class="first mono" data-label="Nome">@</td><td data-label="Tipo"><span class="pill p-off">NS</span></td><td class="mono" data-label="Valor"><?= h($dn['ns1']) ?>. · <?= h($dn['ns2']) ?>.</td><td class="r">3600</td><td><span class="mu">Servidor</span></td><td></td></tr>
-            <?php $recs = (array)$dz['records']; usort($recs, function ($a, $b) { return [$a['name'] === '@' ? '' : $a['name'], $a['type']] <=> [$b['name'] === '@' ? '' : $b['name'], $b['type']]; }); foreach ($recs as $r): ?>
+            <?php $recs = (array)$dz['records']; usort($recs, function ($a, $b) { return [$a['name'] === '@' ? '' : $a['name'], $a['type']] <=> [$b['name'] === '@' ? '' : $b['name'], $b['type']]; }); [$pgList, $pgN, $pgPages, $pgTot] = paginate($recs, 100); foreach ($pgList as $r): ?>
             <tr>
               <td class="first mono" data-label="Nome"><?= h($r['name']) ?></td>
               <td data-label="Tipo"><span class="pill p-me"><?= h($r['type']) ?></span></td>
@@ -4205,6 +4291,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             <?php endforeach; ?>
           </tbody>
         </table>
+        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'registos') ?></div><?php endif; ?>
         <form method="post" class="card-f" data-confirm="Apagar a zona <?= h($dz['name']) ?>? O domínio deixa de resolver neste servidor."><?= act_fields('dns_zone_del', ['zone' => (string)$dz['name']]) ?><span class="mu" style="margin-right:12px">Os registos automáticos atualizam-se sozinhos quando mudas sites ou email; os manuais mantêm-se.</span><button class="btn sm dan" type="submit">Apagar zona</button></form>
       </section>
       <dialog id="dlg-dr-new"><form method="post"><?= act_fields('dns_rec_add', ['zone' => (string)$dz['name']]) ?>
@@ -4372,6 +4459,32 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
   <?php endif; ?>
 
+<?php elseif ($page === 'processos'): ?>
+      <section class="card">
+        <div class="card-h"><div><h2>Quem está a consumir recursos</h2><p>CPU e memória por origem: cada site, email, base de dados, servidor web, painel e sistema. Atualiza a cada 10 segundos.</p></div></div>
+        <div id="pr-sum" class="pr-sum"><div class="empty">A carregar…</div></div>
+      </section>
+      <section class="card" id="pr">
+        <div class="card-h"><div><h2>Processos</h2><p>CPU atual (100% = um núcleo inteiro). Os processos essenciais do servidor e do painel não podem ser terminados aqui.</p></div>
+          <div class="lg-filters">
+            <select class="in" id="pr-f" aria-label="Origem"><option value="">Todas as origens</option><option value="site">Sites</option><option value="email">Email</option><option value="bd">Base de dados</option><option value="web">Servidor web</option><option value="painel">Painel</option><option value="sistema">Sistema</option></select>
+            <input class="in" id="pr-q" type="search" placeholder="Procurar…" title="Comando, utilizador, PID ou site" aria-label="Procurar" style="min-width:220px">
+          </div></div>
+        <table class="list cards">
+          <thead><tr><th>PID</th><th>Origem</th><th class="r">CPU</th><th class="r">Memória</th><th>Há</th><th>Comando</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
+          <tbody id="pr-rows"><tr><td colspan="7" class="empty">A carregar…</td></tr></tbody>
+        </table>
+        <div class="card-f" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="mu" id="pr-foot" style="flex:1"></span><nav class="pager" id="pr-pager"></nav></div>
+      </section>
+      <dialog id="dlg-kill"><form method="post"><?= act_fields('proc_kill') ?><input type="hidden" name="pid" id="kill-pid">
+        <div class="dlg-h"><h3>Terminar processo <span id="kill-t" class="mono"></span></h3><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b"><p class="mono" id="kill-cmd" style="margin:0;word-break:break-all"></p>
+          <label class="chk"><input type="checkbox" name="force" value="1"> Forçar (SIGKILL: termina de imediato, sem deixar o processo arrumar; usa só se não terminar normalmente)</label>
+          <div id="kill-site"></div></div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn dan" type="submit">Terminar</button></div>
+      </form></dialog>
+      <form method="post" id="kill-site-f" style="display:none" data-confirm=""><?= act_fields('proc_kill_site') ?><input type="hidden" name="site" id="kill-site-n"></form>
+
 <?php elseif ($page === 'auditoria'):
     $alog = [];
     $af = MP_DATA . '/logs/audit.log';
@@ -4391,7 +4504,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <table class="list cards" id="au-t">
           <thead><tr><th>Data</th><th>Utilizador</th><th>IP</th><th>Ação</th><th>Resultado</th></tr></thead>
           <tbody>
-          <?php foreach ($alog as $e): ?>
+          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($alog, 100); foreach ($pgList as $e): ?>
             <tr>
               <td class="first" data-label="Data"><span class="mono"><?= h(gmdate('d/m/Y H:i:s', (int)($e['ts'] ?? 0) + $tza)) ?></span></td>
               <td data-label="Utilizador"><?= h($e['user'] ?? '') ?></td>
@@ -4402,6 +4515,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php endforeach; ?>
           </tbody>
         </table>
+        <?php if ($pgPages > 1): ?><div class="card-f"><?= pager($pgN, $pgPages, $pgTot, 'pg', 'registos') ?></div><?php endif; ?>
         <?php endif; ?>
         <div class="card-f mu">Mostra os últimos 1000 registos. O ficheiro completo está em /var/lib/minipainel/logs/audit.log e é rodado semanalmente (8 semanas).</div>
       </section>
@@ -4737,6 +4851,63 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   ['lg-q', 'lg-ip'].forEach(function (id) { if ($(id)) $(id).addEventListener('input', function () { clearTimeout(tm); tm = setTimeout(load, 400); }); });
   var live = null; $('lg-live').addEventListener('change', function (e) { if (e.target.checked) live = setInterval(load, 5000); else clearInterval(live); });
   load();
+})();
+</script>
+<?php endif; ?>
+<?php if ($page === 'processos'): ?>
+<script>
+(function () {
+  var data = {}, page = 1, PER = 50, f = document.getElementById('pr-f'), q = document.getElementById('pr-q');
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function mb(kb) { return kb >= 1048576 ? (kb / 1048576).toFixed(1).replace('.', ',') + ' GB' : Math.round(kb / 1024) + ' MB'; }
+  function ago(s) { return s >= 86400 ? Math.floor(s / 86400) + ' d' : s >= 3600 ? Math.floor(s / 3600) + ' h' : s >= 60 ? Math.floor(s / 60) + ' min' : s + ' s'; }
+  var tone = { site: 'p-me', email: 'p-warn', bd: 'p-ok', web: 'p-off', painel: 'p-off', sistema: 'p-off' };
+  function render() {
+    var sum = data.sum || [], cpus = data.cpus || 1, memt = data.memt || 1, h = '';
+    sum.slice(0, 12).forEach(function (s) {
+      var c = Math.min(100, s.cpu / cpus), m = Math.min(100, s.rss * 100 / memt);
+      h += '<div class="pr-o"><div class="nm"><span class="pill ' + (tone[s.t] || 'p-off') + '">' + esc(s.o) + '</span><span class="mu">' + s.n + ' proc.</span></div>' +
+        '<div class="mu">CPU ' + c.toFixed(1).replace('.', ',') + '%</div><div class="cbar"><span style="width:' + c + '%"></span></div>' +
+        '<div class="mu">RAM ' + mb(s.rss) + ' (' + m.toFixed(1).replace('.', ',') + '%)</div><div class="cbar"><span style="width:' + m + '%;background:var(--warn)"></span></div></div>';
+    });
+    document.getElementById('pr-sum').innerHTML = h || '<div class="empty">Sem dados (o recolhedor está a correr?).</div>';
+    var rows = data.rows || [], fv = f.value, qv = (q.value || '').trim().toLowerCase();
+    if (fv) rows = rows.filter(function (r) { return r.t === fv; });
+    if (qv) rows = rows.filter(function (r) { return (r.args + ' ' + r.user + ' ' + r.pid + ' ' + r.o).toLowerCase().indexOf(qv) !== -1; });
+    var pages = Math.max(1, Math.ceil(rows.length / PER)); if (page > pages) page = pages; h = '';
+    rows.slice((page - 1) * PER, page * PER).forEach(function (r) {
+      h += '<tr><td class="first mono" data-label="PID">' + r.pid + '</td><td data-label="Origem"><span class="pill ' + (tone[r.t] || 'p-off') + '">' + esc(r.o) + '</span><div class="mu">' + esc(r.user) + '</div></td>' +
+        '<td class="r" data-label="CPU"><b' + (r.cpu >= 50 ? ' style="color:var(--err)"' : '') + '>' + r.cpu.toFixed(1).replace('.', ',') + '%</b></td>' +
+        '<td class="r" data-label="Memória">' + mb(r.rss) + '<div class="mu">' + String(r.mem).replace('.', ',') + '%</div></td><td class="mu" data-label="Há" style="white-space:nowrap">' + ago(r.et) + '</td>' +
+        '<td data-label="Comando"><div class="mono pr-cmd" title="' + esc(r.args) + '">' + esc(r.args) + '</div></td>' +
+        '<td class="act r">' + (r.prot ? '<span class="mu">essencial</span>' : '<button class="btn sm danger-o" type="button" data-kill="' + r.pid + '">Terminar</button>') + '</td></tr>';
+    });
+    document.getElementById('pr-rows').innerHTML = h || '<tr><td colspan="7" class="empty">Nenhum processo com estes filtros.</td></tr>';
+    var pg = ''; if (pages > 1) { pg += '<span class="mu">' + rows.length + ' processos</span>'; for (var i = 1; i <= pages; i++) if (i === 1 || i === pages || Math.abs(i - page) <= 2) pg += '<button type="button" class="chip sm' + (i === page ? ' prim' : '') + '" data-pg="' + i + '">' + i + '</button>'; }
+    document.getElementById('pr-pager').innerHTML = pg;
+    document.getElementById('pr-foot').textContent = data.ts ? 'Última leitura às ' + new Date(data.ts * 1000).toLocaleTimeString('pt-PT') + ' · ' + (data.rows || []).length + ' processos com mais consumo' : '';
+  }
+  document.addEventListener('click', function (e) {
+    var p = e.target.closest('[data-pg]'); if (p) { page = +p.getAttribute('data-pg'); render(); return; }
+    var k = e.target.closest('[data-kill]'); if (!k) return;
+    var pid = +k.getAttribute('data-kill'), r = (data.rows || []).filter(function (x) { return x.pid === pid; })[0]; if (!r) return;
+    document.getElementById('kill-pid').value = pid; document.getElementById('kill-t').textContent = pid;
+    document.getElementById('kill-cmd').textContent = r.user + ': ' + r.args;
+    document.getElementById('kill-site').innerHTML = r.site ? '<p class="mu" style="margin:6px 0 0">É do site <b>' + esc(r.site) + '</b>. <button class="lnk" type="button" data-killsite="' + esc(r.site) + '">Terminar todos os processos deste site</button></p>' : '';
+    document.getElementById('dlg-kill').showModal();
+  });
+  document.addEventListener('click', function (e) {
+    var s = e.target.closest('[data-killsite]'); if (!s) return;
+    var fm = document.getElementById('kill-site-f'); document.getElementById('kill-site-n').value = s.getAttribute('data-killsite');
+    fm.setAttribute('data-confirm', 'Terminar todos os processos do site ' + s.getAttribute('data-killsite') + '? O PHP do site volta a arrancar no próximo pedido.');
+    document.getElementById('dlg-kill').close(); fm.requestSubmit();
+  });
+  f.addEventListener('change', function () { page = 1; render(); }); q.addEventListener('input', function () { page = 1; render(); });
+  function poll() {
+    fetch('?stats=procs', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if (r.status === 401) { location.reload(); return null; } return r.json(); })
+      .then(function (d) { if (d) { data = d; render(); } }).catch(function () {}).then(function () { setTimeout(poll, 10000); });
+  }
+  poll();
 })();
 </script>
 <?php endif; ?>
@@ -7617,7 +7788,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.8.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.9.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -8057,11 +8228,11 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.8.0
+#  mpanel — IDDigital Hosting CLI v2.9.0
 # =============================================================================
 set -uo pipefail
 
-MP_VERSION="2.8.0"
+MP_VERSION="2.9.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -12105,6 +12276,45 @@ alerts_state_json(){
        mail_pct:($mp|tonumber), mail_min:($mm|tonumber), learn_start:($f|tonumber), learn_days:($n|tonumber)}'
 }
 
+# ============================ PROCESSOS ======================================
+proc_protected(){ # pid -> 0 se não pode ser terminado pelo painel
+  local p=$1 comm args usr
+  [ "$p" -le 2 ] && return 0
+  [ -d "/proc/$p" ] || return 1
+  comm=$(cat "/proc/$p/comm" 2>/dev/null); args=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null); usr=$(stat -c %U "/proc/$p" 2>/dev/null)
+  [ -z "$args" ] && return 0                                    # threads do kernel
+  [ "$p" = "$$" ] || [ "$p" = "$PPID" ] && return 0
+  case "$comm" in systemd|systemd-*|init|dbus-daemon|dbus-broker|agetty|cron|crond|rsyslogd|journald|udevd|polkitd|mariadbd|mysqld|master|containerd|dockerd) return 0 ;; esac
+  case "$args" in
+    "nginx: master"*|"php-fpm: master"*|"php-fpm: pool minipainel"*|"sshd: /usr/sbin/sshd"*|"/usr/sbin/sshd"*|*mpanel-stats*|*"mpanel worker"*|"/usr/sbin/dovecot"*|"dovecot"|"/usr/sbin/nsd"*|"nsd -c"*) return 0 ;;
+  esac
+  [ "$usr" = minipainel ] && [[ "$args" == php-fpm* ]] && return 0
+  return 1
+}
+cmd_proc_kill(){ # pid [--force]
+  local p="${1:-}" sig=TERM desc
+  [ "${2:-}" = --force ] && sig=KILL
+  [[ "$p" =~ ^[0-9]{1,8}$ ]] || die "PID inválido."
+  [ -d "/proc/$p" ] || die "O processo $p já não existe."
+  proc_protected "$p" && die "O processo $p é essencial ao servidor ou ao painel e não pode ser terminado aqui (usa o Terminal, se tiveres a certeza)."
+  desc="$(stat -c %U "/proc/$p" 2>/dev/null): $(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-120)"
+  kill -s "$sig" "$p" 2>/dev/null || die "Não foi possível terminar o processo $p."
+  sleep 1
+  if [ -d "/proc/$p" ] && [ "$sig" = TERM ]; then echo "Pedido de fim enviado ao processo $p ($desc); ainda está a terminar. Se não terminar, usa 'Forçar'."
+  else echo "Processo $p terminado ($desc)."; fi
+  return 0
+}
+cmd_proc_kill_site(){ # site [--force]
+  local n="${1:-}" sig=TERM c
+  [ "${2:-}" = --force ] && sig=KILL
+  valid_site "$n" && site_exists "$n" || die "O site '$n' não existe."
+  c=$(pgrep -u "mp_$n" | wc -l)
+  [ "$c" -gt 0 ] || { echo "O site $n não tem processos a correr."; return 0; }
+  pkill -"$sig" -u "mp_$n" 2>/dev/null
+  echo "Terminados $c processos do site $n (o PHP do site volta a arrancar no próximo pedido)."
+  return 0
+}
+
 write_state(){
   local n v st sites phps dbs
   sites=$(for n in $(site_names); do
@@ -12226,7 +12436,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -12244,7 +12454,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.8.0 (mpanel)
+IDDigital Hosting — CLI v2.9.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -12283,6 +12493,10 @@ DNS autoritativo (NSD; só responde pelas zonas do painel)
   dns-zone-add|dns-zone-del <domínio>       zona com registos automáticos (sites, email, nameservers)
   dns-rec-add <zona> <nome> <tipo> <valor> [--ttl N] [--prio N]   tipos: A AAAA CNAME MX TXT NS SRV CAA
   dns-rec-del <zona> <id> | dns-sync [zona|all] | dns-check <zona>
+
+Processos
+  proc-kill <pid> [--force]            termina um processo (os essenciais são recusados)
+  proc-kill-site <site> [--force]      termina todos os processos de um site
 
 Alertas (SMS por bulksms.com e email pelo servidor de email deste servidor)
   alerts-settings [--sms on|off] [--sms-id ID] [--sms-secret S] [--sms-to +351…] [--email on|off] [--email-to x@y]
@@ -12467,6 +12681,8 @@ dispatch(){
     terminal-stop)     cmd_terminal_stop ;;
     geoip-update)      cmd_geoip_update ;;
     alerts-settings)   cmd_alerts_settings "$@" ;;
+    proc-kill)         cmd_proc_kill "$@" ;;
+    proc-kill-site)    cmd_proc_kill_site "$@" ;;
     alerts-test)       cmd_alerts_test ;;
     geo-block)         cmd_geo_block "$@" ;;
     overload-settings) cmd_overload_settings "$@" ;;
@@ -12565,7 +12781,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.8.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.9.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -12982,6 +13198,26 @@ mail_vol_eval(){ # hora entrada saída
   al_cond mail_out "$fo" "Email enviado acima do normal: $3 mensagens entre as $hh e a hora seguinte (normal ${ao%.*}; +$(awk -v v="$3" -v a="$ao" 'BEGIN { printf "%d", (a > 0 ? (v - a) * 100 / a : 100) }')%)" "Email enviado de volta ao normal ($3 mensagens na última hora)"
 }
 
+# ---------- processos (a cada 10 s; CPU atual calculada pela diferença entre leituras) ----------
+sample_procs(){
+  local now=$EPOCHSECONDS pcur=$DIR/.procs-cur prev=$DIR/.procs-prev out=$DIR/procs.tsv
+  ps -eo pid=,ppid=,times=,rss=,etimes=,user:40=,comm=,args= 2>/dev/null > "$pcur" || return 0
+  awk -v now="$now" -v prevf="$prev" -v newp="$prev.new" '
+    BEGIN { pt = 0; while ((getline l < prevf) > 0) { n = split(l, a, " "); if (a[1] == "T") pt = a[2]; else pc[a[1]] = a[2] } print "T " now > newp }
+    {
+      pid = $1; ppid = $2; ct = $3; rss = $4; et = $5; usr = $6; comm = $7
+      args = $0; for (i = 1; i <= 7; i++) sub(/^[ \t]*[^ \t]+/, "", args); sub(/^[ \t]+/, "", args)
+      gsub(/\t/, " ", args); args = substr(args, 1, 300)
+      cpu = 0; dt = now - pt
+      if ((pid in pc) && dt > 0) cpu = (ct - pc[pid]) * 100 / dt; else if (et > 0) cpu = ct * 100 / et
+      if (cpu < 0) cpu = 0
+      print pid " " ct > newp
+      printf "%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\n", pid, ppid, cpu, rss, et, usr, comm, args
+    }' "$pcur" | sort -t$'\t' -k3,3nr -k4,4nr | head -n 400 > "$out.tmp"
+  mv -f "$prev.new" "$prev" 2>/dev/null; mv -f "$out.tmp" "$out"; perm "$out"
+  printf '%s\n' "$now" > "$DIR/procs.ts"; perm "$DIR/procs.ts"
+}
+
 # ---------- ciclo principal ----------
 for f in hist-1m.csv hist-10m.csv hist-1h.csv; do [ -f "$DIR/$f" ] || : > "$DIR/$f"; perm "$DIR/$f"; done
 read -r p_tot p_idle <<<"$(read_cpu)"
@@ -13024,6 +13260,7 @@ while :; do
 
   sample_conns
   overload_check
+  [ $(( EPOCHSECONDS / 5 % 2 )) -eq 0 ] && sample_procs
   mail_spool_kick
   acc_n=$(( acc_n + 1 )); a_cpu=$(( a_cpu + cpu )); a_mem=$(( a_mem + mem )); a_swap=$(( a_swap + swap ))
   a_disk=$(( a_disk + disk )); a_load=$(( a_load + load )); a_rx=$(( a_rx + rxb )); a_tx=$(( a_tx + txb ))
@@ -13083,7 +13320,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.8.0
+#  mp-sendmail — IDDigital Hosting v2.9.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -13155,7 +13392,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.8.0
+#  mpanel-term — IDDigital Hosting v2.9.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -13177,7 +13414,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.8.0
+#  mpanel-cron — IDDigital Hosting v2.9.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
