@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Interface: separadores em Bases de dados (lista, desempenho, phpMyAdmin) e em PHP (versões, extensões, OPcache).
+# NOTAS: Interface: Logs com indicadores e listas numa linha e acessos paginados; Auditoria com filtros no registo todo e colunas fixas.
 # =============================================================================
-#  IDDigital Hosting v2.13.2 — instalador (MiniPainel)
+#  IDDigital Hosting v2.13.3 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.13.2.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.13.3.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.13.2"
+MP_VERSION="2.13.3"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -1492,7 +1492,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.13.2 — painel web (MiniPainel)
+ * IDDigital Hosting v2.13.3 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1500,7 +1500,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.13.2';
+const MP_VERSION = '2.13.3';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2428,6 +2428,17 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .card table.list td .cron-cmd{white-space:normal;overflow-wrap:anywhere}
 .card table.list .who>div{min-width:0}
 @media (max-width:1250px){.lg-tab{table-layout:auto}.lg-tab col{width:auto!important}.lg-tab th:nth-child(6),.lg-tab td:nth-child(6),.lg-tab th:nth-child(7),.lg-tab td:nth-child(7){display:none}}
+.stats.lg-stats{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.grid3.lg-grid{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));align-items:stretch}
+.lg-grid .item{gap:10px}.lg-grid .item>.grow{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg-ban{width:34px;padding:0;justify-content:center}
+.lg-grid .item>b{flex:none;text-align:right;min-width:24px}
+.lg-pager{padding:14px 24px;border-top:1px solid var(--line);flex-wrap:wrap}
+.au-f{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:0 24px 16px}
+.au-f .in{height:38px;width:auto}.au-f input.in{width:280px}
+.au-t{table-layout:fixed;width:100%}
+.au-t td:nth-child(1),.au-t td:nth-child(2),.au-t td:nth-child(3){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:900px){.au-t{table-layout:auto}.au-f input.in{width:100%}}
 .lg-tab{table-layout:fixed;width:100%}
 .lg-tab td,.lg-tab th{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lg-cut,.lg-ua{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -5543,14 +5554,14 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </nav>
 
   <?php if ($lgSum !== null): ?>
-      <section class="stats">
-        <div class="stat"><span class="tile t-blue"><?= ic('world') ?></span><div><div class="k">Pedidos (24 h)</div><div class="v"><?= number_format($lgSum['total'], 0, ',', ' ') ?> <small><?= h(fmt_bytes((float)$lgSum['bytes'])) ?></small></div></div></div>
+      <section class="stats lg-stats">
+        <div class="stat"><span class="tile t-blue"><?= ic('world') ?></span><div><div class="k">Pedidos (24 h)</div><div class="v"><?= number_format($lgSum['total'], 0, ',', ' ') ?> <small><?= h(fmt_bytes((float)$lgSum['bytes'])) ?> · <?= $lgSum['total'] ? round($lgSum['bots'] * 100 / $lgSum['total']) : 0 ?>% robôs</small></div></div></div>
         <div class="stat"><span class="tile t-acc"><?= ic('check') ?></span><div><div class="k">Sucesso (2xx / 3xx)</div><div class="v"><?= $lgSum['c']['2'] ?> <small>/ <?= $lgSum['c']['3'] ?></small></div></div></div>
         <div class="stat"><span class="tile t-warn"><?= ic('ban') ?></span><div><div class="k">Erros 4xx / 5xx</div><div class="v"><?= $lgSum['c']['4'] ?> <small>/ <b style="color:<?= $lgSum['c']['5'] > 0 ? 'var(--err)' : 'inherit' ?>"><?= $lgSum['c']['5'] ?></b></small></div></div></div>
         <div class="stat"><span class="tile t-vio"><?= ic('clock') ?></span><div><div class="k">Tempo médio (páginas)</div><div class="v"><?= $lgSum['rtn'] ? (int)round($lgSum['rts'] * 1000 / $lgSum['rtn']) . ' <small>ms</small>' : '—' ?></div></div></div>
-        <?php $ch = $lgSum['cache']; $cht = array_sum($ch); if ($cht): ?><div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Cache de página</div><div class="v"><?= (int)round(($ch['HIT'] ?? 0) * 100 / $cht) ?>% <small>servido da cache · <?= $lgSum['total'] ? round($lgSum['bots'] * 100 / $lgSum['total']) : 0 ?>% robôs</small></div></div></div><?php endif; ?>
+        <?php $ch = $lgSum['cache']; $cht = array_sum($ch); if ($cht): ?><div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Cache de página</div><div class="v"><?= (int)round(($ch['HIT'] ?? 0) * 100 / $cht) ?>% <small>da cache</small></div></div></div><?php endif; ?>
       </section>
-      <div class="grid3">
+      <div class="grid3 lg-grid">
         <?php foreach (['e5xx' => ['Erros 5xx (servidor/PHP)', 'Sem erros 5xx nas últimas 24 h.'], 'e404' => ['Páginas não encontradas (404)', 'Sem 404 nas últimas 24 h.']] as $k => $lbl): ?>
         <section class="card"><div class="card-h"><h2><?= $lbl[0] ?></h2></div>
           <?php if (!$lgSum[$k]): ?><div class="empty"><?= $lbl[1] ?></div><?php else: ?><div class="row-list">
@@ -5564,7 +5575,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <section class="card"><div class="card-h"><h2>IPs mais ativos</h2></div>
           <?php if (!$lgSum['ips']): ?><div class="empty">Sem pedidos nas últimas 24 h.</div><?php else: ?><div class="row-list">
           <?php foreach ($lgSum['ips'] as $ip => $cnt): ?><div class="item"><div class="grow mono"><?= h($ip) ?></div><b><?= (int)$cnt ?></b>
-            <form method="post" data-confirm="Bloquear <?= h($ip) ?> durante 24 horas?"><?= act_fields('fw_block', ['ip' => (string)$ip, 'dur' => '24h', 'reason' => 'Bloqueado a partir dos logs de ' . $lgSite]) ?><button class="btn sm sec" type="submit">Bloquear</button></form></div><?php endforeach; ?></div><?php endif; ?>
+            <form method="post" data-confirm="Bloquear <?= h($ip) ?> durante 24 horas?"><?= act_fields('fw_block', ['ip' => (string)$ip, 'dur' => '24h', 'reason' => 'Bloqueado a partir dos logs de ' . $lgSite]) ?><button class="btn sm sec lg-ban" type="submit" title="Bloquear durante 24 horas" aria-label="Bloquear"><?= ic('ban') ?></button></form></div><?php endforeach; ?></div><?php endif; ?>
         </section>
       </div>
   <?php endif; ?>
@@ -6129,17 +6140,33 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
             foreach (array_slice(array_reverse(array_filter(explode("\n", $buf))), 0, 1000) as $ln) { $j = json_decode($ln, true); if (is_array($j)) $alog[] = $j; } }
     }
     $tza = tz_off(live_stats());
+    $auUsers = array_values(array_unique(array_map(function ($e) { return (string)($e['user'] ?? ''); }, $alog))); sort($auUsers);
+    $auQ = trim(qget('q')); $auU = qget('u'); $auR = qget('r'); $auAll = count($alog);
+    $alog = array_values(array_filter($alog, function ($e) use ($auQ, $auU, $auR) {
+        if ($auU !== '' && (string)($e['user'] ?? '') !== $auU) return false;
+        if ($auR === 'ok' && empty($e['ok'])) return false;
+        if ($auR === 'falhou' && !empty($e['ok'])) return false;
+        return $auQ === '' || stripos(($e['action'] ?? '') . ' ' . ($e['ip'] ?? '') . ' ' . ($e['user'] ?? ''), $auQ) !== false;
+    }));
 ?>
       <section class="card">
-        <div class="card-h"><div><h2>Registo de auditoria</h2><p>Inícios de sessão e todas as ações feitas no painel, com data, utilizador e IP.</p></div>
-          <input class="in cn-search" id="au-q" type="search" placeholder="Filtrar (ação, IP, utilizador)…" aria-label="Filtrar registo" autocomplete="off"></div>
+        <div class="card-h"><div><h2>Registo de auditoria</h2><p>Inícios de sessão e todas as ações feitas no painel, com data, utilizador e IP.</p></div></div>
+        <form class="au-f" method="get">
+          <input type="hidden" name="p" value="auditoria">
+          <input class="in" name="q" type="search" value="<?= h($auQ) ?>" placeholder="Procurar ação, IP ou utilizador…" aria-label="Procurar">
+          <select class="in" name="u" aria-label="Utilizador"><option value="">Todos os utilizadores</option><?php foreach ($auUsers as $uu): ?><option<?= $uu === $auU ? ' selected' : '' ?>><?= h($uu) ?></option><?php endforeach; ?></select>
+          <select class="in" name="r" aria-label="Resultado"><option value="">Todos os resultados</option><option value="ok"<?= $auR === 'ok' ? ' selected' : '' ?>>OK</option><option value="falhou"<?= $auR === 'falhou' ? ' selected' : '' ?>>Falhou</option></select>
+          <button class="btn sm" type="submit">Filtrar</button>
+          <?php if ($auQ !== '' || $auU !== '' || $auR !== ''): ?><a class="btn sm sec" href="?p=auditoria">Limpar</a><span class="mu"><?= count($alog) ?> de <?= $auAll ?> registos</span><?php endif; ?>
+        </form>
         <?php if (!$alog): ?>
-          <div class="empty">Ainda não há registos.</div>
+          <div class="empty"><?= $auAll ? 'Nenhum registo com estes filtros.' : 'Ainda não há registos.' ?></div>
         <?php else: ?>
-        <table class="list cards" id="au-t">
+        <table class="list cards au-t" id="au-t">
+          <colgroup><col style="width:215px"><col style="width:150px"><col style="width:190px"><col><col style="width:120px"></colgroup>
           <thead><tr><th>Data</th><th>Utilizador</th><th>IP</th><th>Ação</th><th>Resultado</th></tr></thead>
           <tbody>
-          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($alog, 100); foreach ($pgList as $e): ?>
+          <?php [$pgList, $pgN, $pgPages, $pgTot] = paginate($alog, 50); foreach ($pgList as $e): ?>
             <tr>
               <td class="first" data-label="Data"><span class="mono"><?= h(gmdate('d/m/Y H:i:s', (int)($e['ts'] ?? 0) + $tza)) ?></span></td>
               <td data-label="Utilizador"><?= h($e['user'] ?? '') ?></td>
@@ -6481,18 +6508,11 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
   var q = qrcode(0, 'M'); q.addData(el.getAttribute('data-uri')); q.make(); el.innerHTML = q.createSvgTag(5, 4); })();
 </script>
 <?php endif; ?>
-<?php if ($page === 'auditoria'): ?>
-<script>
-(function () { var q = document.getElementById('au-q'); if (!q) return;
-  q.addEventListener('input', function () { var f = q.value.toLowerCase();
-    document.querySelectorAll('#au-t tbody tr').forEach(function (tr) { tr.style.display = !f || tr.textContent.toLowerCase().indexOf(f) !== -1 ? '' : 'none'; }); }); })();
-</script>
-<?php endif; ?>
 <?php if ($page === 'logs'): ?>
 <script>
 (function () {
   var box = document.getElementById('lg'); if (!box) return;
-  var site = box.getAttribute('data-site'), t = box.getAttribute('data-t'), body = document.getElementById('lg-body');
+  var site = box.getAttribute('data-site'), t = box.getAttribute('data-t'), body = document.getElementById('lg-body'), lgPg = 1;
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function pill(s) { var c = s >= 500 ? 'p-err' : (s >= 400 ? 'p-warn' : (s >= 300 ? 'p-off' : 'p-ok')); return '<span class="pill ' + c + '">' + s + '</span>'; }
@@ -6508,10 +6528,18 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       if (t === 'access') url += '&st=' + encodeURIComponent($('lg-st').value) + '&ip=' + encodeURIComponent($('lg-ip').value.trim());
       fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
         if (t !== 'access') return raw(d.lines || []);
-        var rows = d.rows || [];
+        var rows = (d.rows || []).slice().reverse(), pages = Math.max(1, Math.ceil(rows.length / 50));
         if (!rows.length) { body.innerHTML = '<div class="empty">Sem pedidos com estes filtros.</div>'; return; }
-        body.innerHTML = '<table class="list cards lg-tab"><colgroup><col style="width:130px"><col style="width:150px"><col><col style="width:110px"><col style="width:80px"><col style="width:90px"><col style="width:220px"></colgroup><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tempo</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
-          rows.slice().reverse().map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido" class="lg-cut" title="' + esc(r.m + ' ' + r.u) + '">' + (/\\x[0-9a-f]{2}/i.test(r.m + r.u) ? '<span class="mu">Pedido inválido (não é HTTP)</span>' : '<span class="mu">' + esc(r.m) + '</span> <span class="mono">' + esc(r.u) + '</span>') + '</td><td data-label="Código">' + pill(r.s) + (r.cs ? ' <span class="mu" title="Cache">' + esc(r.cs) + '</span>' : '') + '</td><td class="r" data-label="Tempo">' + (r.rt === null || r.rt === undefined ? '—' : '<span' + (r.rt >= 1 ? ' style="color:var(--err)"' : '') + '>' + Math.round(r.rt * 1000) + ' ms</span>') + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>';
+        if (lgPg > pages) lgPg = pages;
+        var pgr = ''; if (pages > 1) { pgr = '<nav class="pager lg-pager"><span class="mu">' + rows.length + ' pedidos</span>';
+          if (lgPg > 1) pgr += '<button type="button" class="chip sm" data-lgp="' + (lgPg - 1) + '">‹ Anterior</button>';
+          [1, lgPg - 2, lgPg - 1, lgPg, lgPg + 1, lgPg + 2, pages].filter(function (x, k, a) { return x >= 1 && x <= pages && a.indexOf(x) === k; }).sort(function (a, b) { return a - b; })
+            .forEach(function (x) { pgr += '<button type="button" class="chip sm' + (x === lgPg ? ' prim' : '') + '" data-lgp="' + x + '">' + x + '</button>'; });
+          if (lgPg < pages) pgr += '<button type="button" class="chip sm" data-lgp="' + (lgPg + 1) + '">Seguinte ›</button>';
+          pgr += '</nav>'; }
+        rows = rows.slice((lgPg - 1) * 50, lgPg * 50);
+        body.innerHTML = '<table class="list cards lg-tab"><colgroup><col style="width:160px"><col style="width:150px"><col><col style="width:140px"><col style="width:80px"><col style="width:90px"><col style="width:200px"></colgroup><thead><tr><th>Data</th><th>IP</th><th>Pedido</th><th>Código</th><th class="r">Tempo</th><th class="r">Tamanho</th><th>Navegador</th></tr></thead><tbody>' +
+          rows.map(function (r) { return '<tr><td class="first mono" data-label="Data">' + fdate(r.t) + '</td><td class="mono" data-label="IP">' + esc(r.ip) + '</td><td data-label="Pedido" class="lg-cut" title="' + esc(r.m + ' ' + r.u) + '">' + (/\\x[0-9a-f]{2}/i.test(r.m + r.u) ? '<span class="mu">Pedido inválido (não é HTTP)</span>' : '<span class="mu">' + esc(r.m) + '</span> <span class="mono">' + esc(r.u) + '</span>') + '</td><td data-label="Código">' + pill(r.s) + (r.cs ? ' <span class="mu" title="Cache">' + esc(r.cs) + '</span>' : '') + '</td><td class="r" data-label="Tempo">' + (r.rt === null || r.rt === undefined ? '—' : '<span' + (r.rt >= 1 ? ' style="color:var(--err)"' : '') + '>' + Math.round(r.rt * 1000) + ' ms</span>') + '</td><td class="r" data-label="Tamanho">' + (r.b > 1024 ? Math.round(r.b / 1024) + ' KB' : r.b + ' B') + '</td><td class="mu lg-ua" title="' + esc(r.a) + '">' + esc(r.a) + '</td></tr>'; }).join('') + '</tbody></table>' + pgr;
       }).catch(function () { body.innerHTML = '<div class="empty">Não foi possível ler o log.</div>'; });
     } else {
       var f = t === 'php' ? 'php-error.log' : ('cron-' + (($('lg-cron') || {}).value || 'x') + '.log');
@@ -6521,8 +6549,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     }
   }
   var tm = null;
-  ['lg-n', 'lg-st', 'lg-cron'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', load); });
-  ['lg-q', 'lg-ip'].forEach(function (id) { if ($(id)) $(id).addEventListener('input', function () { clearTimeout(tm); tm = setTimeout(load, 400); }); });
+  body.addEventListener('click', function (e) { var b = e.target.closest('[data-lgp]'); if (!b) return; lgPg = +b.getAttribute('data-lgp'); load(); box.scrollIntoView({ block: 'start' }); });
+  ['lg-n', 'lg-st', 'lg-cron'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', function () { lgPg = 1; load(); }); });
+  ['lg-q', 'lg-ip'].forEach(function (id) { if ($(id)) $(id).addEventListener('input', function () { clearTimeout(tm); tm = setTimeout(function () { lgPg = 1; load(); }, 400); }); });
   var live = null; $('lg-live').addEventListener('change', function (e) { if (e.target.checked) live = setInterval(load, 5000); else clearInterval(live); });
   load();
 })();
@@ -9551,7 +9580,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.13.2 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.13.3 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -9991,12 +10020,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.13.2
+#  mpanel — IDDigital Hosting CLI v2.13.3
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.13.2"
+MP_VERSION="2.13.3"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -14959,7 +14988,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.13.2 (mpanel)
+IDDigital Hosting — CLI v2.13.3 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -15336,7 +15365,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.13.2
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.13.3
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -15884,7 +15913,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.13.2
+#  mp-sendmail — IDDigital Hosting v2.13.3
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -15956,7 +15985,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.13.2
+#  mpanel-term — IDDigital Hosting v2.13.3
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -15981,7 +16010,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.13.2
+#  mpanel-cron — IDDigital Hosting v2.13.3
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.

@@ -1,5 +1,9 @@
 # Registo de alterações
 
+## 2.13.3
+- Logs: indicadores e as 4 listas numa linha (alturas iguais); acessos com 50 por página; datas e IPs sem cortes.
+- Auditoria: filtros (texto, utilizador, resultado) aplicados ao registo todo — antes só à página visível; colunas fixas; 50 por página.
+
 ## 2.13.2
 - Bases de dados: separadores Bases de dados · Desempenho · phpMyAdmin (abre na lista).
 - PHP: separadores Versões · Extensões · OPcache (escolher uma versão abre as extensões dela).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.13.2
+#  mpanel-term — IDDigital Hosting v2.13.3
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
