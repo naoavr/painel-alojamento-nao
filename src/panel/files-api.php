@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.14.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.14.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho

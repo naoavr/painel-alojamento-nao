@@ -191,6 +191,16 @@ Página **PHP**: versões instaladas, estado de cada serviço, sites por versão
 - **FileZilla com SFTP:** protocolo SFTP, porta 22, utilizador `mp_loja`.
 - Servidor atrás de NAT: preenche o IP público em Definições → Serviços → FTP e reencaminha as portas 21 e 30000–30100.
 
+### Copiar e mover ficheiros entre sites
+
+Cada site está isolado dos outros, mas como administrador podes copiar ou mover ficheiros de um site para outro: em **Ficheiros**, seleciona os ficheiros ou pastas e escolhe **Copiar para outro site** ou **Mover para outro site** (também no menu ⋮ de cada item).
+
+- Escolhes o site e a pasta de destino (navegável) e o que fazer se já existir um item com o mesmo nome: manter os dois (`nome (1).ext`), não copiar, ou substituir.
+- Corre em segundo plano; no fim aparece a notificação com o número de itens e o tamanho.
+- No destino, os ficheiros ficam com o dono e as permissões do site de destino. Atalhos (symlinks) não são copiados.
+- Ao mover, a origem só é apagada depois de a cópia estar concluída.
+- Na consola: `mpanel fm-xfer loja novo public_html public_html copy keep imagens`.
+
 ### Tarefas agendadas (cron)
 
 Página Tarefas agendadas → **Nova tarefa**: site, quando (cada minuto, hora, dia… ou expressão cron) e o comando ou URL. Cada tarefa corre com o utilizador do site, nunca duas vezes em simultâneo, e a saída fica em Logs → Tarefas agendadas. Botão **Executar agora** para testar.

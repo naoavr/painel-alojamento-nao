@@ -311,7 +311,7 @@ cmd_dns_server_check(){ # saúde do servidor DNS
   chk(){ r=$(jq -c --arg id "$1" --arg n "$2" --arg s "$3" --arg m "$4" '. + [{id:$id, name:$n, status:$s, msg:$m}]' <<<"$r"); }
   if systemctl is-active --quiet nsd >/dev/null 2>&1; then chk svc "Serviço NSD" ok "A correr"; else chk svc "Serviço NSD" fail "Parado (botão Reiniciar)"; fi
   if out=$(nsd-checkconf /etc/nsd/nsd.conf 2>&1); then chk conf "Configuração" ok "Válida"; else chk conf "Configuração" fail "$(printf '%s' "$out" | tail -n 1 | cut -c1-160)"; fi
-  for ns in "$(dns_get NS1)" "$(dns_get NS2)"; do
+  for ns in $(dns_ns_list | grep -vxF -f <(dns_get SEC_NS "" | tr " " "\n" | grep .) 2>/dev/null || dns_ns_list); do   # só os nameservers deste servidor que estão em uso
     a=$(dig +short +time=3 +tries=1 A "$ns" @8.8.8.8 2>/dev/null | tail -n 1)
     if [ "$a" = "$ip" ]; then chk "ns:$ns" "$ns na Internet" ok "Aponta para $ip"
     elif [ -z "$a" ]; then chk "ns:$ns" "$ns na Internet" fail "Não existe na Internet: cria o registo A $ns → $ip na zona do domínio-mãe"

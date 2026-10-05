@@ -271,3 +271,62 @@ cmd_db_list(){
   return 0
 }
 
+# ---------- ficheiros entre sites (o painel tem um só utilizador; cada site continua isolado dos outros) ----------
+fm_rel_ok(){ # caminho relativo à raiz do site, sem fugas
+  local p=$1
+  [[ "$p" == /* ]] && return 1
+  [[ "/$p/" == */../* ]] && return 1
+  [[ "$p" =~ [[:cntrl:]] ]] && return 1
+  return 0
+}
+fm_freename(){ # pasta nome -> "nome (1).ext" livre
+  local d=$1 n=$2 b e i=1
+  if [[ "$n" == ?*.* && ! -d "$d/$n" ]]; then b=${n%.*}; e=".${n##*.}"; else b=$n; e=""; fi
+  while [ -e "$d/$b ($i)$e" ] || [ -L "$d/$b ($i)$e" ]; do i=$((i+1)); done
+  echo "$b ($i)$e"
+}
+cmd_fm_xfer(){ # origem destino pasta_origem pasta_destino copy|move overwrite|keep|skip item…
+  local src="${1:-}" dst="${2:-}" sdir="${3:-}" ddir="${4:-}" mode="${5:-}" conf="${6:-}"
+  [ $# -ge 7 ] || die "Uso: mpanel fm-xfer <origem> <destino> <pasta-origem> <pasta-destino> copy|move overwrite|keep|skip <item>…"
+  shift 6
+  valid_site "$src" && site_exists "$src" || die "O site '$src' não existe."
+  valid_site "$dst" && site_exists "$dst" || die "O site '$dst' não existe."
+  [ "$src" != "$dst" ] || die "Origem e destino são o mesmo site (usa Mover no próprio site)."
+  [[ "$mode" =~ ^(copy|move)$ ]] || die "Operação: copy ou move."
+  [[ "$conf" =~ ^(overwrite|keep|skip)$ ]] || die "Se já existir: overwrite, keep ou skip."
+  fm_rel_ok "$sdir" && fm_rel_ok "$ddir" || die "Caminho inválido."
+  local S D sd dd it f t tmp u="mp_$dst" ok=0 sk=0 need avail
+  S=$(realpath -e "$WWW_ROOT/$src") && D=$(realpath -e "$WWW_ROOT/$dst") || die "Pasta do site em falta."
+  sd=$(realpath -e "$S/$sdir" 2>/dev/null) || die "A pasta de origem não existe."
+  dd=$(realpath -e "$D/$ddir" 2>/dev/null) || die "A pasta de destino não existe."
+  [[ "$sd" == "$S" || "$sd" == "$S/"* ]] || die "A pasta de origem está fora do site $src."
+  [[ "$dd" == "$D" || "$dd" == "$D/"* ]] && [ -d "$dd" ] || die "A pasta de destino está fora do site $dst."
+  for it in "$@"; do [[ -n "$it" && "$it" != */* && "$it" != . && "$it" != .. && ! "$it" =~ [[:cntrl:]] ]] || die "Nome inválido: $it"; done
+  # espaço: a cópia é feita antes de apagar a origem (também ao mover)
+  need=$(cd "$sd" && du -sb -- "$@" 2>/dev/null | awk '{s += $1} END {print s + 0}')
+  avail=$(df -B1 --output=avail "$dd" | tail -n 1 | tr -d ' ')
+  [ "$need" -lt $(( avail - 104857600 )) ] || die "Espaço insuficiente no disco: são precisos $(( need / 1048576 )) MB e há $(( avail / 1048576 )) MB livres."
+  for it in "$@"; do
+    f="$sd/$it"
+    if [ -L "$f" ] || [ ! -e "$f" ]; then sk=$((sk+1)); continue; fi   # atalhos e itens que já não existem: ignorados
+    t="$dd/$it"
+    if [ -e "$t" ] || [ -L "$t" ]; then
+      case "$conf" in
+        skip) sk=$((sk+1)); continue ;;
+        keep) t="$dd/$(fm_freename "$dd" "$it")" ;;
+        overwrite) : ;;
+      esac
+    fi
+    tmp="$dd/.mp-copia-$$-$RANDOM"
+    if ! cp -a --no-preserve=ownership -- "$f" "$tmp"; then rm -rf -- "$tmp"; die "Falhou a cópia de '$it' (nada foi apagado na origem)."; fi
+    find "$tmp" -type l -delete 2>/dev/null                       # atalhos dentro das pastas: não passam para o outro site
+    chown -R "$u:$u" "$tmp"
+    find "$tmp" -type d -exec chmod 2750 {} + 2>/dev/null; find "$tmp" -type f -exec chmod 640 {} + 2>/dev/null
+    [ "$conf" = overwrite ] && { [ -e "$t" ] || [ -L "$t" ]; } && rm -rf -- "$t"
+    mv -T -- "$tmp" "$t" || { rm -rf -- "$tmp"; die "Falhou a colocação de '$it' no destino (nada foi apagado na origem)."; }
+    [ "$mode" = move ] && rm -rf -- "$f"
+    ok=$((ok+1))
+  done
+  echo "$([ "$mode" = move ] && echo Movidos || echo Copiados) $ok itens ($(( need / 1048576 )) MB) de $src:/$sdir para $dst:/$ddir$([ "$sk" -gt 0 ] && echo "; $sk ignorados (já existiam ou eram atalhos)")."
+  return 0
+}

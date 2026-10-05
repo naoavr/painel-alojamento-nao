@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.14.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.14.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: DNS secundário externo (Hurricane Electric ou outro): cópia das zonas com chave TSIG e aviso a cada alteração; resolve a regra do DNS.PT de IPs diferentes.
+# NOTAS: Ficheiros: copiar e mover entre sites; encaminhamento ao mudar o domínio do painel; acertos no DNS.
 # =============================================================================
-#  IDDigital Hosting v2.14.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.14.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.14.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.14.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.14.0"
+MP_VERSION="2.14.1"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443

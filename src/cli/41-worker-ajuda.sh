@@ -14,7 +14,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|fm-xfer|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -32,7 +32,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.14.0 (mpanel)
+IDDigital Hosting — CLI v2.14.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -76,6 +76,7 @@ Desempenho
   site-perf <site> [--cache 0|60|300|600|1800|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
   cache-purge <site>                   limpa a cache de página do site
   site-perf … [--redis on|off] [--redis-mem MB] [--static-days 0|7|30|365] [--webp on|off] [--webp-auto on|off]
+  fm-xfer <origem> <destino> <pasta> <pasta> copy|move overwrite|keep|skip <item>…   copiar/mover entre sites
   site-webp <site>                     converte as imagens JPG/PNG do site em WebP (imagem.jpg.webp)
   net-tune on|off                      afinação de rede (TCP BBR, filas maiores)
 

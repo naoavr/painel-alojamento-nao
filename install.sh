@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: DNS secundário externo (Hurricane Electric ou outro): cópia das zonas com chave TSIG e aviso a cada alteração; resolve a regra do DNS.PT de IPs diferentes.
+# NOTAS: Ficheiros: copiar e mover entre sites; encaminhamento ao mudar o domínio do painel; acertos no DNS.
 # =============================================================================
-#  IDDigital Hosting v2.14.0 — instalador (MiniPainel)
+#  IDDigital Hosting v2.14.1 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.14.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.14.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.14.0"
+MP_VERSION="2.14.1"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -735,6 +735,16 @@ Página **PHP**: versões instaladas, estado de cada serviço, sites por versão
 - **FileZilla com FTPS:** servidor = IP ou domínio, porta 21, "Requer FTP explícito sobre TLS", utilizador `loja`.
 - **FileZilla com SFTP:** protocolo SFTP, porta 22, utilizador `mp_loja`.
 - Servidor atrás de NAT: preenche o IP público em Definições → Serviços → FTP e reencaminha as portas 21 e 30000–30100.
+
+### Copiar e mover ficheiros entre sites
+
+Cada site está isolado dos outros, mas como administrador podes copiar ou mover ficheiros de um site para outro: em **Ficheiros**, seleciona os ficheiros ou pastas e escolhe **Copiar para outro site** ou **Mover para outro site** (também no menu ⋮ de cada item).
+
+- Escolhes o site e a pasta de destino (navegável) e o que fazer se já existir um item com o mesmo nome: manter os dois (`nome (1).ext`), não copiar, ou substituir.
+- Corre em segundo plano; no fim aparece a notificação com o número de itens e o tamanho.
+- No destino, os ficheiros ficam com o dono e as permissões do site de destino. Atalhos (symlinks) não são copiados.
+- Ao mover, a origem só é apagada depois de a cópia estar concluída.
+- Na consola: `mpanel fm-xfer loja novo public_html public_html copy keep imagens`.
 
 ### Tarefas agendadas (cron)
 
@@ -1501,7 +1511,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.14.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.14.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1509,7 +1519,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.14.0';
+const MP_VERSION = '2.14.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2478,6 +2488,12 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dns-g-certificados{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 @media (max-width:900px){.dns-arrow{display:none}}
 .dz-prio[hidden]{display:none!important}
+.dz-t td:nth-child(5),.dz-t td:nth-child(4){white-space:nowrap}
+.fmx-browse{border:1px solid var(--line);border-radius:12px;margin:-4px 0 14px;overflow:hidden}
+.fmx-path{padding:8px 12px;background:var(--line-2);font-size:12.5px}
+.fmx-list{max-height:240px;overflow:auto;padding:4px}
+.fmx-list button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--ink)}
+.fmx-list button:hover{background:var(--hover)}.fmx-list svg{width:16px;height:16px;flex:none}
 .dz-h{flex-wrap:wrap;gap:12px}
 .dz-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dz-act form{margin:0}
 .dd-lbl{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px 4px}
@@ -3428,6 +3444,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'dns_restart':
             job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
             break;
+        case 'fm_xfer':
+            $src = post('src'); $dst = post('dst'); $md = post('mode') === 'move' ? 'move' : 'copy'; $cf = post('conflict');
+            $sd = trim(post_raw('sdir'), '/'); $dd = trim(post_raw('ddir'), '/');
+            $its = json_decode(post_raw('items'), true);
+            if (!valid_site($src) || !valid_site($dst) || $src === $dst) { $bad('Sites inválidos.'); break; }
+            if (!in_array($cf, ['keep', 'skip', 'overwrite'], true)) { $bad('Opção inválida.'); break; }
+            $bp = function ($x) { return $x === '' || (strpos('/' . $x . '/', '/../') === false && !preg_match('/[\x00-\x1f]/', $x)); };
+            if (!$bp($sd) || !$bp($dd)) { $bad('Caminho inválido.'); break; }
+            if (!is_array($its) || !$its || count($its) > 500) { $bad('Nada selecionado.'); break; }
+            foreach ($its as $x) { if (!is_string($x) || $x === '' || $x === '.' || $x === '..' || strpos($x, '/') !== false || preg_match('/[\x00-\x1f]/', $x)) { $bad('Nome inválido.'); break 2; } }
+            job_submit('fm-xfer', array_merge([$src, $dst, $sd, $dd, $md, $cf], $its), ($md === 'move' ? 'Mover ' : 'Copiar ') . (count($its) === 1 ? '“' . $its[0] . '”' : count($its) . ' itens') . ' de ' . $src . ' para ' . $dst);
+            $back = ['site' => $src];
+            break;
         case 'dns_secondary':
             $op = post('op');
             if ($op === 'off') { job_submit('dns-secondary', ['--provider', 'off'], 'Desligar o DNS secundário'); $back = ['t' => 'servidor']; break; }
@@ -3511,6 +3540,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $pd = strtolower(post('domain'));
             if ($pd !== '' && !preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $pd)) { $bad('Domínio inválido.'); break; }
             job_submit('panel-domain', [$pd === '' ? 'none' : $pd, '--ssl', post('ssl') === 'self' ? 'self' : 'le'], 'Domínio do painel');
+            if ($pd !== '' && $pd !== strtolower(host_only())) {
+                // o nome atual deixa de abrir o painel: página de espera que encaminha para o endereço novo
+                $nu = 'https://' . $pd . '/'; $ipu = 'https://' . (string)($_SERVER['SERVER_ADDR'] ?? '') . ':' . (int)(((jload(MP_STATE) ?? [])['system']['panel_port'] ?? null) ?: 2443) . '/';
+                header('Content-Type: text/html; charset=utf-8');
+                echo '<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A mudar o domínio do painel</title>'
+                   . '<style>body{font-family:system-ui,sans-serif;background:#eef2f6;color:#14202e;display:grid;place-items:center;min-height:100vh;margin:0}main{background:#fff;border-radius:18px;padding:32px 36px;max-width:560px;box-shadow:0 10px 30px rgba(0,0,0,.08)}h1{font-size:20px;margin:0 0 10px}p{line-height:1.6;margin:8px 0}a.b{display:inline-block;margin-top:10px;padding:10px 16px;border-radius:10px;background:#1f5d8c;color:#fff;text-decoration:none;font-weight:600}code{background:#eef2f6;padding:2px 6px;border-radius:6px}</style></head><body><main>'
+                   . '<h1>O painel vai passar a abrir em <code>' . h($pd) . '</code></h1>'
+                   . '<p>Está a ser configurado o domínio e o certificado (até cerca de 1 minuto). Este endereço deixa de abrir o painel.</p>'
+                   . '<p>Vais ser encaminhado sozinho em <b id="s">60</b> s.</p>'
+                   . '<a class="b" href="' . h($nu) . '">Abrir já ' . h($nu) . '</a>'
+                   . '<p style="font-size:13px;color:#5b6b7c">Se o novo endereço não abrir (DNS ainda por propagar ou certificado por emitir), o painel continua sempre disponível em <a href="' . h($ipu) . '">' . h($ipu) . '</a>.</p>'
+                   . '<script>var n=60,e=document.getElementById("s");setInterval(function(){n--;if(n<=0){location.href=' . json_encode($nu) . ';}else e.textContent=n;},1000);</script>'
+                   . '</main></body></html>';
+                exit;
+            }
             break;
 
         case 'bk_now':
@@ -4304,6 +4348,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="fm-selbar" id="fm-selbar" hidden>
           <span id="fm-selcount"></span><span class="grow"></span>
           <button class="btn sm sec" type="button" data-fm="move"><?= ic('move') ?>Mover</button>
+          <?php if ($fmSite !== '_email' && count($names) > 1): ?><button class="btn sm sec" type="button" data-fm="xcopy"><?= ic('upload') ?>Copiar para outro site</button><button class="btn sm sec" type="button" data-fm="xmove"><?= ic('move') ?>Mover para outro site</button><?php endif; ?>
           <button class="btn sm sec" type="button" data-fm="zip"><?= ic('zip') ?>Compactar</button>
           <button class="btn sm sec" type="button" data-fm="chmod"><?= ic('lock') ?>Permissões</button>
           <button class="btn sm dan" type="button" data-fm="delete"><?= ic('trash') ?>Apagar</button>
@@ -5721,7 +5766,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php if (!empty($propAll[$zn]['ts'])): ?><span class="mu" style="margin-left:auto">Propagação verificada <?= h(gmdate('d/m H:i', (int)$propAll[$zn]['ts'] + tz_off(live_stats()))) ?></span><?php endif; ?>
         </div>
         <table class="list dz-t">
-          <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:80px"><col style="width:120px"><col style="width:150px"></colgroup>
+          <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:90px"><col style="width:120px"><col style="width:150px"></colgroup>
           <thead><tr><th>Tipo</th><th>Nome</th><th>Conteúdo</th><th>Prioridade</th><th>TTL</th><th>Propagação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody id="dz-rows">
             <?php foreach ($nsl as $nsx): ?>
@@ -7000,6 +7045,23 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 </script>
 <?php endif; ?>
 <?php if ($page === 'ficheiros' && !empty($fmSite)): ?>
+<?php $fmOthers = array_values(array_filter($names, function ($x) use ($fmSite) { return $x !== $fmSite; })); if ($fmSite !== '_email' && $fmOthers): ?>
+      <dialog class="drawer" id="dlg-fmx"><form method="post" id="fmx-form">
+        <?= act_fields('fm_xfer', ['src' => $fmSite]) ?><input type="hidden" name="mode" value="copy"><input type="hidden" name="sdir" value=""><input type="hidden" name="items" value="[]">
+        <div class="dlg-h"><div><h3 data-fmx-title>Copiar para outro site</h3><p class="mu" data-fmx-what></p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b">
+          <label class="fld">Site de destino<select class="in" name="dst" data-fmx-site><?php foreach ($fmOthers as $o): ?><option><?= h($o) ?></option><?php endforeach; ?></select></label>
+          <label class="fld">Pasta de destino<input class="in mono" name="ddir" value="public_html" required data-fmx-dir><small>A partir da raiz do site. Escolhe abaixo ou escreve o caminho.</small></label>
+          <div class="fmx-browse"><div class="fmx-path mono" data-fmx-path></div><div class="fmx-list" data-fmx-list></div></div>
+          <label class="fld">Se já existir um item com o mesmo nome<select class="in" name="conflict">
+            <option value="keep">Manter os dois (o novo fica com " (1)" no nome)</option>
+            <option value="skip">Não copiar esse item</option>
+            <option value="overwrite">Substituir o que existe no destino</option></select></label>
+          <p class="mu" data-fmx-note>No destino, os ficheiros ficam com o dono e as permissões do site de destino. Atalhos (symlinks) não são copiados.</p>
+        </div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit" data-fmx-go>Copiar</button></div>
+      </form></dialog>
+      <?php endif; ?>
 <script>
 (function () {
   var root = document.getElementById('fm'); if (!root) return;
@@ -7123,6 +7185,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     if (name === 'rename') {
       return ask('Mudar o nome', null, one, 'Mudar nome').then(function (v) { if (!v || v === one) return; return api('rename', { p: p, from: one, to: v }).then(done('Nome alterado.')); }).catch(fail);
     }
+    if (name === 'xcopy' || name === 'xmove') { openX(name === 'xmove', items, p, label); return; }
     if (name === 'move') {
       return ask('Mover ' + label, 'Pasta de destino, a partir da raiz do site (ex.: public_html/img). Vazio = raiz do site.', p, 'Mover').then(function (v) {
         if (v === null) return; return api('move', { p: p, items: items, to: v }).then(done('Movido para /' + v + '.'));
@@ -7153,6 +7216,34 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     }
   }
 
+  /* ---------- copiar / mover para outro site ---------- */
+  var dx = $('dlg-fmx');
+  function openX(move, items, p, label) {
+    if (!dx) return;
+    var f = $('fmx-form');
+    f.mode.value = move ? 'move' : 'copy'; f.sdir.value = p; f.items.value = JSON.stringify(items);
+    dx.querySelector('[data-fmx-title]').textContent = (move ? 'Mover ' : 'Copiar ') + label + ' para outro site';
+    dx.querySelector('[data-fmx-what]').textContent = 'Origem: ' + LABEL + ' /' + (p || '');
+    dx.querySelector('[data-fmx-go]').textContent = move ? 'Mover' : 'Copiar';
+    dx.querySelector('[data-fmx-note]').textContent = 'No destino, os ficheiros ficam com o dono e as permissões do site de destino. Atalhos (symlinks) não são copiados.' + (move ? ' A origem só é apagada depois de a cópia estar concluída.' : '');
+    browseX('public_html'); dx.showModal();
+  }
+  function browseX(path) {
+    var f = $('fmx-form'), site = f.dst.value, list = dx.querySelector('[data-fmx-list]');
+    f.ddir.value = path; dx.querySelector('[data-fmx-path]').textContent = site + ' /' + path;
+    list.innerHTML = '<div class="mu" style="padding:8px">A carregar…</div>';
+    api('list', null, 'p=' + enc(path), site).then(must).then(function (j) {
+      var dirs = (j.items || []).filter(function (it) { return it.d && !it.l; }), h = '';
+      if (path) h += '<button type="button" data-fmx-to="' + esc(path.split('/').slice(0, -1).join('/')) + '">' + IC.up + '..</button>';
+      dirs.forEach(function (it) { h += '<button type="button" data-fmx-to="' + esc(join(path, it.n)) + '">' + IC.dir + esc(it.n) + '</button>'; });
+      list.innerHTML = h || '<div class="mu" style="padding:8px">Sem subpastas.</div>';
+    }).catch(function (e) { list.innerHTML = '<div class="mu" style="padding:8px"></div>'; list.firstChild.textContent = e.message; });
+  }
+  if (dx) {
+    dx.addEventListener('click', function (e) { var b = e.target.closest('[data-fmx-to]'); if (b) browseX(b.getAttribute('data-fmx-to')); });
+    $('fmx-form').dst.addEventListener('change', function () { browseX('public_html'); });
+  }
+
   /* ---------- menu de cada item ---------- */
   var menu = $('fm-menu');
   function hideMenu() { menu.hidden = true; }
@@ -7161,7 +7252,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     if (it.d) o.push(['open', IC.open, 'Abrir']); else o.push(['dl', IC.dl, 'Descarregar']);
     if (!NOEDIT && !it.d && (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n))) o.push(['edit', IC.edit, 'Editar']);
     if (ARCH.test(it.n)) { o.push(['extract', IC.zipb, 'Extrair aqui']); o.push(['extractto', IC.zipb, 'Extrair para pasta…']); }
-    o.push(['rename', IC.ren, 'Mudar o nome'], ['move', IC.move, 'Mover…'], ['zip', IC.zipb, 'Compactar em ZIP'], ['chmod', IC.perm, 'Permissões'], ['-'], ['delete', IC.del, 'Apagar']);
+    o.push(['rename', IC.ren, 'Mudar o nome'], ['move', IC.move, 'Mover…']);
+    if (document.getElementById('dlg-fmx')) o.push(['xcopy', IC.move, 'Copiar para outro site…'], ['xmove', IC.move, 'Mover para outro site…']);
+    o.push(['zip', IC.zipb, 'Compactar em ZIP'], ['chmod', IC.perm, 'Permissões'], ['-'], ['delete', IC.del, 'Apagar']);
     menu.innerHTML = o.map(function (x) { return x[0] === '-' ? '<hr>' : '<button type="button" data-m="' + x[0] + '"' + (x[0] === 'delete' ? ' class="dan"' : '') + '>' + x[1] + x[2] + '</button>'; }).join('');
     menu.hidden = false;
     var r = btn.getBoundingClientRect(), mh = menu.offsetHeight, mw = menu.offsetWidth;
@@ -9663,7 +9756,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.14.0 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.14.1 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -10103,12 +10196,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.14.0
+#  mpanel — IDDigital Hosting CLI v2.14.1
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.14.0"
+MP_VERSION="2.14.1"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -10714,6 +10807,65 @@ cmd_db_list(){
   return 0
 }
 
+# ---------- ficheiros entre sites (o painel tem um só utilizador; cada site continua isolado dos outros) ----------
+fm_rel_ok(){ # caminho relativo à raiz do site, sem fugas
+  local p=$1
+  [[ "$p" == /* ]] && return 1
+  [[ "/$p/" == */../* ]] && return 1
+  [[ "$p" =~ [[:cntrl:]] ]] && return 1
+  return 0
+}
+fm_freename(){ # pasta nome -> "nome (1).ext" livre
+  local d=$1 n=$2 b e i=1
+  if [[ "$n" == ?*.* && ! -d "$d/$n" ]]; then b=${n%.*}; e=".${n##*.}"; else b=$n; e=""; fi
+  while [ -e "$d/$b ($i)$e" ] || [ -L "$d/$b ($i)$e" ]; do i=$((i+1)); done
+  echo "$b ($i)$e"
+}
+cmd_fm_xfer(){ # origem destino pasta_origem pasta_destino copy|move overwrite|keep|skip item…
+  local src="${1:-}" dst="${2:-}" sdir="${3:-}" ddir="${4:-}" mode="${5:-}" conf="${6:-}"
+  [ $# -ge 7 ] || die "Uso: mpanel fm-xfer <origem> <destino> <pasta-origem> <pasta-destino> copy|move overwrite|keep|skip <item>…"
+  shift 6
+  valid_site "$src" && site_exists "$src" || die "O site '$src' não existe."
+  valid_site "$dst" && site_exists "$dst" || die "O site '$dst' não existe."
+  [ "$src" != "$dst" ] || die "Origem e destino são o mesmo site (usa Mover no próprio site)."
+  [[ "$mode" =~ ^(copy|move)$ ]] || die "Operação: copy ou move."
+  [[ "$conf" =~ ^(overwrite|keep|skip)$ ]] || die "Se já existir: overwrite, keep ou skip."
+  fm_rel_ok "$sdir" && fm_rel_ok "$ddir" || die "Caminho inválido."
+  local S D sd dd it f t tmp u="mp_$dst" ok=0 sk=0 need avail
+  S=$(realpath -e "$WWW_ROOT/$src") && D=$(realpath -e "$WWW_ROOT/$dst") || die "Pasta do site em falta."
+  sd=$(realpath -e "$S/$sdir" 2>/dev/null) || die "A pasta de origem não existe."
+  dd=$(realpath -e "$D/$ddir" 2>/dev/null) || die "A pasta de destino não existe."
+  [[ "$sd" == "$S" || "$sd" == "$S/"* ]] || die "A pasta de origem está fora do site $src."
+  [[ "$dd" == "$D" || "$dd" == "$D/"* ]] && [ -d "$dd" ] || die "A pasta de destino está fora do site $dst."
+  for it in "$@"; do [[ -n "$it" && "$it" != */* && "$it" != . && "$it" != .. && ! "$it" =~ [[:cntrl:]] ]] || die "Nome inválido: $it"; done
+  # espaço: a cópia é feita antes de apagar a origem (também ao mover)
+  need=$(cd "$sd" && du -sb -- "$@" 2>/dev/null | awk '{s += $1} END {print s + 0}')
+  avail=$(df -B1 --output=avail "$dd" | tail -n 1 | tr -d ' ')
+  [ "$need" -lt $(( avail - 104857600 )) ] || die "Espaço insuficiente no disco: são precisos $(( need / 1048576 )) MB e há $(( avail / 1048576 )) MB livres."
+  for it in "$@"; do
+    f="$sd/$it"
+    if [ -L "$f" ] || [ ! -e "$f" ]; then sk=$((sk+1)); continue; fi   # atalhos e itens que já não existem: ignorados
+    t="$dd/$it"
+    if [ -e "$t" ] || [ -L "$t" ]; then
+      case "$conf" in
+        skip) sk=$((sk+1)); continue ;;
+        keep) t="$dd/$(fm_freename "$dd" "$it")" ;;
+        overwrite) : ;;
+      esac
+    fi
+    tmp="$dd/.mp-copia-$$-$RANDOM"
+    if ! cp -a --no-preserve=ownership -- "$f" "$tmp"; then rm -rf -- "$tmp"; die "Falhou a cópia de '$it' (nada foi apagado na origem)."; fi
+    find "$tmp" -type l -delete 2>/dev/null                       # atalhos dentro das pastas: não passam para o outro site
+    chown -R "$u:$u" "$tmp"
+    find "$tmp" -type d -exec chmod 2750 {} + 2>/dev/null; find "$tmp" -type f -exec chmod 640 {} + 2>/dev/null
+    [ "$conf" = overwrite ] && { [ -e "$t" ] || [ -L "$t" ]; } && rm -rf -- "$t"
+    mv -T -- "$tmp" "$t" || { rm -rf -- "$tmp"; die "Falhou a colocação de '$it' no destino (nada foi apagado na origem)."; }
+    [ "$mode" = move ] && rm -rf -- "$f"
+    ok=$((ok+1))
+  done
+  echo "$([ "$mode" = move ] && echo Movidos || echo Copiados) $ok itens ($(( need / 1048576 )) MB) de $src:/$sdir para $dst:/$ddir$([ "$sk" -gt 0 ] && echo "; $sk ignorados (já existiam ou eram atalhos)")."
+  return 0
+}
 cmd_db_add(){
   local n="${1:-}" pw="" dsite=""
   [ $# -gt 0 ] && shift
@@ -14024,7 +14176,7 @@ cmd_dns_server_check(){ # saúde do servidor DNS
   chk(){ r=$(jq -c --arg id "$1" --arg n "$2" --arg s "$3" --arg m "$4" '. + [{id:$id, name:$n, status:$s, msg:$m}]' <<<"$r"); }
   if systemctl is-active --quiet nsd >/dev/null 2>&1; then chk svc "Serviço NSD" ok "A correr"; else chk svc "Serviço NSD" fail "Parado (botão Reiniciar)"; fi
   if out=$(nsd-checkconf /etc/nsd/nsd.conf 2>&1); then chk conf "Configuração" ok "Válida"; else chk conf "Configuração" fail "$(printf '%s' "$out" | tail -n 1 | cut -c1-160)"; fi
-  for ns in "$(dns_get NS1)" "$(dns_get NS2)"; do
+  for ns in $(dns_ns_list | grep -vxF -f <(dns_get SEC_NS "" | tr " " "\n" | grep .) 2>/dev/null || dns_ns_list); do   # só os nameservers deste servidor que estão em uso
     a=$(dig +short +time=3 +tries=1 A "$ns" @8.8.8.8 2>/dev/null | tail -n 1)
     if [ "$a" = "$ip" ]; then chk "ns:$ns" "$ns na Internet" ok "Aponta para $ip"
     elif [ -z "$a" ]; then chk "ns:$ns" "$ns na Internet" fail "Não existe na Internet: cria o registo A $ns → $ip na zona do domínio-mãe"
@@ -15136,7 +15288,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|fm-xfer|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -15154,7 +15306,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.14.0 (mpanel)
+IDDigital Hosting — CLI v2.14.1 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -15198,6 +15350,7 @@ Desempenho
   site-perf <site> [--cache 0|60|300|600|1800|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
   cache-purge <site>                   limpa a cache de página do site
   site-perf … [--redis on|off] [--redis-mem MB] [--static-days 0|7|30|365] [--webp on|off] [--webp-auto on|off]
+  fm-xfer <origem> <destino> <pasta> <pasta> copy|move overwrite|keep|skip <item>…   copiar/mover entre sites
   site-webp <site>                     converte as imagens JPG/PNG do site em WebP (imagem.jpg.webp)
   net-tune on|off                      afinação de rede (TCP BBR, filas maiores)
 
@@ -15423,6 +15576,7 @@ dispatch(){
     dns-restart)       cmd_dns_restart ;;
     dns-server-check)  cmd_dns_server_check ;;
     dns-secondary)     cmd_dns_secondary "$@" ;;
+    fm-xfer)           cmd_fm_xfer "$@" ;;
     site-webp)         cmd_site_webp "$@" ;;
     webp-nightly)      cmd_webp_nightly ;;
     net-tune)          cmd_net_tune "$@" ;;
@@ -15534,7 +15688,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.14.0
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.14.1
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -16082,7 +16236,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.14.0
+#  mp-sendmail — IDDigital Hosting v2.14.1
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -16154,7 +16308,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.14.0
+#  mpanel-term — IDDigital Hosting v2.14.1
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -16179,7 +16333,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.14.0
+#  mpanel-cron — IDDigital Hosting v2.14.1
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.

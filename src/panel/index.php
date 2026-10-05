@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.14.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.14.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.14.0';
+const MP_VERSION = '2.14.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -977,6 +977,12 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dns-g-certificados{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 @media (max-width:900px){.dns-arrow{display:none}}
 .dz-prio[hidden]{display:none!important}
+.dz-t td:nth-child(5),.dz-t td:nth-child(4){white-space:nowrap}
+.fmx-browse{border:1px solid var(--line);border-radius:12px;margin:-4px 0 14px;overflow:hidden}
+.fmx-path{padding:8px 12px;background:var(--line-2);font-size:12.5px}
+.fmx-list{max-height:240px;overflow:auto;padding:4px}
+.fmx-list button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:8px;cursor:pointer;color:var(--ink)}
+.fmx-list button:hover{background:var(--hover)}.fmx-list svg{width:16px;height:16px;flex:none}
 .dz-h{flex-wrap:wrap;gap:12px}
 .dz-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dz-act form{margin:0}
 .dd-lbl{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px 4px}
@@ -1927,6 +1933,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         case 'dns_restart':
             job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
             break;
+        case 'fm_xfer':
+            $src = post('src'); $dst = post('dst'); $md = post('mode') === 'move' ? 'move' : 'copy'; $cf = post('conflict');
+            $sd = trim(post_raw('sdir'), '/'); $dd = trim(post_raw('ddir'), '/');
+            $its = json_decode(post_raw('items'), true);
+            if (!valid_site($src) || !valid_site($dst) || $src === $dst) { $bad('Sites inválidos.'); break; }
+            if (!in_array($cf, ['keep', 'skip', 'overwrite'], true)) { $bad('Opção inválida.'); break; }
+            $bp = function ($x) { return $x === '' || (strpos('/' . $x . '/', '/../') === false && !preg_match('/[\x00-\x1f]/', $x)); };
+            if (!$bp($sd) || !$bp($dd)) { $bad('Caminho inválido.'); break; }
+            if (!is_array($its) || !$its || count($its) > 500) { $bad('Nada selecionado.'); break; }
+            foreach ($its as $x) { if (!is_string($x) || $x === '' || $x === '.' || $x === '..' || strpos($x, '/') !== false || preg_match('/[\x00-\x1f]/', $x)) { $bad('Nome inválido.'); break 2; } }
+            job_submit('fm-xfer', array_merge([$src, $dst, $sd, $dd, $md, $cf], $its), ($md === 'move' ? 'Mover ' : 'Copiar ') . (count($its) === 1 ? '“' . $its[0] . '”' : count($its) . ' itens') . ' de ' . $src . ' para ' . $dst);
+            $back = ['site' => $src];
+            break;
         case 'dns_secondary':
             $op = post('op');
             if ($op === 'off') { job_submit('dns-secondary', ['--provider', 'off'], 'Desligar o DNS secundário'); $back = ['t' => 'servidor']; break; }
@@ -2010,6 +2029,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $pd = strtolower(post('domain'));
             if ($pd !== '' && !preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/', $pd)) { $bad('Domínio inválido.'); break; }
             job_submit('panel-domain', [$pd === '' ? 'none' : $pd, '--ssl', post('ssl') === 'self' ? 'self' : 'le'], 'Domínio do painel');
+            if ($pd !== '' && $pd !== strtolower(host_only())) {
+                // o nome atual deixa de abrir o painel: página de espera que encaminha para o endereço novo
+                $nu = 'https://' . $pd . '/'; $ipu = 'https://' . (string)($_SERVER['SERVER_ADDR'] ?? '') . ':' . (int)(((jload(MP_STATE) ?? [])['system']['panel_port'] ?? null) ?: 2443) . '/';
+                header('Content-Type: text/html; charset=utf-8');
+                echo '<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A mudar o domínio do painel</title>'
+                   . '<style>body{font-family:system-ui,sans-serif;background:#eef2f6;color:#14202e;display:grid;place-items:center;min-height:100vh;margin:0}main{background:#fff;border-radius:18px;padding:32px 36px;max-width:560px;box-shadow:0 10px 30px rgba(0,0,0,.08)}h1{font-size:20px;margin:0 0 10px}p{line-height:1.6;margin:8px 0}a.b{display:inline-block;margin-top:10px;padding:10px 16px;border-radius:10px;background:#1f5d8c;color:#fff;text-decoration:none;font-weight:600}code{background:#eef2f6;padding:2px 6px;border-radius:6px}</style></head><body><main>'
+                   . '<h1>O painel vai passar a abrir em <code>' . h($pd) . '</code></h1>'
+                   . '<p>Está a ser configurado o domínio e o certificado (até cerca de 1 minuto). Este endereço deixa de abrir o painel.</p>'
+                   . '<p>Vais ser encaminhado sozinho em <b id="s">60</b> s.</p>'
+                   . '<a class="b" href="' . h($nu) . '">Abrir já ' . h($nu) . '</a>'
+                   . '<p style="font-size:13px;color:#5b6b7c">Se o novo endereço não abrir (DNS ainda por propagar ou certificado por emitir), o painel continua sempre disponível em <a href="' . h($ipu) . '">' . h($ipu) . '</a>.</p>'
+                   . '<script>var n=60,e=document.getElementById("s");setInterval(function(){n--;if(n<=0){location.href=' . json_encode($nu) . ';}else e.textContent=n;},1000);</script>'
+                   . '</main></body></html>';
+                exit;
+            }
             break;
 
         case 'bk_now':
@@ -2803,6 +2837,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="fm-selbar" id="fm-selbar" hidden>
           <span id="fm-selcount"></span><span class="grow"></span>
           <button class="btn sm sec" type="button" data-fm="move"><?= ic('move') ?>Mover</button>
+          <?php if ($fmSite !== '_email' && count($names) > 1): ?><button class="btn sm sec" type="button" data-fm="xcopy"><?= ic('upload') ?>Copiar para outro site</button><button class="btn sm sec" type="button" data-fm="xmove"><?= ic('move') ?>Mover para outro site</button><?php endif; ?>
           <button class="btn sm sec" type="button" data-fm="zip"><?= ic('zip') ?>Compactar</button>
           <button class="btn sm sec" type="button" data-fm="chmod"><?= ic('lock') ?>Permissões</button>
           <button class="btn sm dan" type="button" data-fm="delete"><?= ic('trash') ?>Apagar</button>
@@ -4220,7 +4255,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
           <?php if (!empty($propAll[$zn]['ts'])): ?><span class="mu" style="margin-left:auto">Propagação verificada <?= h(gmdate('d/m H:i', (int)$propAll[$zn]['ts'] + tz_off(live_stats()))) ?></span><?php endif; ?>
         </div>
         <table class="list dz-t">
-          <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:80px"><col style="width:120px"><col style="width:150px"></colgroup>
+          <colgroup><col style="width:90px"><col style="width:26%"><col><col style="width:90px"><col style="width:90px"><col style="width:120px"><col style="width:150px"></colgroup>
           <thead><tr><th>Tipo</th><th>Nome</th><th>Conteúdo</th><th>Prioridade</th><th>TTL</th><th>Propagação</th><th class="r"><span class="sr-only">Ações</span></th></tr></thead>
           <tbody id="dz-rows">
             <?php foreach ($nsl as $nsx): ?>
@@ -5499,6 +5534,23 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 </script>
 <?php endif; ?>
 <?php if ($page === 'ficheiros' && !empty($fmSite)): ?>
+<?php $fmOthers = array_values(array_filter($names, function ($x) use ($fmSite) { return $x !== $fmSite; })); if ($fmSite !== '_email' && $fmOthers): ?>
+      <dialog class="drawer" id="dlg-fmx"><form method="post" id="fmx-form">
+        <?= act_fields('fm_xfer', ['src' => $fmSite]) ?><input type="hidden" name="mode" value="copy"><input type="hidden" name="sdir" value=""><input type="hidden" name="items" value="[]">
+        <div class="dlg-h"><div><h3 data-fmx-title>Copiar para outro site</h3><p class="mu" data-fmx-what></p></div><button class="iconbtn" type="button" data-close aria-label="Fechar"><?= ic('x') ?></button></div>
+        <div class="dlg-b">
+          <label class="fld">Site de destino<select class="in" name="dst" data-fmx-site><?php foreach ($fmOthers as $o): ?><option><?= h($o) ?></option><?php endforeach; ?></select></label>
+          <label class="fld">Pasta de destino<input class="in mono" name="ddir" value="public_html" required data-fmx-dir><small>A partir da raiz do site. Escolhe abaixo ou escreve o caminho.</small></label>
+          <div class="fmx-browse"><div class="fmx-path mono" data-fmx-path></div><div class="fmx-list" data-fmx-list></div></div>
+          <label class="fld">Se já existir um item com o mesmo nome<select class="in" name="conflict">
+            <option value="keep">Manter os dois (o novo fica com " (1)" no nome)</option>
+            <option value="skip">Não copiar esse item</option>
+            <option value="overwrite">Substituir o que existe no destino</option></select></label>
+          <p class="mu" data-fmx-note>No destino, os ficheiros ficam com o dono e as permissões do site de destino. Atalhos (symlinks) não são copiados.</p>
+        </div>
+        <div class="dlg-f"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit" data-fmx-go>Copiar</button></div>
+      </form></dialog>
+      <?php endif; ?>
 <script>
 (function () {
   var root = document.getElementById('fm'); if (!root) return;
@@ -5622,6 +5674,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     if (name === 'rename') {
       return ask('Mudar o nome', null, one, 'Mudar nome').then(function (v) { if (!v || v === one) return; return api('rename', { p: p, from: one, to: v }).then(done('Nome alterado.')); }).catch(fail);
     }
+    if (name === 'xcopy' || name === 'xmove') { openX(name === 'xmove', items, p, label); return; }
     if (name === 'move') {
       return ask('Mover ' + label, 'Pasta de destino, a partir da raiz do site (ex.: public_html/img). Vazio = raiz do site.', p, 'Mover').then(function (v) {
         if (v === null) return; return api('move', { p: p, items: items, to: v }).then(done('Movido para /' + v + '.'));
@@ -5652,6 +5705,34 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     }
   }
 
+  /* ---------- copiar / mover para outro site ---------- */
+  var dx = $('dlg-fmx');
+  function openX(move, items, p, label) {
+    if (!dx) return;
+    var f = $('fmx-form');
+    f.mode.value = move ? 'move' : 'copy'; f.sdir.value = p; f.items.value = JSON.stringify(items);
+    dx.querySelector('[data-fmx-title]').textContent = (move ? 'Mover ' : 'Copiar ') + label + ' para outro site';
+    dx.querySelector('[data-fmx-what]').textContent = 'Origem: ' + LABEL + ' /' + (p || '');
+    dx.querySelector('[data-fmx-go]').textContent = move ? 'Mover' : 'Copiar';
+    dx.querySelector('[data-fmx-note]').textContent = 'No destino, os ficheiros ficam com o dono e as permissões do site de destino. Atalhos (symlinks) não são copiados.' + (move ? ' A origem só é apagada depois de a cópia estar concluída.' : '');
+    browseX('public_html'); dx.showModal();
+  }
+  function browseX(path) {
+    var f = $('fmx-form'), site = f.dst.value, list = dx.querySelector('[data-fmx-list]');
+    f.ddir.value = path; dx.querySelector('[data-fmx-path]').textContent = site + ' /' + path;
+    list.innerHTML = '<div class="mu" style="padding:8px">A carregar…</div>';
+    api('list', null, 'p=' + enc(path), site).then(must).then(function (j) {
+      var dirs = (j.items || []).filter(function (it) { return it.d && !it.l; }), h = '';
+      if (path) h += '<button type="button" data-fmx-to="' + esc(path.split('/').slice(0, -1).join('/')) + '">' + IC.up + '..</button>';
+      dirs.forEach(function (it) { h += '<button type="button" data-fmx-to="' + esc(join(path, it.n)) + '">' + IC.dir + esc(it.n) + '</button>'; });
+      list.innerHTML = h || '<div class="mu" style="padding:8px">Sem subpastas.</div>';
+    }).catch(function (e) { list.innerHTML = '<div class="mu" style="padding:8px"></div>'; list.firstChild.textContent = e.message; });
+  }
+  if (dx) {
+    dx.addEventListener('click', function (e) { var b = e.target.closest('[data-fmx-to]'); if (b) browseX(b.getAttribute('data-fmx-to')); });
+    $('fmx-form').dst.addEventListener('change', function () { browseX('public_html'); });
+  }
+
   /* ---------- menu de cada item ---------- */
   var menu = $('fm-menu');
   function hideMenu() { menu.hidden = true; }
@@ -5660,7 +5741,9 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
     if (it.d) o.push(['open', IC.open, 'Abrir']); else o.push(['dl', IC.dl, 'Descarregar']);
     if (!NOEDIT && !it.d && (EDIT.test(it.n) || it.s < 2097152 && !ARCH.test(it.n))) o.push(['edit', IC.edit, 'Editar']);
     if (ARCH.test(it.n)) { o.push(['extract', IC.zipb, 'Extrair aqui']); o.push(['extractto', IC.zipb, 'Extrair para pasta…']); }
-    o.push(['rename', IC.ren, 'Mudar o nome'], ['move', IC.move, 'Mover…'], ['zip', IC.zipb, 'Compactar em ZIP'], ['chmod', IC.perm, 'Permissões'], ['-'], ['delete', IC.del, 'Apagar']);
+    o.push(['rename', IC.ren, 'Mudar o nome'], ['move', IC.move, 'Mover…']);
+    if (document.getElementById('dlg-fmx')) o.push(['xcopy', IC.move, 'Copiar para outro site…'], ['xmove', IC.move, 'Mover para outro site…']);
+    o.push(['zip', IC.zipb, 'Compactar em ZIP'], ['chmod', IC.perm, 'Permissões'], ['-'], ['delete', IC.del, 'Apagar']);
     menu.innerHTML = o.map(function (x) { return x[0] === '-' ? '<hr>' : '<button type="button" data-m="' + x[0] + '"' + (x[0] === 'delete' ? ' class="dan"' : '') + '>' + x[1] + x[2] + '</button>'; }).join('');
     menu.hidden = false;
     var r = btn.getBoundingClientRect(), mh = menu.offsetHeight, mw = menu.offsetWidth;

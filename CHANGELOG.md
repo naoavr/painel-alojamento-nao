@@ -1,5 +1,10 @@
 # Registo de alterações
 
+## 2.14.1
+- Ficheiros: copiar e mover entre sites (barra de seleção e menu de cada item), com escolha do site e da pasta de destino e do que fazer com nomes repetidos; dono e permissões do site de destino; atalhos não copiados; mover só apaga a origem depois da cópia.
+- Domínio do painel: ao mudar para outro nome, página de espera que encaminha para o endereço novo (e indica o endereço de recurso por IP).
+- DNS: coluna TTL sem partir o "Auto"; "Verificar agora" só testa os nameservers deste servidor que estão em uso.
+
 ## 2.14.0
 - DNS secundário externo (Servidor DNS): Hurricane Electric pré-configurada ou outro serviço. Cópia das zonas autorizada só aos servidores do serviço, protegida com chave TSIG; aviso (NOTIFY) a cada alteração, sempre a partir do IP público; os nameservers do serviço entram nos registos NS de todas as zonas.
 - O painel mostra os dados exatos a preencher no serviço ("Add a new slave") e os nameservers a pôr no registador; "Verificar agora" confirma, zona a zona, que a cópia está em dia.
