@@ -152,6 +152,7 @@ Sites → **Novo site**: nome (letras minúsculas, números e hífens, ex.: `loj
 - Pasta pública: `/srv/www/loja/public_html` (é aqui que se põem os ficheiros do site).
 - Também ficam `/srv/www/loja/logs` (erros do PHP, tarefas) e `/srv/www/loja/tmp`.
 - O site abre logo em `http://IP:porta` (ex.: `:8001`).
+- Até carregares os ficheiros, o site mostra a página **"Brevemente"** (com o logótipo da IDDigital e o domínio do visitante, sem informação técnica). Substitui o `index.html` pelos ficheiros do site.
 
 ### Domínios e SSL
 
@@ -285,6 +286,20 @@ Registos típicos (o painel mostra os valores exatos, incluindo a chave DKIM):
 Só pode haver **um** registo SPF por domínio. O **PTR** do IP pede-se ao fornecedor do IP; sem ele, Gmail e Outlook mandam as mensagens para o spam.
 
 Antes de mudar o MX de um domínio que já tem email noutro servidor, cria as caixas aqui e migra as mensagens antigas.
+
+### Migrar email de outro servidor (Email → Importar)
+
+Copia as mensagens e as pastas de caixas noutro servidor (cPanel, ISPmanager, Plesk, Gmail com password de aplicação…) para este servidor, por IMAP. Mantém as pastas, as datas e o estado lida/não lida, e pode repetir-se sem duplicar mensagens.
+
+1. **Cria o domínio** em Email → Domínios e caixas (as caixas podem ser criadas pela importação, com a mesma password da origem).
+2. **Email → Importar → Importar uma caixa:** servidor de origem (ex.: `mail.servidorantigo.pt`), segurança (normalmente SSL/TLS · 993), utilizador e password da origem, caixa de destino. Carrega primeiro em **Testar ligação**: mostra as pastas, as mensagens e o tamanho, e avisa se as pastas estão dentro de INBOX (cPanel/Courier — ativa então essa opção em Opções avançadas).
+3. **Importar.** Corre em segundo plano; a lista "Importações" mostra o estado de cada caixa.
+4. Para um domínio inteiro, **Importar várias caixas**: uma linha por caixa, `origem;password;destino`.
+5. **Muda o MX** do domínio para este servidor e, passadas algumas horas, **importa outra vez** as mesmas caixas: só entram as mensagens que chegaram entretanto ao servidor antigo.
+
+Por omissão o Lixo e o Spam não são importados (Opções avançadas → "Importar também o Lixo e o Spam"). As passwords da origem só existem enquanto a importação corre e são apagadas no fim.
+
+Na consola: `echo 'password' | mpanel mail-import-test --host mail.antigo.pt --user geral@dominio.pt` e `mpanel mail-import-start --host mail.antigo.pt --user geral@dominio.pt --password '…' --dest geral@dominio.pt --create`.
 
 ### Configurar um programa de email
 

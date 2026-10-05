@@ -94,6 +94,11 @@ dispatch(){
     dns-server-check)  cmd_dns_server_check ;;
     dns-secondary)     cmd_dns_secondary "$@" ;;
     fm-xfer)           cmd_fm_xfer "$@" ;;
+    site-placeholder-upgrade) cmd_site_placeholder_upgrade ;;
+    mail-import-test)  cmd_mail_import_test "$@" ;;
+    mail-import-start) cmd_mail_import_start "$@" ;;
+    mail-import-bulk)  cmd_mail_import_bulk "$@" ;;
+    mail-import-clear) cmd_mail_import_clear ;;
     site-webp)         cmd_site_webp "$@" ;;
     webp-nightly)      cmd_webp_nightly ;;
     net-tune)          cmd_net_tune "$@" ;;
@@ -152,6 +157,7 @@ if [ "$cmd" = mail-spool ]; then cmd_mail_spool; exit $?; fi
 if [ "$cmd" = alert-send ]; then shift; cmd_alert_send "$@"; exit $?; fi
 # o sentinela tem o seu próprio bloqueio: uma operação longa do painel nunca o atrasa
 if [ "$cmd" = sentinel-run ]; then cmd_sentinel_run; exit $?; fi
+if [ "$cmd" = mail-import-run ]; then cmd_mail_import_run; exit $?; fi   # importações de email: o seu próprio bloqueio
 # as atualizações têm bloqueio próprio: o instalador volta a chamar o mpanel durante a instalação
 if [ "$cmd" = update-run ]; then shift; cmd_update_run "$@"; exit $?; fi
 if [ "$cmd" = os-run ]; then shift; cmd_os_run "$@"; exit $?; fi

@@ -922,3 +922,167 @@ mail_history_json(){ # últimas mensagens rejeitadas ou marcadas como spam (hist
      subject:(.subject // ""), ip:(.ip // ""), symbols:([(.symbols // {}) | to_entries[] | select((.value.score // 0) >= 1) | .key] | .[0:8])}] | .[0:150]' 2>/dev/null || echo '[]'
 }
 
+# ---------- importar caixas de correio de outro servidor (Dovecot doveadm + imapc) ----------
+MI_DIR=$DATA/mail-import
+MI_STATE=$DATA/stats/mail-import.json
+mi_conf(){ # id host porta ssl utilizador verificar_cert prefixo password(stdin) -> ficheiro de configuração temporário (só root)
+  local id=$1 host=$2 port=$3 ssl=$4 user=$5 ver=$6 pre=$7 pass f
+  IFS= read -r pass
+  install -d -m 700 "$MI_DIR"; f="$MI_DIR/$id.conf"
+  ( umask 077
+    {
+      echo "!include /etc/dovecot/dovecot.conf"
+      echo "imapc_host = $host"; echo "imapc_port = $port"; echo "imapc_ssl = $ssl"
+      echo "imapc_user = $user"; printf 'imapc_password = %s\n' "$pass"
+      echo "imapc_features = rfc822.size fetch-headers"
+      [ -n "$pre" ] && echo "imapc_list_prefix = $pre"
+      echo "ssl_client_ca_dir = /etc/ssl/certs"
+      echo "imapc_ssl_verify = $([ "$ver" = 1 ] && echo yes || echo no)"
+      echo "mail_prefetch_count = 20"
+      echo "imapc_max_idle_time = 29 mins"
+    } > "$f" )
+  echo "$f"
+}
+mi_args(){ # interpreta as opções comuns
+  MI_HOST=""; MI_PORT=993; MI_SSL=imaps; MI_USER=""; MI_VER=1; MI_PRE=""; MI_EXCL=1; MI_SINCE=""; MI_DEST=""; MI_CREATE=0; MI_PASS=""; MI_LIST=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host) MI_HOST="${2:-}"; shift 2 || shift ;;
+      --port) MI_PORT="${2:-}"; shift 2 || shift ;;
+      --ssl) MI_SSL="${2:-}"; shift 2 || shift ;;
+      --user) MI_USER="${2:-}"; shift 2 || shift ;;
+      --no-verify) MI_VER=0; shift ;;
+      --prefix) MI_PRE="${2:-}"; shift 2 || shift ;;
+      --all-folders) MI_EXCL=0; shift ;;
+      --since) MI_SINCE="${2:-}"; shift 2 || shift ;;
+      --dest) MI_DEST=$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z'); shift 2 || shift ;;
+      --create) MI_CREATE=1; shift ;;
+      --password) MI_PASS="${2:-}"; shift 2 || shift ;;   # vem da fila do painel (corre no mesmo processo: não aparece na lista de processos)
+      --list) MI_LIST="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [[ "$MI_HOST" =~ ^[A-Za-z0-9.-]{1,253}$|^[0-9a-fA-F:.]+$ ]] || die "Servidor de origem inválido."
+  [[ "$MI_PORT" =~ ^[0-9]{1,5}$ ]] || die "Porta inválida."
+  [[ "$MI_SSL" =~ ^(imaps|starttls|no)$ ]] || die "Segurança: imaps, starttls ou no."
+  [ -n "$MI_LIST" ] || [[ -n "$MI_USER" && ${#MI_USER} -le 200 && ! "$MI_USER" =~ [[:space:][:cntrl:]] ]] || die "Utilizador de origem inválido."
+  [[ -z "$MI_PRE" || "$MI_PRE" =~ ^[A-Za-z0-9._/-]{1,40}$ ]] || die "Prefixo inválido."
+  [[ -z "$MI_SINCE" || "$MI_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "Data inválida (AAAA-MM-DD)."
+}
+cmd_mail_import_test(){ # opções; password no stdin
+  mail_need; mi_args "$@"
+  local id="t$EPOCHSECONDS$RANDOM" f out rc
+  [ -n "$MI_PASS" ] || IFS= read -r MI_PASS
+  f=$(printf '%s\n' "$MI_PASS" | mi_conf "$id" "$MI_HOST" "$MI_PORT" "$MI_SSL" "$MI_USER" "$MI_VER" "$MI_PRE")
+  # o doveadm pergunta ao Dovecot em execução pelo utilizador: usa uma caixa real (a de destino, se já existir);
+  # com mail_location=imapc: só se fala com a origem, a caixa local não é lida nem alterada
+  local tu=""
+  [ -n "$MI_DEST" ] && [ "$(jq --arg e "$MI_DEST" '.boxes | has($e)' <<<"$(mail_data)")" = true ] && tu=$MI_DEST
+  [ -n "$tu" ] || tu=$(jq -r '.boxes | keys[0] // ""' <<<"$(mail_data)")
+  [ -n "$tu" ] || { rm -f "$f"; die "Cria primeiro uma caixa de correio neste servidor (é usada para o teste)."; }
+  out=$(timeout 90 doveadm -c "$f" -o mail_location=imapc: mailbox status -u "$tu" "messages vsize" '*' 2>&1); rc=$?
+  rm -f "$f"
+  if [ "$rc" != 0 ] || [ -z "$out" ]; then
+    out=$(printf '%s' "$out" | grep -iE 'error|fail|auth|refused|timed|certificate' | head -n 1 | sed 's/^.*Error: //; s/^imapc([^)]*): //' | cut -c1-200)
+    die "Não foi possível ligar ou entrar na caixa de origem: ${out:-sem resposta}"
+  fi
+  # resumo: pastas, mensagens, tamanho; e se as pastas vêm dentro de INBOX (cPanel/Courier)
+  printf '%s\n' "$out" | awk '
+    !/messages=/ { next }
+    { n = $1; sub(/^[^ ]+ /, ""); m = 0; v = 0; for (i = 1; i <= NF; i++) { if ($i ~ /^messages=/) { m = substr($i, 10) } if ($i ~ /^vsize=/) { v = substr($i, 7) } }
+      f++; tm += m; tv += v; if (n ~ /^INBOX[.\/]./) pre++; list = list (list ? ", " : "") n " (" m ")" }
+    END { printf "Ligação OK: %d pastas, %d mensagens, %.1f MB.\n", f, tm, tv / 1048576; if (pre > 1 && pre >= f - 2) print "As pastas da origem estão dentro de INBOX: usa o prefixo INBOX."; print "Pastas: " list }'
+  return 0
+}
+mi_state(){ # estado para o painel (sem passwords)
+  local f j="[]"
+  for f in "$MI_DIR"/*.json; do [ -f "$f" ] && j=$(jq -c --slurpfile r "$f" '. + $r' <<<"$j"); done
+  install -d -m 755 "$(dirname "$MI_STATE")"
+  jq -c 'sort_by(.created) | reverse | .[0:200]' <<<"$j" > "$MI_STATE.tmp" && mv -f "$MI_STATE.tmp" "$MI_STATE"
+  chown root:"$PANEL_SYSUSER" "$MI_STATE"; chmod 640 "$MI_STATE"
+}
+mi_add(){ # acrescenta uma importação à fila (password em MI_PASS)
+  local id d pass=$MI_PASS
+  [ -n "$pass" ] || die "Falta a password da caixa de origem."
+  d=${MI_DEST#*@}
+  [ "$(jq --arg d "$d" '.domains | has($d)' <<<"$(mail_data)")" = true ] || die "O domínio $d não está configurado no email."
+  if [ "$(jq --arg e "$MI_DEST" '.boxes | has($e)' <<<"$(mail_data)")" != true ]; then
+    [ "$MI_CREATE" = 1 ] || die "A caixa $MI_DEST não existe (ativa \"criar as caixas que não existam\")."
+    [ ${#pass} -ge 10 ] || die "A caixa $MI_DEST não existe e a password da origem tem menos de 10 caracteres: cria a caixa primeiro."
+    cmd_mail_box_add "$MI_DEST" --password "$pass" >/dev/null || die "Não foi possível criar a caixa $MI_DEST."
+  fi
+  id="$EPOCHSECONDS$(printf '%04d' $((RANDOM % 10000)))"
+  install -d -m 700 "$MI_DIR"
+  ( umask 077; printf '%s\n' "$pass" > "$MI_DIR/$id.pass" )
+  jq -n --arg id "$id" --arg h "$MI_HOST" --arg p "$MI_PORT" --arg s "$MI_SSL" --arg u "$MI_USER" --arg v "$MI_VER" --arg pre "$MI_PRE" \
+        --arg x "$MI_EXCL" --arg since "$MI_SINCE" --arg d "$MI_DEST" --arg c "$MI_CREATE" --arg t "$EPOCHSECONDS" \
+    '{id:$id, host:$h, port:($p|tonumber), ssl:$s, user:$u, verify:($v == "1"), prefix:$pre, exclude:($x == "1"), since:$since, dest:$d, create:($c == "1"),
+      status:"pending", created:($t|tonumber), started:0, ended:0, msgs:0, mb:0, msg:"Na fila"}' > "$MI_DIR/$id.json"
+  chmod 600 "$MI_DIR/$id.json"
+  echo "$id"
+}
+cmd_mail_import_start(){ # opções (--dest obrigatório); password no stdin
+  mail_need; mi_args "$@"; valid_email "$MI_DEST" || die "Caixa de destino inválida."
+  [ -n "$MI_PASS" ] || IFS= read -r MI_PASS
+  local id; id=$(mi_add) || exit 1
+  mi_state; mi_runner_spawn
+  echo "Importação de $MI_USER@$MI_HOST para $MI_DEST na fila (corre em segundo plano)."
+  return 0
+}
+cmd_mail_import_bulk(){ # opções comuns + --list "origem;password;destino" (uma por linha) ou as linhas no stdin
+  mail_need
+  local line u p d n=0 bad=0 base=() lst="" a
+  while [ $# -gt 0 ]; do if [ "$1" = --list ]; then lst="${2:-}"; shift 2 || shift; else base+=("$1"); shift; fi; done
+  [ -n "$lst" ] || lst=$(cat)
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}; [ -n "${line// }" ] || continue; [[ "$line" == \#* ]] && continue
+    IFS=';' read -r u p d <<<"$line"
+    u=$(printf '%s' "$u" | xargs); d=$(printf '%s' "${d:-$u}" | xargs | tr 'A-Z' 'a-z')
+    if [ -z "$u" ] || [ -z "$p" ] || ! valid_email "$d"; then bad=$((bad+1)); continue; fi
+    ( mi_args "${base[@]}" --user "$u" --dest "$d" --password "$p"; mi_add >/dev/null ) && n=$((n+1)) || bad=$((bad+1))
+  done <<<"$lst"
+  [ "$n" -gt 0 ] || die "Nenhuma linha válida (formato: origem;password;destino)."
+  mi_state; mi_runner_spawn
+  echo "$n caixas na fila para importar$([ "$bad" -gt 0 ] && echo "; $bad linhas ignoradas (incompletas ou com destino inválido)")."
+  return 0
+}
+mi_runner_spawn(){ # um só executor em segundo plano, fora do bloqueio do painel
+  ( setsid /usr/local/sbin/mpanel mail-import-run </dev/null >/dev/null 2>&1 & ) 9>&-
+}
+cmd_mail_import_run(){ # executa a fila, uma caixa de cada vez
+  exec 8>/run/minipainel-mail-import.lock; flock -n 8 || return 0
+  local f id j pass conf log rc out m v q ex
+  while :; do
+    f=$(for x in "$MI_DIR"/*.json; do [ -f "$x" ] && jq -e '.status == "pending"' "$x" >/dev/null 2>&1 && echo "$x"; done | sort | head -n 1)
+    [ -n "$f" ] || break
+    j=$(cat "$f"); id=$(jq -r .id <<<"$j")
+    upd(){ jq "$@" "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"; mi_state; }
+    upd --arg t "$EPOCHSECONDS" '.status = "running" | .started = ($t|tonumber) | .msg = "A importar…"'
+    pass=$(cat "$MI_DIR/$id.pass" 2>/dev/null)
+    local dest; dest=$(jq -r .dest <<<"$j")
+    if [ "$(jq --arg e "$dest" '.boxes | has($e)' <<<"$(mail_data)")" != true ]; then
+      rm -f "$MI_DIR/$id.pass"; upd --arg t "$EPOCHSECONDS" '.status = "failed" | .ended = ($t|tonumber) | .msg = "A caixa de destino já não existe."'; continue
+    fi
+    conf=$(printf '%s\n' "$pass" | mi_conf "$id" "$(jq -r .host <<<"$j")" "$(jq -r .port <<<"$j")" "$(jq -r .ssl <<<"$j")" "$(jq -r .user <<<"$j")" "$( [ "$(jq -r .verify <<<"$j")" = true ] && echo 1 || echo 0)" "$(jq -r .prefix <<<"$j")")
+    rm -f "$MI_DIR/$id.pass"; pass=""
+    log="$MI_DIR/$id.log"
+    ex=(); [ "$(jq -r .exclude <<<"$j")" = true ] && ex=(-x Trash -x Junk -x Spam -x "Deleted Items" -x "Junk E-mail" -x "INBOX.Trash" -x "INBOX.Junk" -x "INBOX.Spam")
+    local since; since=$(jq -r .since <<<"$j"); [ -n "$since" ] && ex+=(-t "$since")
+    timeout 21600 doveadm -c "$conf" -o mail_fsync=never sync -1 -R "${ex[@]}" -u "$dest" imapc: > "$log" 2>&1; rc=$?
+    rm -f "$conf"
+    out=$(doveadm mailbox status -u "$dest" "messages vsize" '*' 2>/dev/null | awk '{for (i = 1; i <= NF; i++) { if ($i ~ /^messages=/) m += substr($i, 10); if ($i ~ /^vsize=/) v += substr($i, 7) } } END { printf "%d %d", m, v / 1048576 }')
+    m=${out% *}; v=${out#* }
+    if [ "$rc" = 0 ]; then
+      upd --arg t "$EPOCHSECONDS" --argjson m "${m:-0}" --argjson v "${v:-0}" '.status = "done" | .ended = ($t|tonumber) | .msgs = $m | .mb = $v | .msg = "Concluída"'
+    else
+      q=$(grep -iE 'error|fail|quota|auth' "$log" | tail -n 2 | sed 's/^.*Error: //' | cut -c1-220 | tr '\n' ' ')
+      upd --arg t "$EPOCHSECONDS" --argjson m "${m:-0}" --argjson v "${v:-0}" --arg e "${q:-erro $rc}" '.status = "failed" | .ended = ($t|tonumber) | .msgs = $m | .mb = $v | .msg = ("Falhou: " + $e)'
+    fi
+    chmod 600 "$log"
+  done
+  return 0
+}
+cmd_mail_import_clear(){ # apaga do histórico as importações terminadas
+  local f; for f in "$MI_DIR"/*.json; do [ -f "$f" ] || continue; jq -e '.status == "done" or .status == "failed"' "$f" >/dev/null 2>&1 && rm -f "$f" "${f%.json}.log"; done
+  mi_state; echo "Histórico de importações limpo."; return 0
+}

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Ficheiros: copiar e mover entre sites; encaminhamento ao mudar o domínio do painel; acertos no DNS.
+# NOTAS: Importar caixas de correio de outros servidores (IMAP) e nova página "Brevemente" para sites sem conteúdo.
 # =============================================================================
-#  IDDigital Hosting v2.14.1 — instalador (MiniPainel)
+#  IDDigital Hosting v2.15.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.14.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.15.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.14.1"
+MP_VERSION="2.15.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -826,6 +826,7 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel opcache-settings >/dev/null 2>&1 || warn "Não foi possível configurar o OPcache."
 /usr/local/sbin/mpanel perf-sync >/dev/null 2>&1 || true
 /usr/local/sbin/mpanel dns-cleanup 2>/dev/null | sed 's/^/  /' || true
+/usr/local/sbin/mpanel site-placeholder-upgrade 2>/dev/null | sed 's/^/  /' || true
 grep -q '^NET_TUNE=' /etc/minipainel/server.conf 2>/dev/null || /usr/local/sbin/mpanel net-tune on >/dev/null 2>&1 || true
 grep -q '^BROTLI=' /etc/minipainel/server.conf 2>/dev/null || /usr/local/sbin/mpanel brotli on >/dev/null 2>&1 || warn "Brotli não disponível neste sistema (fica o gzip)."
 printf '# IDDigital Hosting — converte imagens novas em WebP nos sites que o pedem\n40 3 * * * root /usr/local/sbin/mpanel webp-nightly >/dev/null 2>&1\n' > /etc/cron.d/minipainel-webp; chmod 644 /etc/cron.d/minipainel-webp

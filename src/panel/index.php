@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.14.1 — painel web (MiniPainel)
+ * IDDigital Hosting v2.15.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.14.1';
+const MP_VERSION = '2.15.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -977,6 +977,13 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dns-g-certificados{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 @media (max-width:900px){.dns-arrow{display:none}}
 .dz-prio[hidden]{display:none!important}
+.mi-srv{grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) 110px}
+.mi-adv{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.mi-adv summary{cursor:pointer;font-weight:600;font-size:13.5px;margin-bottom:6px}
+.mi-adv .chk{display:flex;margin:6px 0}
+.mi-btns{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.mi-f textarea{min-height:150px}
+.mi-t{table-layout:fixed;width:100%}.mi-t td{vertical-align:top}
+@media (max-width:900px){.mi-srv{grid-template-columns:1fr}}
 .dz-t td:nth-child(5),.dz-t td:nth-child(4){white-space:nowrap}
 .fmx-browse{border:1px solid var(--line);border-radius:12px;margin:-4px 0 14px;overflow:hidden}
 .fmx-path{padding:8px 12px;background:var(--line-2);font-size:12.5px}
@@ -1932,6 +1939,38 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             break;
         case 'dns_restart':
             job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
+            break;
+        case 'mail_import':
+        case 'mail_import_bulk':
+            $hst = trim(post('host')); $ssl = post('ssl'); $prt = post('port');
+            if (!preg_match('/^([A-Za-z0-9-]+\.)*[A-Za-z0-9-]+$|^[0-9a-fA-F:.]+$/', $hst) || strlen($hst) > 253) { $bad('Servidor de origem inválido.'); break; }
+            if (!in_array($ssl, ['imaps', 'starttls', 'no'], true) || !ctype_digit($prt) || (int)$prt < 1 || (int)$prt > 65535) { $bad('Segurança ou porta inválida.'); break; }
+            $mia = ['--host', $hst, '--port', $prt, '--ssl', $ssl];
+            if (post('noverify') === '1') $mia[] = '--no-verify';
+            if (post('all') === '1') $mia[] = '--all-folders';
+            if (post('prefix') === 'INBOX') array_push($mia, '--prefix', 'INBOX');
+            $snc = post('since'); if ($snc !== '') { if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $snc)) { $bad('Data inválida.'); break; } array_push($mia, '--since', $snc); }
+            if (post('create') === '1') $mia[] = '--create';
+            if ($a === 'mail_import_bulk') {
+                $lst = str_replace("\r", '', post_raw('list'));
+                if (trim($lst) === '' || strlen($lst) > 100000) { $bad('Indica as caixas a importar (uma por linha).'); break; }
+                array_push($mia, '--list', $lst);
+                job_submit('mail-import-bulk', $mia, 'Importar caixas de ' . $hst);
+            } else {
+                $usr = trim(post('user')); $pw = (string)post_raw('pass'); $dst = strtolower(trim(post('dest'))); if ($dst === '') $dst = strtolower($usr);
+                if ($usr === '' || strlen($usr) > 200 || preg_match('/\s/', $usr)) { $bad('Utilizador de origem inválido.'); break; }
+                if ($pw === '' || strlen($pw) > 200 || preg_match('/[\r\n]/', $pw)) { $bad('Password de origem inválida.'); break; }
+                array_push($mia, '--user', $usr, '--password', $pw);
+                if (post('op') === 'test') { if (filter_var($dst, FILTER_VALIDATE_EMAIL)) array_push($mia, '--dest', $dst); job_submit('mail-import-test', $mia, 'Testar ligação a ' . $usr . ' em ' . $hst); }
+                else {
+                    if (!filter_var($dst, FILTER_VALIDATE_EMAIL)) { $bad('Caixa de destino inválida.'); break; }
+                    array_push($mia, '--dest', $dst); job_submit('mail-import-start', $mia, 'Importar ' . $usr . ' para ' . $dst);
+                }
+            }
+            $back = ['t' => 'importar'];
+            break;
+        case 'mail_import_clear':
+            job_submit('mail-import-clear', [], 'Limpar o histórico de importações'); $back = ['t' => 'importar'];
             break;
         case 'fm_xfer':
             $src = post('src'); $dst = post('dst'); $md = post('mode') === 'move' ? 'move' : 'copy'; $cf = post('conflict');
@@ -3674,7 +3713,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($page === 'email'):
     $ml = is_array($state['mail'] ?? null) ? $state['mail'] : ['enabled' => false];
     $mOn = !empty($ml['enabled']);
-    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'spam', 'antispam'], true) ? qget('t') : 'caixas';
+    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'spam', 'antispam', 'importar'], true) ? qget('t') : 'caixas';
     $mHist = is_array($ml['history'] ?? null) ? $ml['history'] : [];
     $mLists = is_array($ml['lists'] ?? null) ? $ml['lists'] : [];
     $mHost = (string)($ml['host'] ?? '');
@@ -3700,7 +3739,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
 <?php else: ?>
       <nav class="tabs" aria-label="Secções do email">
-        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'spam' => 'Spam e listas', 'antispam' => 'Antispam'] as $tk => $tl): ?>
+        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'spam' => 'Spam e listas', 'antispam' => 'Antispam', 'importar' => 'Importar'] as $tk => $tl): ?>
           <a class="chip<?= $tab === $tk ? ' prim' : '' ?>" href="?p=email&amp;t=<?= $tk ?>"><?= h($tl) ?></a>
         <?php endforeach; ?>
         <span class="mu" style="margin-left:auto">Servidor: <b class="mono"><?= h($mHost) ?></b> <?= !empty($ml['services_ok']) ? '<span class="pill p-ok">Serviços OK</span>' : '<span class="pill p-err">Serviço parado</span>' ?></span>
@@ -3946,7 +3985,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php endif; ?>
       </section>
 
-  <?php else: ?>
+  <?php elseif ($tab === 'antispam'): ?>
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>Antispam</h2><p>Postscreen + Rspamd: SPF, DKIM, DMARC, reputação, greylisting e listas negras.</p></div></div>
@@ -3971,6 +4010,71 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">Usa cerca de 1,2 GB de RAM. Confirma na página Recursos que o servidor tem memória livre suficiente.</div>
       </section>
       </div>
+  <?php elseif ($tab === 'importar'):
+      $mi = jload(MP_STATS . '/mail-import.json') ?? []; $mi = is_array($mi) ? $mi : [];
+      $miRun = count(array_filter($mi, function ($r) { return in_array($r['status'] ?? '', ['pending', 'running'], true); }));
+      $miTz = tz_off(live_stats());
+      $miSrv = function () { ob_start(); ?>
+            <div class="fgrid mi-srv">
+              <label class="fld">Servidor de origem<input class="in mono" name="host" required placeholder="mail.servidorantigo.pt" autocomplete="off"></label>
+              <label class="fld">Segurança<select class="in" name="ssl" data-mi-ssl><option value="imaps">SSL/TLS · 993</option><option value="starttls">STARTTLS · 143</option><option value="no">Sem cifra · 143</option></select></label>
+              <label class="fld">Porta<input class="in" name="port" value="993" inputmode="numeric" data-mi-port></label>
+            </div>
+<?php return ob_get_clean(); };
+      $miAdv = function () { ob_start(); ?>
+            <details class="mi-adv"><summary>Opções avançadas</summary>
+              <label class="chk"><input type="checkbox" name="all" value="1"> Importar também o Lixo e o Spam</label>
+              <label class="chk"><input type="checkbox" name="noverify" value="1"> Aceitar certificado inválido no servidor de origem</label>
+              <label class="chk"><input type="checkbox" name="prefix" value="INBOX"> As pastas da origem estão dentro de INBOX (cPanel, Courier…; o "Testar ligação" avisa)</label>
+              <label class="fld" style="max-width:260px">Só mensagens desde<input class="in" type="date" name="since"></label>
+            </details>
+<?php return ob_get_clean(); };
+  ?>
+      <div class="grid2e" style="align-items:stretch">
+        <section class="card">
+          <div class="card-h"><div><h2>Importar uma caixa</h2><p>Copia as mensagens e as pastas de uma caixa noutro servidor (IMAP) para uma caixa deste servidor. Pode repetir-se: não duplica mensagens.</p></div></div>
+          <form method="post" class="card-b mi-f">
+            <?= act_fields('mail_import') ?>
+            <?= $miSrv() ?>
+            <div class="fgrid">
+              <label class="fld">Utilizador na origem<input class="in mono" name="user" required placeholder="geral@dominio.pt" autocomplete="off"></label>
+              <label class="fld">Password na origem<input class="in" type="password" name="pass" required autocomplete="new-password"></label>
+              <label class="fld">Caixa de destino (neste servidor)<input class="in mono" name="dest" list="mi-boxes" placeholder="geral@dominio.pt" autocomplete="off"><small>Vazio = o mesmo endereço da origem</small></label>
+            </div>
+            <label class="chk" style="margin-top:10px"><input type="checkbox" name="create" value="1" checked> Criar a caixa de destino, se não existir, com a mesma password da origem</label>
+            <?= $miAdv() ?>
+            <div class="mi-btns"><button class="btn sec" type="submit" name="op" value="test">Testar ligação</button><button class="btn" type="submit" name="op" value="start">Importar</button></div>
+          </form>
+        </section>
+        <section class="card">
+          <div class="card-h"><div><h2>Importar várias caixas</h2><p>Para migrar um domínio inteiro do mesmo servidor de origem. Uma linha por caixa.</p></div></div>
+          <form method="post" class="card-b mi-f">
+            <?= act_fields('mail_import_bulk') ?>
+            <?= $miSrv() ?>
+            <label class="fld">Caixas<textarea class="in mono" name="list" rows="6" required placeholder="geral@dominio.pt;password-da-origem&#10;joao@dominio.pt;outra-password;joao.silva@dominio.pt"></textarea><small>Formato: <span class="mono">origem;password;destino</span> — o destino pode ficar vazio se for o mesmo endereço.</small></label>
+            <label class="chk"><input type="checkbox" name="create" value="1" checked> Criar as caixas que não existam, com a mesma password da origem</label>
+            <?= $miAdv() ?>
+            <div class="mi-btns"><button class="btn" type="submit">Importar todas</button></div>
+          </form>
+        </section>
+      </div>
+      <section class="card" id="mi-runs" data-running="<?= $miRun ?>">
+        <div class="card-h"><div><h2>Importações</h2><p>Correm uma de cada vez, em segundo plano. Depois de mudar o MX do domínio para este servidor, volta a importar para trazer as mensagens que chegaram entretanto.</p></div>
+          <?php if ($mi && $miRun < count($mi)): ?><form method="post"><?= act_fields('mail_import_clear') ?><button class="btn sm sec" type="submit">Limpar terminadas</button></form><?php endif; ?></div>
+        <?php if (!$mi): ?><div class="empty">Ainda não houve importações.</div><?php else: ?>
+        <table class="list mi-t"><colgroup><col><col><col style="width:130px"><col style="width:140px"><col style="width:150px"><col></colgroup>
+          <thead><tr><th>Origem</th><th>Destino</th><th>Estado</th><th class="r">Mensagens</th><th>Início</th><th>Resultado</th></tr></thead>
+          <tbody><?php foreach ($mi as $r): $stt = (string)($r['status'] ?? ''); ?>
+            <tr><td><span class="mono"><?= h((string)$r['user']) ?></span><div class="mu"><?= h((string)$r['host']) ?></div></td><td class="mono"><?= h((string)$r['dest']) ?></td>
+              <td><?= ['pending' => '<span class="pill p-off">Na fila</span>', 'running' => '<span class="pill p-warn">A importar</span>', 'done' => '<span class="pill p-ok">Concluída</span>', 'failed' => '<span class="pill p-err">Falhou</span>'][$stt] ?? h($stt) ?></td>
+              <td class="r"><?= $stt === 'done' || $stt === 'failed' ? number_format((int)$r['msgs'], 0, ',', ' ') . ' <span class="mu">· ' . (int)$r['mb'] . ' MB</span>' : '—' ?></td>
+              <td class="mu"><?= !empty($r['started']) ? h(gmdate('d/m H:i', (int)$r['started'] + $miTz)) : '—' ?></td>
+              <td class="sn-msg"><?= h((string)$r['msg']) ?><?= !empty($r['ended']) && !empty($r['started']) ? ' <span class="mu">(' . max(1, (int)round(((int)$r['ended'] - (int)$r['started']) / 60)) . ' min)</span>' : '' ?></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+      <datalist id="mi-boxes"><?php foreach ($mBoxes as $b): ?><option value="<?= h((string)$b['email']) ?>"><?php endforeach; ?></datalist>
   <?php endif; ?>
 <?php endif; ?>
 
@@ -5269,6 +5373,28 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       cnt.textContent = n + ' de ' + rows.length + ' registos'; }
     ft.addEventListener('change', filt); q.addEventListener('input', filt); filt();
   }
+})();
+</script>
+<?php endif; ?>
+<?php if ($page === 'email'): ?>
+<script>
+(function () {
+  document.querySelectorAll('[data-mi-ssl]').forEach(function (sel) {
+    var port = sel.closest('form').querySelector('[data-mi-port]');
+    sel.addEventListener('change', function () { if (port) port.value = sel.value === 'imaps' ? '993' : '143'; });
+  });
+  var box = document.getElementById('mi-runs');
+  function poll() {
+    if (!box || box.getAttribute('data-running') === '0') return;
+    setTimeout(function () {
+      fetch(location.href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (t) {
+        var d = new DOMParser().parseFromString(t, 'text/html').getElementById('mi-runs');
+        if (d) { box.innerHTML = d.innerHTML; box.setAttribute('data-running', d.getAttribute('data-running')); }
+        poll();
+      }).catch(poll);
+    }, 8000);
+  }
+  poll();
 })();
 </script>
 <?php endif; ?>

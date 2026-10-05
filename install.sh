@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# NOTAS: Ficheiros: copiar e mover entre sites; encaminhamento ao mudar o domínio do painel; acertos no DNS.
+# NOTAS: Importar caixas de correio de outros servidores (IMAP) e nova página "Brevemente" para sites sem conteúdo.
 # =============================================================================
-#  IDDigital Hosting v2.14.1 — instalador (MiniPainel)
+#  IDDigital Hosting v2.15.0 — instalador (MiniPainel)
 #  Painel de alojamento mínimo: nginx + PHP-FPM (várias versões) + MariaDB + phpMyAdmin,
 #  gestor de ficheiros e estatísticas de recursos
 #  Os sites são servidos por porta: http://IP:PORTA ou http://localhost:PORTA
 #  Suporta: Debian 12/13, Ubuntu 22.04/24.04, AlmaLinux/Rocky 9/10
 #
 #  Uso:
-#    bash minipainel-install-v2.14.1.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
+#    bash minipainel-install-v2.15.0.sh [--php "7.4 8.3 8.4"] [--panel-port 2443] [--force]
 #  (por omissão instala do PHP 7.0 ao 8.5; no AlmaLinux/Rocky o repositório Remi só tem do 7.4 para cima)
 #
 #  Pode ser executado novamente (atualiza a partir da v1.0.0 ou acrescenta
@@ -18,7 +18,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-MP_VERSION="2.14.1"
+MP_VERSION="2.15.0"
 PHP_VERSIONS="7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5"
 PHP_ALL="$PHP_VERSIONS"
 PANEL_PORT=2443
@@ -697,6 +697,7 @@ Sites → **Novo site**: nome (letras minúsculas, números e hífens, ex.: `loj
 - Pasta pública: `/srv/www/loja/public_html` (é aqui que se põem os ficheiros do site).
 - Também ficam `/srv/www/loja/logs` (erros do PHP, tarefas) e `/srv/www/loja/tmp`.
 - O site abre logo em `http://IP:porta` (ex.: `:8001`).
+- Até carregares os ficheiros, o site mostra a página **"Brevemente"** (com o logótipo da IDDigital e o domínio do visitante, sem informação técnica). Substitui o `index.html` pelos ficheiros do site.
 
 ### Domínios e SSL
 
@@ -830,6 +831,20 @@ Registos típicos (o painel mostra os valores exatos, incluindo a chave DKIM):
 Só pode haver **um** registo SPF por domínio. O **PTR** do IP pede-se ao fornecedor do IP; sem ele, Gmail e Outlook mandam as mensagens para o spam.
 
 Antes de mudar o MX de um domínio que já tem email noutro servidor, cria as caixas aqui e migra as mensagens antigas.
+
+### Migrar email de outro servidor (Email → Importar)
+
+Copia as mensagens e as pastas de caixas noutro servidor (cPanel, ISPmanager, Plesk, Gmail com password de aplicação…) para este servidor, por IMAP. Mantém as pastas, as datas e o estado lida/não lida, e pode repetir-se sem duplicar mensagens.
+
+1. **Cria o domínio** em Email → Domínios e caixas (as caixas podem ser criadas pela importação, com a mesma password da origem).
+2. **Email → Importar → Importar uma caixa:** servidor de origem (ex.: `mail.servidorantigo.pt`), segurança (normalmente SSL/TLS · 993), utilizador e password da origem, caixa de destino. Carrega primeiro em **Testar ligação**: mostra as pastas, as mensagens e o tamanho, e avisa se as pastas estão dentro de INBOX (cPanel/Courier — ativa então essa opção em Opções avançadas).
+3. **Importar.** Corre em segundo plano; a lista "Importações" mostra o estado de cada caixa.
+4. Para um domínio inteiro, **Importar várias caixas**: uma linha por caixa, `origem;password;destino`.
+5. **Muda o MX** do domínio para este servidor e, passadas algumas horas, **importa outra vez** as mesmas caixas: só entram as mensagens que chegaram entretanto ao servidor antigo.
+
+Por omissão o Lixo e o Spam não são importados (Opções avançadas → "Importar também o Lixo e o Spam"). As passwords da origem só existem enquanto a importação corre e são apagadas no fim.
+
+Na consola: `echo 'password' | mpanel mail-import-test --host mail.antigo.pt --user geral@dominio.pt` e `mpanel mail-import-start --host mail.antigo.pt --user geral@dominio.pt --password '…' --dest geral@dominio.pt --create`.
 
 ### Configurar um programa de email
 
@@ -1511,7 +1526,7 @@ chown root:root /opt/minipainel/manual.md; chmod 644 /opt/minipainel/manual.md
 cat > /opt/minipainel/public/index.php <<'MPPANEL'
 <?php
 /**
- * IDDigital Hosting v2.14.1 — painel web (MiniPainel)
+ * IDDigital Hosting v2.15.0 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -1519,7 +1534,7 @@ cat > /opt/minipainel/public/index.php <<'MPPANEL'
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.14.1';
+const MP_VERSION = '2.15.0';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -2488,6 +2503,13 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .dns-g-certificados{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 @media (max-width:900px){.dns-arrow{display:none}}
 .dz-prio[hidden]{display:none!important}
+.mi-srv{grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) 110px}
+.mi-adv{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.mi-adv summary{cursor:pointer;font-weight:600;font-size:13.5px;margin-bottom:6px}
+.mi-adv .chk{display:flex;margin:6px 0}
+.mi-btns{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.mi-f textarea{min-height:150px}
+.mi-t{table-layout:fixed;width:100%}.mi-t td{vertical-align:top}
+@media (max-width:900px){.mi-srv{grid-template-columns:1fr}}
 .dz-t td:nth-child(5),.dz-t td:nth-child(4){white-space:nowrap}
 .fmx-browse{border:1px solid var(--line);border-radius:12px;margin:-4px 0 14px;overflow:hidden}
 .fmx-path{padding:8px 12px;background:var(--line-2);font-size:12.5px}
@@ -3443,6 +3465,38 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             break;
         case 'dns_restart':
             job_submit('dns-restart', [], 'Reiniciar o servidor DNS'); $back = ['t' => 'servidor'];
+            break;
+        case 'mail_import':
+        case 'mail_import_bulk':
+            $hst = trim(post('host')); $ssl = post('ssl'); $prt = post('port');
+            if (!preg_match('/^([A-Za-z0-9-]+\.)*[A-Za-z0-9-]+$|^[0-9a-fA-F:.]+$/', $hst) || strlen($hst) > 253) { $bad('Servidor de origem inválido.'); break; }
+            if (!in_array($ssl, ['imaps', 'starttls', 'no'], true) || !ctype_digit($prt) || (int)$prt < 1 || (int)$prt > 65535) { $bad('Segurança ou porta inválida.'); break; }
+            $mia = ['--host', $hst, '--port', $prt, '--ssl', $ssl];
+            if (post('noverify') === '1') $mia[] = '--no-verify';
+            if (post('all') === '1') $mia[] = '--all-folders';
+            if (post('prefix') === 'INBOX') array_push($mia, '--prefix', 'INBOX');
+            $snc = post('since'); if ($snc !== '') { if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $snc)) { $bad('Data inválida.'); break; } array_push($mia, '--since', $snc); }
+            if (post('create') === '1') $mia[] = '--create';
+            if ($a === 'mail_import_bulk') {
+                $lst = str_replace("\r", '', post_raw('list'));
+                if (trim($lst) === '' || strlen($lst) > 100000) { $bad('Indica as caixas a importar (uma por linha).'); break; }
+                array_push($mia, '--list', $lst);
+                job_submit('mail-import-bulk', $mia, 'Importar caixas de ' . $hst);
+            } else {
+                $usr = trim(post('user')); $pw = (string)post_raw('pass'); $dst = strtolower(trim(post('dest'))); if ($dst === '') $dst = strtolower($usr);
+                if ($usr === '' || strlen($usr) > 200 || preg_match('/\s/', $usr)) { $bad('Utilizador de origem inválido.'); break; }
+                if ($pw === '' || strlen($pw) > 200 || preg_match('/[\r\n]/', $pw)) { $bad('Password de origem inválida.'); break; }
+                array_push($mia, '--user', $usr, '--password', $pw);
+                if (post('op') === 'test') { if (filter_var($dst, FILTER_VALIDATE_EMAIL)) array_push($mia, '--dest', $dst); job_submit('mail-import-test', $mia, 'Testar ligação a ' . $usr . ' em ' . $hst); }
+                else {
+                    if (!filter_var($dst, FILTER_VALIDATE_EMAIL)) { $bad('Caixa de destino inválida.'); break; }
+                    array_push($mia, '--dest', $dst); job_submit('mail-import-start', $mia, 'Importar ' . $usr . ' para ' . $dst);
+                }
+            }
+            $back = ['t' => 'importar'];
+            break;
+        case 'mail_import_clear':
+            job_submit('mail-import-clear', [], 'Limpar o histórico de importações'); $back = ['t' => 'importar'];
             break;
         case 'fm_xfer':
             $src = post('src'); $dst = post('dst'); $md = post('mode') === 'move' ? 'move' : 'copy'; $cf = post('conflict');
@@ -5185,7 +5239,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php elseif ($page === 'email'):
     $ml = is_array($state['mail'] ?? null) ? $state['mail'] : ['enabled' => false];
     $mOn = !empty($ml['enabled']);
-    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'spam', 'antispam'], true) ? qget('t') : 'caixas';
+    $tab = in_array(qget('t'), ['caixas', 'envio', 'fila', 'spam', 'antispam', 'importar'], true) ? qget('t') : 'caixas';
     $mHist = is_array($ml['history'] ?? null) ? $ml['history'] : [];
     $mLists = is_array($ml['lists'] ?? null) ? $ml['lists'] : [];
     $mHost = (string)($ml['host'] ?? '');
@@ -5211,7 +5265,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       </section>
 <?php else: ?>
       <nav class="tabs" aria-label="Secções do email">
-        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'spam' => 'Spam e listas', 'antispam' => 'Antispam'] as $tk => $tl): ?>
+        <?php foreach (['caixas' => 'Domínios e caixas', 'envio' => 'Envio dos sites', 'fila' => 'Fila (' . count($mQueue) . ')', 'spam' => 'Spam e listas', 'antispam' => 'Antispam', 'importar' => 'Importar'] as $tk => $tl): ?>
           <a class="chip<?= $tab === $tk ? ' prim' : '' ?>" href="?p=email&amp;t=<?= $tk ?>"><?= h($tl) ?></a>
         <?php endforeach; ?>
         <span class="mu" style="margin-left:auto">Servidor: <b class="mono"><?= h($mHost) ?></b> <?= !empty($ml['services_ok']) ? '<span class="pill p-ok">Serviços OK</span>' : '<span class="pill p-err">Serviço parado</span>' ?></span>
@@ -5457,7 +5511,7 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <?php endif; ?>
       </section>
 
-  <?php else: ?>
+  <?php elseif ($tab === 'antispam'): ?>
       <div class="grid2e">
       <section class="card">
         <div class="card-h"><div><h2>Antispam</h2><p>Postscreen + Rspamd: SPF, DKIM, DMARC, reputação, greylisting e listas negras.</p></div></div>
@@ -5482,6 +5536,71 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="card-f mu">Usa cerca de 1,2 GB de RAM. Confirma na página Recursos que o servidor tem memória livre suficiente.</div>
       </section>
       </div>
+  <?php elseif ($tab === 'importar'):
+      $mi = jload(MP_STATS . '/mail-import.json') ?? []; $mi = is_array($mi) ? $mi : [];
+      $miRun = count(array_filter($mi, function ($r) { return in_array($r['status'] ?? '', ['pending', 'running'], true); }));
+      $miTz = tz_off(live_stats());
+      $miSrv = function () { ob_start(); ?>
+            <div class="fgrid mi-srv">
+              <label class="fld">Servidor de origem<input class="in mono" name="host" required placeholder="mail.servidorantigo.pt" autocomplete="off"></label>
+              <label class="fld">Segurança<select class="in" name="ssl" data-mi-ssl><option value="imaps">SSL/TLS · 993</option><option value="starttls">STARTTLS · 143</option><option value="no">Sem cifra · 143</option></select></label>
+              <label class="fld">Porta<input class="in" name="port" value="993" inputmode="numeric" data-mi-port></label>
+            </div>
+<?php return ob_get_clean(); };
+      $miAdv = function () { ob_start(); ?>
+            <details class="mi-adv"><summary>Opções avançadas</summary>
+              <label class="chk"><input type="checkbox" name="all" value="1"> Importar também o Lixo e o Spam</label>
+              <label class="chk"><input type="checkbox" name="noverify" value="1"> Aceitar certificado inválido no servidor de origem</label>
+              <label class="chk"><input type="checkbox" name="prefix" value="INBOX"> As pastas da origem estão dentro de INBOX (cPanel, Courier…; o "Testar ligação" avisa)</label>
+              <label class="fld" style="max-width:260px">Só mensagens desde<input class="in" type="date" name="since"></label>
+            </details>
+<?php return ob_get_clean(); };
+  ?>
+      <div class="grid2e" style="align-items:stretch">
+        <section class="card">
+          <div class="card-h"><div><h2>Importar uma caixa</h2><p>Copia as mensagens e as pastas de uma caixa noutro servidor (IMAP) para uma caixa deste servidor. Pode repetir-se: não duplica mensagens.</p></div></div>
+          <form method="post" class="card-b mi-f">
+            <?= act_fields('mail_import') ?>
+            <?= $miSrv() ?>
+            <div class="fgrid">
+              <label class="fld">Utilizador na origem<input class="in mono" name="user" required placeholder="geral@dominio.pt" autocomplete="off"></label>
+              <label class="fld">Password na origem<input class="in" type="password" name="pass" required autocomplete="new-password"></label>
+              <label class="fld">Caixa de destino (neste servidor)<input class="in mono" name="dest" list="mi-boxes" placeholder="geral@dominio.pt" autocomplete="off"><small>Vazio = o mesmo endereço da origem</small></label>
+            </div>
+            <label class="chk" style="margin-top:10px"><input type="checkbox" name="create" value="1" checked> Criar a caixa de destino, se não existir, com a mesma password da origem</label>
+            <?= $miAdv() ?>
+            <div class="mi-btns"><button class="btn sec" type="submit" name="op" value="test">Testar ligação</button><button class="btn" type="submit" name="op" value="start">Importar</button></div>
+          </form>
+        </section>
+        <section class="card">
+          <div class="card-h"><div><h2>Importar várias caixas</h2><p>Para migrar um domínio inteiro do mesmo servidor de origem. Uma linha por caixa.</p></div></div>
+          <form method="post" class="card-b mi-f">
+            <?= act_fields('mail_import_bulk') ?>
+            <?= $miSrv() ?>
+            <label class="fld">Caixas<textarea class="in mono" name="list" rows="6" required placeholder="geral@dominio.pt;password-da-origem&#10;joao@dominio.pt;outra-password;joao.silva@dominio.pt"></textarea><small>Formato: <span class="mono">origem;password;destino</span> — o destino pode ficar vazio se for o mesmo endereço.</small></label>
+            <label class="chk"><input type="checkbox" name="create" value="1" checked> Criar as caixas que não existam, com a mesma password da origem</label>
+            <?= $miAdv() ?>
+            <div class="mi-btns"><button class="btn" type="submit">Importar todas</button></div>
+          </form>
+        </section>
+      </div>
+      <section class="card" id="mi-runs" data-running="<?= $miRun ?>">
+        <div class="card-h"><div><h2>Importações</h2><p>Correm uma de cada vez, em segundo plano. Depois de mudar o MX do domínio para este servidor, volta a importar para trazer as mensagens que chegaram entretanto.</p></div>
+          <?php if ($mi && $miRun < count($mi)): ?><form method="post"><?= act_fields('mail_import_clear') ?><button class="btn sm sec" type="submit">Limpar terminadas</button></form><?php endif; ?></div>
+        <?php if (!$mi): ?><div class="empty">Ainda não houve importações.</div><?php else: ?>
+        <table class="list mi-t"><colgroup><col><col><col style="width:130px"><col style="width:140px"><col style="width:150px"><col></colgroup>
+          <thead><tr><th>Origem</th><th>Destino</th><th>Estado</th><th class="r">Mensagens</th><th>Início</th><th>Resultado</th></tr></thead>
+          <tbody><?php foreach ($mi as $r): $stt = (string)($r['status'] ?? ''); ?>
+            <tr><td><span class="mono"><?= h((string)$r['user']) ?></span><div class="mu"><?= h((string)$r['host']) ?></div></td><td class="mono"><?= h((string)$r['dest']) ?></td>
+              <td><?= ['pending' => '<span class="pill p-off">Na fila</span>', 'running' => '<span class="pill p-warn">A importar</span>', 'done' => '<span class="pill p-ok">Concluída</span>', 'failed' => '<span class="pill p-err">Falhou</span>'][$stt] ?? h($stt) ?></td>
+              <td class="r"><?= $stt === 'done' || $stt === 'failed' ? number_format((int)$r['msgs'], 0, ',', ' ') . ' <span class="mu">· ' . (int)$r['mb'] . ' MB</span>' : '—' ?></td>
+              <td class="mu"><?= !empty($r['started']) ? h(gmdate('d/m H:i', (int)$r['started'] + $miTz)) : '—' ?></td>
+              <td class="sn-msg"><?= h((string)$r['msg']) ?><?= !empty($r['ended']) && !empty($r['started']) ? ' <span class="mu">(' . max(1, (int)round(((int)$r['ended'] - (int)$r['started']) / 60)) . ' min)</span>' : '' ?></td></tr>
+          <?php endforeach; ?></tbody>
+        </table>
+        <?php endif; ?>
+      </section>
+      <datalist id="mi-boxes"><?php foreach ($mBoxes as $b): ?><option value="<?= h((string)$b['email']) ?>"><?php endforeach; ?></datalist>
   <?php endif; ?>
 <?php endif; ?>
 
@@ -6780,6 +6899,28 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
       cnt.textContent = n + ' de ' + rows.length + ' registos'; }
     ft.addEventListener('change', filt); q.addEventListener('input', filt); filt();
   }
+})();
+</script>
+<?php endif; ?>
+<?php if ($page === 'email'): ?>
+<script>
+(function () {
+  document.querySelectorAll('[data-mi-ssl]').forEach(function (sel) {
+    var port = sel.closest('form').querySelector('[data-mi-port]');
+    sel.addEventListener('change', function () { if (port) port.value = sel.value === 'imaps' ? '993' : '143'; });
+  });
+  var box = document.getElementById('mi-runs');
+  function poll() {
+    if (!box || box.getAttribute('data-running') === '0') return;
+    setTimeout(function () {
+      fetch(location.href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (t) {
+        var d = new DOMParser().parseFromString(t, 'text/html').getElementById('mi-runs');
+        if (d) { box.innerHTML = d.innerHTML; box.setAttribute('data-running', d.getAttribute('data-running')); }
+        poll();
+      }).catch(poll);
+    }, 8000);
+  }
+  poll();
 })();
 </script>
 <?php endif; ?>
@@ -9756,7 +9897,7 @@ install -d -o root -g root -m 755 /opt/minipainel/files
 cat > /opt/minipainel/files/index.php <<'MPFILES'
 <?php
 /**
- * IDDigital Hosting v2.14.1 — gestor de ficheiros (API)
+ * IDDigital Hosting v2.15.0 — gestor de ficheiros (API)
  * Corre num pool PHP-FPM próprio de cada site, como o utilizador do site (mp_<site>),
  * preso à pasta /srv/www/<site> por open_basedir. O acesso é protegido pela sessão
  * do painel (auth_request no nginx) e os pedidos de escrita exigem o cabeçalho
@@ -10196,12 +10337,12 @@ say "A instalar o CLI mpanel..."
 cat > /usr/local/sbin/mpanel <<'MPCLI'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel — IDDigital Hosting CLI v2.14.1
+#  mpanel — IDDigital Hosting CLI v2.15.0
 # =============================================================================
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   # o cron só tem /usr/bin:/bin (sem nft, postqueue, sysctl…)
 
-MP_VERSION="2.14.1"
+MP_VERSION="2.15.0"
 CONF=/etc/minipainel/minipainel.conf
 [ -r "$CONF" ] || { echo "ERRO: configuração em falta ($CONF)." >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -10534,6 +10675,105 @@ cmd_site_list(){
   return 0
 }
 
+site_placeholder(){ # página "Brevemente" dos sites novos (um só ficheiro, sem recursos externos)
+  cat <<'MPPLACEHOLDER'
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Brevemente</title>
+<style>
+:root{--bg1:#0f2a44;--bg2:#174f6e;--bg3:#1f8a8a;--ink:#ffffff;--mu:rgba(255,255,255,.78);--card:rgba(255,255,255,.08);--line:rgba(255,255,255,.18)}
+@media (prefers-color-scheme:light){:root{--bg1:#e9f1f8;--bg2:#d6e7f3;--bg3:#cfeeea;--ink:#0f2236;--mu:#41566b;--card:rgba(255,255,255,.65);--line:rgba(15,34,54,.12)}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{min-height:100vh;display:flex;flex-direction:column;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);
+  background:linear-gradient(135deg,var(--bg1),var(--bg2) 55%,var(--bg3));background-size:200% 200%;animation:bg 18s ease-in-out infinite;overflow-x:hidden}
+@keyframes bg{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+.orb{position:fixed;border-radius:50%;filter:blur(60px);opacity:.35;pointer-events:none}
+.orb.a{width:46vw;height:46vw;left:-12vw;top:-14vw;background:#3fb6c9;animation:fl 22s ease-in-out infinite}
+.orb.b{width:38vw;height:38vw;right:-10vw;bottom:-14vw;background:#5a7bff;animation:fl 26s ease-in-out infinite reverse}
+@keyframes fl{0%,100%{transform:translate(0,0)}50%{transform:translate(4vw,3vw)}}
+@media (prefers-reduced-motion:reduce){body,.orb{animation:none}}
+header{position:relative;padding:28px 7vw 0;display:flex;align-items:center}
+header a{color:var(--ink);display:inline-flex}
+.logo{height:clamp(34px,3.4vw,46px);width:auto;display:block}
+main{flex:1;display:flex;align-items:center;width:100%;padding:6vh 7vw 8vh;position:relative}
+.wrap{width:100%;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:6vw;align-items:center}
+.tag{display:inline-flex;align-items:center;gap:10px;padding:8px 16px;border:1px solid var(--line);border-radius:999px;background:var(--card);backdrop-filter:blur(8px);font-size:14px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.dot{width:9px;height:9px;border-radius:50%;background:#43d39e;box-shadow:0 0 0 0 rgba(67,211,158,.6);animation:pu 2s infinite}
+@keyframes pu{0%{box-shadow:0 0 0 0 rgba(67,211,158,.6)}70%{box-shadow:0 0 0 12px rgba(67,211,158,0)}100%{box-shadow:0 0 0 0 rgba(67,211,158,0)}}
+h1{font-size:clamp(34px,6.4vw,96px);line-height:1.04;margin:28px 0 18px;font-weight:800;letter-spacing:-.03em;white-space:nowrap}
+.lead{font-size:clamp(18px,1.6vw,22px);color:var(--mu);max-width:36em;margin:0}
+.en{margin-top:10px;font-size:15px;color:var(--mu);opacity:.85}
+.panel{border:1px solid var(--line);border-radius:28px;background:var(--card);backdrop-filter:blur(10px);padding:clamp(24px,3vw,40px)}
+.panel h2{font-size:15px;text-transform:uppercase;letter-spacing:.08em;margin:0 0 18px;color:var(--mu);font-weight:700}
+.step{display:flex;gap:16px;align-items:flex-start;padding:14px 0;border-top:1px solid var(--line)}
+.step:first-of-type{border-top:0;padding-top:0}
+.ic{flex:none;width:44px;height:44px;border-radius:14px;display:grid;place-items:center;background:rgba(255,255,255,.12);border:1px solid var(--line)}
+.ic svg{width:22px;height:22px}
+.step b{display:block;font-size:17px}
+.step span{color:var(--mu);font-size:15px}
+footer{position:relative;padding:22px 7vw;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:14px;color:var(--mu);border-top:1px solid var(--line)}
+@media (max-width:900px){.wrap{grid-template-columns:1fr}main{padding:5vh 7vw 6vh}}
+</style>
+</head>
+<body>
+<div class="orb a"></div><div class="orb b"></div>
+<header><a href="https://iddigital.pt" rel="noopener" aria-label="IDDigital"><svg class="logo" viewBox="0 0 62.97 18.26" role="img" aria-label="IDDigital" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M 10.696104,17.232981 C 9.5129773,16.842176 8.7260574,16.372185 7.9458244,15.590365 c -1.114,-1.116262 -1.7157692,-2.493883 -1.784426,-4.085056 -0.014374,-0.333159 -0.00865,-0.457078 0.029917,-0.647164 0.099813,-0.491997 0.3189197,-0.9047228 0.6668116,-1.2560559 0.8274806,-0.8356635 2.1314767,-1.0014038 3.189827,-0.405435 0.261545,0.1472777 0.723354,0.5928945 0.865202,0.8348679 0.214006,0.365059 0.316112,0.722462 0.350283,1.226095 0.0346,0.509923 0.209212,0.888772 0.54975,1.192761 0.343775,0.306876 0.717013,0.444297 1.196753,0.440625 0.525886,-0.004 0.905248,-0.154464 1.248715,-0.495181 0.235108,-0.233227 0.351055,-0.432298 0.431021,-0.740031 0.05275,-0.202983 0.05767,-0.273977 0.0419,-0.604108 C 14.662552,9.6065015 14.075119,8.3362136 12.999265,7.3056355 12.048684,6.3950566 10.862731,5.8387523 9.4907979,5.6598913 9.0218609,5.5987579 8.1134294,5.6186003 7.6756472,5.6995508 6.3679108,5.9413587 5.3155828,6.4713126 4.423572,7.3373012 3.910517,7.8353884 3.5632817,8.3130464 3.2715718,8.9219956 2.8556734,9.7901897 2.6909166,10.742689 2.7685575,11.830049 c 0.055923,0.783182 0.1672461,1.327816 0.436759,2.136766 0.1797827,0.539622 0.1806174,0.605202 0.00988,0.77594 -0.094738,0.09474 -0.119626,0.105283 -0.248473,0.105283 -0.1660019,0 -0.2799034,-0.05074 -0.3567817,-0.158919 C 2.5458511,14.598936 2.3598961,14.029801 2.2414377,13.561284 1.9117912,12.2575 1.8815863,10.789106 2.1618329,9.6914849 2.5560106,8.147645 3.6460195,6.7437251 5.1475424,5.8459267 7.3224606,4.545487 10.115883,4.5274669 12.319362,5.7996657 c 1.715935,0.9907074 2.873217,2.6135551 3.201846,4.4899243 0.07645,0.436502 0.110227,0.99086 0.07811,1.282039 -0.09176,0.832016 -0.604065,1.554468 -1.370112,1.932141 -0.425591,0.209822 -0.613626,0.24943 -1.177703,0.248064 -0.448773,-0.0011 -0.503433,-0.007 -0.732963,-0.07746 -0.87301,-0.268526 -1.522411,-0.925309 -1.734383,-1.754115 -0.02862,-0.111896 -0.06518,-0.356227 -0.08124,-0.542947 -0.03397,-0.394862 -0.102412,-0.627427 -0.25685,-0.872738 C 10.033828,10.167463 9.6093692,9.8704218 9.1869714,9.7634095 8.9528412,9.7040972 8.5620269,9.7097502 8.3021585,9.7762077 7.7275959,9.9231553 7.3086886,10.298932 7.111982,10.843844 c -0.074054,0.205143 -0.079853,0.249702 -0.077714,0.597194 0.00823,1.338483 0.5321468,2.601535 1.4809618,3.57036 0.7632773,0.779376 1.5081182,1.232518 2.5716382,1.564519 0.385877,0.120458 0.468886,0.189169 0.489653,0.405307 0.01075,0.111391 0.0027,0.152793 -0.03858,0.199197 -0.06269,0.07051 -0.307281,0.189422 -0.384621,0.187006 -0.03048,-9.44e-4 -0.236233,-0.06145 -0.457226,-0.134457 z M 6.6904661,17.164437 C 6.6024841,17.126114 6.1242485,16.631374 5.8040522,16.247429 5.3889771,15.749717 4.8134382,14.798822 4.5796876,14.224554 4.2080316,13.311486 4.0390981,12.44863 4.0344449,11.439633 4.0315488,10.812052 4.0523334,10.622866 4.1714275,10.192654 4.4032301,9.3552972 4.7979022,8.7065962 5.4566054,8.0802783 6.6288369,6.9656805 8.3477125,6.53442 9.9677565,6.9484445 11.395991,7.3134498 12.624593,8.385578 13.130529,9.7084047 c 0.179752,0.4699833 0.277045,0.9492623 0.284758,1.4027433 0.0039,0.2333 -0.0034,0.280082 -0.05759,0.367839 -0.07922,0.128173 -0.185,0.182331 -0.356132,0.182331 -0.271196,0 -0.421017,-0.180507 -0.42109,-0.50734 C 12.580366,10.630453 12.386096,9.9467474 12.106308,9.4850986 11.519961,8.5176305 10.503356,7.8549032 9.3382846,7.6806177 8.9765395,7.6265032 8.2377737,7.6433484 7.9250422,7.712841 6.3064884,8.0725247 5.1663437,9.216776 4.9019127,10.74686 c -0.048713,0.281867 -0.040483,1.037965 0.016134,1.482521 0.1392626,1.093469 0.435231,1.866856 1.1081841,2.895762 0.2908723,0.444728 0.4825181,0.683363 0.8959562,1.115635 0.2592815,0.271092 0.3388777,0.372163 0.3531957,0.448482 0.04265,0.227351 -0.069562,0.416401 -0.2855706,0.48112 -0.138344,0.04144 -0.193019,0.04037 -0.299346,-0.0059 z m 5.5207159,-1.54205 C 11.244805,15.510073 10.366448,15.094396 9.6752993,14.422292 8.8680425,13.637276 8.3961892,12.623707 8.3226635,11.516734 c -0.014569,-0.219391 -0.00898,-0.29249 0.029947,-0.394527 0.085794,-0.224661 0.3138299,-0.316951 0.5552824,-0.224741 0.1893172,0.0723 0.2336623,0.167004 0.2626962,0.561026 0.047867,0.649573 0.2164175,1.171521 0.5465019,1.692305 0.478925,0.755612 1.285532,1.346508 2.129856,1.56027 0.515341,0.130473 0.954321,0.158609 1.522371,0.09758 0.25322,-0.02721 0.502392,-0.04158 0.553715,-0.03196 0.0597,0.01126 0.129162,0.05719 0.192819,0.127645 0.08538,0.09451 0.0995,0.129217 0.0995,0.244514 0,0.157022 -0.07723,0.291864 -0.21238,0.370795 -0.171403,0.100097 -1.271672,0.163198 -1.791791,0.102753 z M 1.5515958,7.1526948 C 1.4873796,7.1293278 1.3569964,7.0003509 1.3135813,6.9172481 1.2251437,6.7479642 1.2653004,6.6170208 1.5014118,6.304768 2.2840541,5.2697396 3.2799235,4.4288405 4.4123052,3.8468473 5.3878281,3.345472 6.3437639,3.0512582 7.537093,2.8851119 c 0.4932469,-0.068671 1.9175775,-0.068671 2.4108249,0 2.4273701,0.3379607 4.3925631,1.4211281 5.8350501,3.2161431 0.273249,0.3400272 0.399842,0.5400029 0.399842,0.6316181 0,0.2252296 -0.195182,0.4254658 -0.414722,0.4254658 -0.07467,0 -0.158537,-0.019956 -0.201131,-0.047867 C 15.526779,7.0841417 15.377686,6.9100193 15.235648,6.7235286 14.506048,5.7655897 13.583182,5.007309 12.512436,4.485975 11.291939,3.8917299 10.097979,3.6209526 8.7009401,3.6215672 7.275676,3.6221957 6.0752471,3.8976143 4.8738546,4.4996332 3.7786794,5.0484254 2.900244,5.7808957 2.1395936,6.779554 2.0080624,6.952241 1.8662182,7.1112306 1.8243846,7.132865 1.7480846,7.172322 1.6292648,7.18096 1.5515958,7.1526948 Z M 3.8100123,2.7920664 C 3.497075,2.6920703 3.4166986,2.3074566 3.6618987,2.0833121 3.8117352,1.9463439 4.7695509,1.5215205 5.4243361,1.3016113 6.1572227,1.0554732 6.9907558,0.87692327 7.7864887,0.79561623 8.1981408,0.75355388 9.2857142,0.75413562 9.7123764,0.79666083 10.709221,0.89598665 11.56665,1.0988344 12.497294,1.4555195 12.959321,1.6326 13.75672,1.9956248 13.830686,2.0625642 13.908374,2.1328789 13.975124,2.3346744 13.95533,2.4394218 13.925446,2.5975653 13.842688,2.700374 13.702032,2.7540914 13.537356,2.8169826 13.504967,2.807915 12.926808,2.5369619 11.598059,1.9142622 10.445355,1.6422506 8.9975808,1.6097578 7.2861158,1.5713503 5.8249633,1.8966278 4.3478231,2.6448848 4.0272707,2.8072624 3.9358377,2.8322874 3.8100123,2.7920828 Z"/><g font-family="Arial,'Liberation Sans',Helvetica,sans-serif" font-weight="700"><text x="18.0823" y="12.868" font-size="11.6841" fill="#16a596">id</text><text x="28.9553" y="12.7322" font-size="11.4367" fill="currentColor">digital</text><text x="60.362" y="15.427" font-size="2.88254" font-weight="400" fill="currentColor" text-anchor="end">hosting</text></g></svg></a></header>
+<main>
+  <div class="wrap">
+    <section>
+      <span class="tag"><span class="dot"></span>Brevemente</span>
+      <h1 id="d">o seu site</h1>
+      <p class="lead">Estamos a preparar um novo site. Volte em breve para conhecer as novidades.</p>
+      <p class="en">Coming soon — this website is under construction.</p>
+    </section>
+    <aside class="panel" aria-label="Estado">
+      <h2>Em preparação</h2>
+      <div class="step"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg></div><div><b>Domínio ativo</b><span>O endereço já está ligado a este servidor.</span></div></div>
+      <div class="step"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="m14 7 3 3"/></svg></div><div><b>Conteúdos em construção</b><span>Textos, imagens e páginas a caminho.</span></div></div>
+      <div class="step"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div><b>Disponível em breve</b><span>Obrigado pela visita e pela paciência.</span></div></div>
+    </aside>
+  </div>
+</main>
+<footer><span id="f">&copy; <span id="y"></span></span><span id="h"></span></footer>
+<script>
+(function(){var h=(location.hostname||"").replace(/^www\./,"");var ip=/^[0-9.]+$|:/.test(h);
+document.getElementById("d").textContent=h&&!ip?h:"o seu site";document.getElementById("y").textContent=new Date().getFullYear();
+document.getElementById("h").textContent=h&&!ip?h:"";if(h&&!ip)document.title=h+" — Brevemente";
+var t=document.getElementById("d");function fit(){t.style.fontSize="";var w=t.parentNode.clientWidth,s=parseFloat(getComputedStyle(t).fontSize);while(t.scrollWidth>w&&s>18){s-=2;t.style.fontSize=s+"px";}}
+fit();addEventListener("resize",fit);})();
+</script>
+</body>
+</html>
+MPPLACEHOLDER
+}
+site_placeholder_old(){ # nome versão -> a página que as versões anteriores criavam (para a reconhecer sem tocar em conteúdo do utilizador)
+  local n=$1 v=$2 d="$WWW_ROOT/$1"
+  cat <<EOF
+<!doctype html>
+<html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>$n</title>
+<style>html,body{height:100%;margin:0}body{display:flex;align-items:center;justify-content:center;font:16px/1.5 system-ui,sans-serif;background:#eaeef2;color:#16222e}div{text-align:center;padding:24px}h1{margin:0 0 8px}p{margin:0;color:#4a5a6a}</style></head>
+<body><div><h1>$n</h1><p>Site ativo com PHP $v. Substitui este ficheiro em $d/public_html.</p></div></body></html>
+EOF
+}
+cmd_site_placeholder_upgrade(){ # troca a página antiga pela nova, só onde o index.html é exatamente o que o painel criou
+  local n f v c=0
+  for n in $(site_names); do
+    f="$WWW_ROOT/$n/public_html/index.html"
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    v=$(grep -o 'Site ativo com PHP [0-9.]*\.' "$f" 2>/dev/null | head -n 1 | sed 's/Site ativo com PHP //; s/\.$//')
+    [ -n "$v" ] || continue
+    if cmp -s "$f" <(site_placeholder_old "$n" "$v"); then
+      site_placeholder > "$f.mp-novo" && chown "mp_$n:mp_$n" "$f.mp-novo" && chmod 640 "$f.mp-novo" && mv -f "$f.mp-novo" "$f" && c=$((c+1))
+    fi
+  done
+  echo "Página \"Brevemente\" atualizada em $c sites (os sites com conteúdo próprio não foram tocados)."
+  return 0
+}
 cmd_site_add(){
   local n="${1:-}" port="" v="$DEFAULT_PHP" key val lo hi re='^[0-9]{1,6}$' adoms="" assl=none
   local -A lims=()
@@ -10571,12 +10811,7 @@ cmd_site_add(){
   web_join "$n"
   install -d -o "$u" -g "$u" -m 2750 "$d" "$d/public_html"
   install -d -o "$u" -g "$u" -m 700 "$d/logs" "$d/tmp"
-  cat > "$d/public_html/index.html" <<EOF
-<!doctype html>
-<html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>$n</title>
-<style>html,body{height:100%;margin:0}body{display:flex;align-items:center;justify-content:center;font:16px/1.5 system-ui,sans-serif;background:#eaeef2;color:#16222e}div{text-align:center;padding:24px}h1{margin:0 0 8px}p{margin:0;color:#4a5a6a}</style></head>
-<body><div><h1>$n</h1><p>Site ativo com PHP $v. Substitui este ficheiro em $d/public_html.</p></div></body></html>
-EOF
+  site_placeholder > "$d/public_html/index.html"
   chown "$u:$u" "$d/public_html/index.html"
   chmod 640 "$d/public_html/index.html"
 
@@ -13341,6 +13576,170 @@ mail_history_json(){ # últimas mensagens rejeitadas ou marcadas como spam (hist
      subject:(.subject // ""), ip:(.ip // ""), symbols:([(.symbols // {}) | to_entries[] | select((.value.score // 0) >= 1) | .key] | .[0:8])}] | .[0:150]' 2>/dev/null || echo '[]'
 }
 
+# ---------- importar caixas de correio de outro servidor (Dovecot doveadm + imapc) ----------
+MI_DIR=$DATA/mail-import
+MI_STATE=$DATA/stats/mail-import.json
+mi_conf(){ # id host porta ssl utilizador verificar_cert prefixo password(stdin) -> ficheiro de configuração temporário (só root)
+  local id=$1 host=$2 port=$3 ssl=$4 user=$5 ver=$6 pre=$7 pass f
+  IFS= read -r pass
+  install -d -m 700 "$MI_DIR"; f="$MI_DIR/$id.conf"
+  ( umask 077
+    {
+      echo "!include /etc/dovecot/dovecot.conf"
+      echo "imapc_host = $host"; echo "imapc_port = $port"; echo "imapc_ssl = $ssl"
+      echo "imapc_user = $user"; printf 'imapc_password = %s\n' "$pass"
+      echo "imapc_features = rfc822.size fetch-headers"
+      [ -n "$pre" ] && echo "imapc_list_prefix = $pre"
+      echo "ssl_client_ca_dir = /etc/ssl/certs"
+      echo "imapc_ssl_verify = $([ "$ver" = 1 ] && echo yes || echo no)"
+      echo "mail_prefetch_count = 20"
+      echo "imapc_max_idle_time = 29 mins"
+    } > "$f" )
+  echo "$f"
+}
+mi_args(){ # interpreta as opções comuns
+  MI_HOST=""; MI_PORT=993; MI_SSL=imaps; MI_USER=""; MI_VER=1; MI_PRE=""; MI_EXCL=1; MI_SINCE=""; MI_DEST=""; MI_CREATE=0; MI_PASS=""; MI_LIST=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host) MI_HOST="${2:-}"; shift 2 || shift ;;
+      --port) MI_PORT="${2:-}"; shift 2 || shift ;;
+      --ssl) MI_SSL="${2:-}"; shift 2 || shift ;;
+      --user) MI_USER="${2:-}"; shift 2 || shift ;;
+      --no-verify) MI_VER=0; shift ;;
+      --prefix) MI_PRE="${2:-}"; shift 2 || shift ;;
+      --all-folders) MI_EXCL=0; shift ;;
+      --since) MI_SINCE="${2:-}"; shift 2 || shift ;;
+      --dest) MI_DEST=$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z'); shift 2 || shift ;;
+      --create) MI_CREATE=1; shift ;;
+      --password) MI_PASS="${2:-}"; shift 2 || shift ;;   # vem da fila do painel (corre no mesmo processo: não aparece na lista de processos)
+      --list) MI_LIST="${2:-}"; shift 2 || shift ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+  [[ "$MI_HOST" =~ ^[A-Za-z0-9.-]{1,253}$|^[0-9a-fA-F:.]+$ ]] || die "Servidor de origem inválido."
+  [[ "$MI_PORT" =~ ^[0-9]{1,5}$ ]] || die "Porta inválida."
+  [[ "$MI_SSL" =~ ^(imaps|starttls|no)$ ]] || die "Segurança: imaps, starttls ou no."
+  [ -n "$MI_LIST" ] || [[ -n "$MI_USER" && ${#MI_USER} -le 200 && ! "$MI_USER" =~ [[:space:][:cntrl:]] ]] || die "Utilizador de origem inválido."
+  [[ -z "$MI_PRE" || "$MI_PRE" =~ ^[A-Za-z0-9._/-]{1,40}$ ]] || die "Prefixo inválido."
+  [[ -z "$MI_SINCE" || "$MI_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "Data inválida (AAAA-MM-DD)."
+}
+cmd_mail_import_test(){ # opções; password no stdin
+  mail_need; mi_args "$@"
+  local id="t$EPOCHSECONDS$RANDOM" f out rc
+  [ -n "$MI_PASS" ] || IFS= read -r MI_PASS
+  f=$(printf '%s\n' "$MI_PASS" | mi_conf "$id" "$MI_HOST" "$MI_PORT" "$MI_SSL" "$MI_USER" "$MI_VER" "$MI_PRE")
+  # o doveadm pergunta ao Dovecot em execução pelo utilizador: usa uma caixa real (a de destino, se já existir);
+  # com mail_location=imapc: só se fala com a origem, a caixa local não é lida nem alterada
+  local tu=""
+  [ -n "$MI_DEST" ] && [ "$(jq --arg e "$MI_DEST" '.boxes | has($e)' <<<"$(mail_data)")" = true ] && tu=$MI_DEST
+  [ -n "$tu" ] || tu=$(jq -r '.boxes | keys[0] // ""' <<<"$(mail_data)")
+  [ -n "$tu" ] || { rm -f "$f"; die "Cria primeiro uma caixa de correio neste servidor (é usada para o teste)."; }
+  out=$(timeout 90 doveadm -c "$f" -o mail_location=imapc: mailbox status -u "$tu" "messages vsize" '*' 2>&1); rc=$?
+  rm -f "$f"
+  if [ "$rc" != 0 ] || [ -z "$out" ]; then
+    out=$(printf '%s' "$out" | grep -iE 'error|fail|auth|refused|timed|certificate' | head -n 1 | sed 's/^.*Error: //; s/^imapc([^)]*): //' | cut -c1-200)
+    die "Não foi possível ligar ou entrar na caixa de origem: ${out:-sem resposta}"
+  fi
+  # resumo: pastas, mensagens, tamanho; e se as pastas vêm dentro de INBOX (cPanel/Courier)
+  printf '%s\n' "$out" | awk '
+    !/messages=/ { next }
+    { n = $1; sub(/^[^ ]+ /, ""); m = 0; v = 0; for (i = 1; i <= NF; i++) { if ($i ~ /^messages=/) { m = substr($i, 10) } if ($i ~ /^vsize=/) { v = substr($i, 7) } }
+      f++; tm += m; tv += v; if (n ~ /^INBOX[.\/]./) pre++; list = list (list ? ", " : "") n " (" m ")" }
+    END { printf "Ligação OK: %d pastas, %d mensagens, %.1f MB.\n", f, tm, tv / 1048576; if (pre > 1 && pre >= f - 2) print "As pastas da origem estão dentro de INBOX: usa o prefixo INBOX."; print "Pastas: " list }'
+  return 0
+}
+mi_state(){ # estado para o painel (sem passwords)
+  local f j="[]"
+  for f in "$MI_DIR"/*.json; do [ -f "$f" ] && j=$(jq -c --slurpfile r "$f" '. + $r' <<<"$j"); done
+  install -d -m 755 "$(dirname "$MI_STATE")"
+  jq -c 'sort_by(.created) | reverse | .[0:200]' <<<"$j" > "$MI_STATE.tmp" && mv -f "$MI_STATE.tmp" "$MI_STATE"
+  chown root:"$PANEL_SYSUSER" "$MI_STATE"; chmod 640 "$MI_STATE"
+}
+mi_add(){ # acrescenta uma importação à fila (password em MI_PASS)
+  local id d pass=$MI_PASS
+  [ -n "$pass" ] || die "Falta a password da caixa de origem."
+  d=${MI_DEST#*@}
+  [ "$(jq --arg d "$d" '.domains | has($d)' <<<"$(mail_data)")" = true ] || die "O domínio $d não está configurado no email."
+  if [ "$(jq --arg e "$MI_DEST" '.boxes | has($e)' <<<"$(mail_data)")" != true ]; then
+    [ "$MI_CREATE" = 1 ] || die "A caixa $MI_DEST não existe (ativa \"criar as caixas que não existam\")."
+    [ ${#pass} -ge 10 ] || die "A caixa $MI_DEST não existe e a password da origem tem menos de 10 caracteres: cria a caixa primeiro."
+    cmd_mail_box_add "$MI_DEST" --password "$pass" >/dev/null || die "Não foi possível criar a caixa $MI_DEST."
+  fi
+  id="$EPOCHSECONDS$(printf '%04d' $((RANDOM % 10000)))"
+  install -d -m 700 "$MI_DIR"
+  ( umask 077; printf '%s\n' "$pass" > "$MI_DIR/$id.pass" )
+  jq -n --arg id "$id" --arg h "$MI_HOST" --arg p "$MI_PORT" --arg s "$MI_SSL" --arg u "$MI_USER" --arg v "$MI_VER" --arg pre "$MI_PRE" \
+        --arg x "$MI_EXCL" --arg since "$MI_SINCE" --arg d "$MI_DEST" --arg c "$MI_CREATE" --arg t "$EPOCHSECONDS" \
+    '{id:$id, host:$h, port:($p|tonumber), ssl:$s, user:$u, verify:($v == "1"), prefix:$pre, exclude:($x == "1"), since:$since, dest:$d, create:($c == "1"),
+      status:"pending", created:($t|tonumber), started:0, ended:0, msgs:0, mb:0, msg:"Na fila"}' > "$MI_DIR/$id.json"
+  chmod 600 "$MI_DIR/$id.json"
+  echo "$id"
+}
+cmd_mail_import_start(){ # opções (--dest obrigatório); password no stdin
+  mail_need; mi_args "$@"; valid_email "$MI_DEST" || die "Caixa de destino inválida."
+  [ -n "$MI_PASS" ] || IFS= read -r MI_PASS
+  local id; id=$(mi_add) || exit 1
+  mi_state; mi_runner_spawn
+  echo "Importação de $MI_USER@$MI_HOST para $MI_DEST na fila (corre em segundo plano)."
+  return 0
+}
+cmd_mail_import_bulk(){ # opções comuns + --list "origem;password;destino" (uma por linha) ou as linhas no stdin
+  mail_need
+  local line u p d n=0 bad=0 base=() lst="" a
+  while [ $# -gt 0 ]; do if [ "$1" = --list ]; then lst="${2:-}"; shift 2 || shift; else base+=("$1"); shift; fi; done
+  [ -n "$lst" ] || lst=$(cat)
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}; [ -n "${line// }" ] || continue; [[ "$line" == \#* ]] && continue
+    IFS=';' read -r u p d <<<"$line"
+    u=$(printf '%s' "$u" | xargs); d=$(printf '%s' "${d:-$u}" | xargs | tr 'A-Z' 'a-z')
+    if [ -z "$u" ] || [ -z "$p" ] || ! valid_email "$d"; then bad=$((bad+1)); continue; fi
+    ( mi_args "${base[@]}" --user "$u" --dest "$d" --password "$p"; mi_add >/dev/null ) && n=$((n+1)) || bad=$((bad+1))
+  done <<<"$lst"
+  [ "$n" -gt 0 ] || die "Nenhuma linha válida (formato: origem;password;destino)."
+  mi_state; mi_runner_spawn
+  echo "$n caixas na fila para importar$([ "$bad" -gt 0 ] && echo "; $bad linhas ignoradas (incompletas ou com destino inválido)")."
+  return 0
+}
+mi_runner_spawn(){ # um só executor em segundo plano, fora do bloqueio do painel
+  ( setsid /usr/local/sbin/mpanel mail-import-run </dev/null >/dev/null 2>&1 & ) 9>&-
+}
+cmd_mail_import_run(){ # executa a fila, uma caixa de cada vez
+  exec 8>/run/minipainel-mail-import.lock; flock -n 8 || return 0
+  local f id j pass conf log rc out m v q ex
+  while :; do
+    f=$(for x in "$MI_DIR"/*.json; do [ -f "$x" ] && jq -e '.status == "pending"' "$x" >/dev/null 2>&1 && echo "$x"; done | sort | head -n 1)
+    [ -n "$f" ] || break
+    j=$(cat "$f"); id=$(jq -r .id <<<"$j")
+    upd(){ jq "$@" "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"; mi_state; }
+    upd --arg t "$EPOCHSECONDS" '.status = "running" | .started = ($t|tonumber) | .msg = "A importar…"'
+    pass=$(cat "$MI_DIR/$id.pass" 2>/dev/null)
+    local dest; dest=$(jq -r .dest <<<"$j")
+    if [ "$(jq --arg e "$dest" '.boxes | has($e)' <<<"$(mail_data)")" != true ]; then
+      rm -f "$MI_DIR/$id.pass"; upd --arg t "$EPOCHSECONDS" '.status = "failed" | .ended = ($t|tonumber) | .msg = "A caixa de destino já não existe."'; continue
+    fi
+    conf=$(printf '%s\n' "$pass" | mi_conf "$id" "$(jq -r .host <<<"$j")" "$(jq -r .port <<<"$j")" "$(jq -r .ssl <<<"$j")" "$(jq -r .user <<<"$j")" "$( [ "$(jq -r .verify <<<"$j")" = true ] && echo 1 || echo 0)" "$(jq -r .prefix <<<"$j")")
+    rm -f "$MI_DIR/$id.pass"; pass=""
+    log="$MI_DIR/$id.log"
+    ex=(); [ "$(jq -r .exclude <<<"$j")" = true ] && ex=(-x Trash -x Junk -x Spam -x "Deleted Items" -x "Junk E-mail" -x "INBOX.Trash" -x "INBOX.Junk" -x "INBOX.Spam")
+    local since; since=$(jq -r .since <<<"$j"); [ -n "$since" ] && ex+=(-t "$since")
+    timeout 21600 doveadm -c "$conf" -o mail_fsync=never sync -1 -R "${ex[@]}" -u "$dest" imapc: > "$log" 2>&1; rc=$?
+    rm -f "$conf"
+    out=$(doveadm mailbox status -u "$dest" "messages vsize" '*' 2>/dev/null | awk '{for (i = 1; i <= NF; i++) { if ($i ~ /^messages=/) m += substr($i, 10); if ($i ~ /^vsize=/) v += substr($i, 7) } } END { printf "%d %d", m, v / 1048576 }')
+    m=${out% *}; v=${out#* }
+    if [ "$rc" = 0 ]; then
+      upd --arg t "$EPOCHSECONDS" --argjson m "${m:-0}" --argjson v "${v:-0}" '.status = "done" | .ended = ($t|tonumber) | .msgs = $m | .mb = $v | .msg = "Concluída"'
+    else
+      q=$(grep -iE 'error|fail|quota|auth' "$log" | tail -n 2 | sed 's/^.*Error: //' | cut -c1-220 | tr '\n' ' ')
+      upd --arg t "$EPOCHSECONDS" --argjson m "${m:-0}" --argjson v "${v:-0}" --arg e "${q:-erro $rc}" '.status = "failed" | .ended = ($t|tonumber) | .msgs = $m | .mb = $v | .msg = ("Falhou: " + $e)'
+    fi
+    chmod 600 "$log"
+  done
+  return 0
+}
+cmd_mail_import_clear(){ # apaga do histórico as importações terminadas
+  local f; for f in "$MI_DIR"/*.json; do [ -f "$f" ] || continue; jq -e '.status == "done" or .status == "failed"' "$f" >/dev/null 2>&1 && rm -f "$f" "${f%.json}.log"; done
+  mi_state; echo "Histórico de importações limpo."; return 0
+}
 # ============================ ATUALIZAÇÕES ===================================
 UPD_CONF=/etc/minipainel/update.conf          # URL=, KEY (chave pública em update.pub)
 UPD_PUB=/etc/minipainel/update.pub
@@ -15288,7 +15687,7 @@ cmd_worker(){
       rm -f "$f"
       [[ "$id" =~ $re ]] || continue
       case "$action" in
-        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|fm-xfer|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
+        site-add|site-del|site-php|site-enable|site-disable|site-fixperms|site-limits|ext-add|ext-del|db-add|db-del|db-passwd|db-admin-passwd|db-link|pma-update|panel-passwd-hash|service|block|unblock|allow-add|allow-del|fw-auto|cron-add|cron-edit|cron-del|cron-on|cron-off|cron-run|backup-start|bk-restore|bk-delete|bk-conf|bk-remote-add|bk-remote-test|bk-remote-del|site-domains|server-mode|panel-domain|panel-allow|ports-access|panel-user|panel-2fa|bk-key|mail-enable|mail-domain-add|mail-domain-del|mail-box-add|mail-box-set|mail-box-del|mail-alias-set|mail-alias-del|mail-settings|mail-av|mail-dns-check|mail-site|mail-queue|mail-list|site-ftp|ftp-settings|pma-settings|protect-settings|dns-enable|dns-zone-add|dns-zone-del|dns-rec-add|dns-rec-del|dns-sync|dns-check|logs-settings|terminal-start|terminal-stop|geoip-update|geo-block|overload-settings|alerts-settings|alerts-test|proc-kill|proc-kill-site|sentinel-run|sentinel-settings|site-perf|cache-purge|opcache-settings|opcache-reset|db-tune|db-slow-report|site-webp|net-tune|brotli|dns-rec-edit|dns-reset|dns-template|dns-import|dns-propagation|dns-settings|dns-restart|dns-server-check|dns-secondary|fm-xfer|mail-import-test|mail-import-start|mail-import-bulk|mail-import-clear|update-token|update-check|update-start|update-rollback|update-key|os-check|os-start|os-auto|reboot|refresh)
           out=$(dispatch "$action" "${args[@]}" 2>&1); rc=$? ;;
         *)
           out="Ação não permitida."; rc=1 ;;
@@ -15306,7 +15705,7 @@ cmd_worker(){
 
 usage(){
   cat <<'EOF'
-IDDigital Hosting — CLI v2.14.1 (mpanel)
+IDDigital Hosting — CLI v2.15.0 (mpanel)
 Uso: mpanel <comando> [argumentos]
 
 Sites
@@ -15350,6 +15749,9 @@ Desempenho
   site-perf <site> [--cache 0|60|300|600|1800|3600] [--pm ondemand|dynamic] [--max-children N] [--slowlog 0..60]
   cache-purge <site>                   limpa a cache de página do site
   site-perf … [--redis on|off] [--redis-mem MB] [--static-days 0|7|30|365] [--webp on|off] [--webp-auto on|off]
+  mail-import-test --host H --user U [--port 993] [--ssl imaps|starttls|no] [--no-verify] [--prefix INBOX]   (password no stdin)
+  mail-import-start … --dest caixa@dominio [--create] [--all-folders] [--since AAAA-MM-DD]   importa uma caixa (em segundo plano)
+  mail-import-bulk … --list "origem;password;destino"   várias caixas · mail-import-clear   limpa o histórico
   fm-xfer <origem> <destino> <pasta> <pasta> copy|move overwrite|keep|skip <item>…   copiar/mover entre sites
   site-webp <site>                     converte as imagens JPG/PNG do site em WebP (imagem.jpg.webp)
   net-tune on|off                      afinação de rede (TCP BBR, filas maiores)
@@ -15577,6 +15979,11 @@ dispatch(){
     dns-server-check)  cmd_dns_server_check ;;
     dns-secondary)     cmd_dns_secondary "$@" ;;
     fm-xfer)           cmd_fm_xfer "$@" ;;
+    site-placeholder-upgrade) cmd_site_placeholder_upgrade ;;
+    mail-import-test)  cmd_mail_import_test "$@" ;;
+    mail-import-start) cmd_mail_import_start "$@" ;;
+    mail-import-bulk)  cmd_mail_import_bulk "$@" ;;
+    mail-import-clear) cmd_mail_import_clear ;;
     site-webp)         cmd_site_webp "$@" ;;
     webp-nightly)      cmd_webp_nightly ;;
     net-tune)          cmd_net_tune "$@" ;;
@@ -15635,6 +16042,7 @@ if [ "$cmd" = mail-spool ]; then cmd_mail_spool; exit $?; fi
 if [ "$cmd" = alert-send ]; then shift; cmd_alert_send "$@"; exit $?; fi
 # o sentinela tem o seu próprio bloqueio: uma operação longa do painel nunca o atrasa
 if [ "$cmd" = sentinel-run ]; then cmd_sentinel_run; exit $?; fi
+if [ "$cmd" = mail-import-run ]; then cmd_mail_import_run; exit $?; fi   # importações de email: o seu próprio bloqueio
 # as atualizações têm bloqueio próprio: o instalador volta a chamar o mpanel durante a instalação
 if [ "$cmd" = update-run ]; then shift; cmd_update_run "$@"; exit $?; fi
 if [ "$cmd" = os-run ]; then shift; cmd_os_run "$@"; exit $?; fi
@@ -15688,7 +16096,7 @@ install -d -o root -g minipainel -m 750 /var/lib/minipainel/stats /var/lib/minip
 cat > /usr/local/sbin/mpanel-stats <<'MPSTATS'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.14.1
+#  mpanel-stats — recolhedor de estatísticas do IDDigital Hosting v2.15.0
 #  Lê o /proc a cada 5 s e grava:
 #    live.json        valores atuais (servidor e por site)
 #    hist-1m.csv      médias por minuto   (24 h)
@@ -16236,7 +16644,7 @@ install -d -m 755 /etc/minipainel/cron
 cat > /usr/local/sbin/mp-sendmail <<'MPSENDMAIL'
 #!/usr/bin/env bash
 # =============================================================================
-#  mp-sendmail — IDDigital Hosting v2.14.1
+#  mp-sendmail — IDDigital Hosting v2.15.0
 #  Recebe o mail() do PHP de um site (corre como mp_<site>) e coloca a mensagem
 #  na fila controlada pelo painel, que aplica limites, antispam e DKIM antes de
 #  a entregar ao Postfix. Os sites não podem usar o sendmail nem a porta 25.
@@ -16308,7 +16716,7 @@ chmod 644 /etc/cron.d/minipainel-geo
 cat > /usr/local/sbin/mpanel-term <<'MPTERM'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-term — IDDigital Hosting v2.14.1
+#  mpanel-term — IDDigital Hosting v2.15.0
 #  Sessão de terminal aberta pelo painel (ttyd). Corre como root, grava a saída
 #  em /var/log/minipainel/terminal/<sessão>.log (com tempos para scriptreplay)
 #  e termina ao fim de 15 minutos sem atividade.
@@ -16333,7 +16741,7 @@ chmod 644 /etc/cron.d/minipainel-terminal
 cat > /usr/local/sbin/mpanel-cron <<'MPCRON'
 #!/usr/bin/env bash
 # =============================================================================
-#  mpanel-cron — IDDigital Hosting v2.14.1
+#  mpanel-cron — IDDigital Hosting v2.15.0
 #  Executa uma tarefa agendada de um site. Corre como o utilizador do site
 #  (mp_<site>), chamado pelo cron a partir de /etc/cron.d/minipainel-<site>.
 #  Não deixa sobrepor execuções e regista a saída em logs/cron-<id>.log.
@@ -16507,6 +16915,7 @@ systemctl reload-or-restart nginx
 /usr/local/sbin/mpanel opcache-settings >/dev/null 2>&1 || warn "Não foi possível configurar o OPcache."
 /usr/local/sbin/mpanel perf-sync >/dev/null 2>&1 || true
 /usr/local/sbin/mpanel dns-cleanup 2>/dev/null | sed 's/^/  /' || true
+/usr/local/sbin/mpanel site-placeholder-upgrade 2>/dev/null | sed 's/^/  /' || true
 grep -q '^NET_TUNE=' /etc/minipainel/server.conf 2>/dev/null || /usr/local/sbin/mpanel net-tune on >/dev/null 2>&1 || true
 grep -q '^BROTLI=' /etc/minipainel/server.conf 2>/dev/null || /usr/local/sbin/mpanel brotli on >/dev/null 2>&1 || warn "Brotli não disponível neste sistema (fica o gzip)."
 printf '# IDDigital Hosting — converte imagens novas em WebP nos sites que o pedem\n40 3 * * * root /usr/local/sbin/mpanel webp-nightly >/dev/null 2>&1\n' > /etc/cron.d/minipainel-webp; chmod 644 /etc/cron.d/minipainel-webp

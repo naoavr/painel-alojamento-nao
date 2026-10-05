@@ -1,5 +1,9 @@
 # Registo de alterações
 
+## 2.15.0
+- Email → Importar: migração de caixas de outros servidores por IMAP (Dovecot doveadm + imapc), uma a uma ou em lista; testar ligação; criação das caixas com a mesma password; pastas, datas e estado de lida mantidos; incremental (sem duplicar); fila em segundo plano; passwords apagadas no fim.
+- Página "Brevemente" nova para os sites sem conteúdo: logótipo IDDigital, domínio do visitante, tema claro/escuro, sem informação técnica. Os sites com a página antiga do painel (exatamente igual) passam para a nova na atualização.
+
 ## 2.14.1
 - Ficheiros: copiar e mover entre sites (barra de seleção e menu de cada item), com escolha do site e da pasta de destino e do que fazer com nomes repetidos; dono e permissões do site de destino; atalhos não copiados; mover só apaga a origem depois da cópia.
 - Domínio do painel: ao mudar para outro nome, página de espera que encaminha para o endereço novo (e indica o endereço de recurso por IP).
