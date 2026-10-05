@@ -1,5 +1,9 @@
 # Registo de alterações
 
+## 2.15.1
+- Logs: barra de separadores a toda a largura para os tipos de registo (Acessos, Erros do servidor, Erros do PHP, PHP lento, Tarefas agendadas), com o site e o "Ao vivo" por cima.
+- Logs → Acessos: separadores com listas completas — Erros 5xx (códigos, IPs, último), Não encontradas (com "Sondagem" para tentativas de robôs), Mais lentas (médio e máximo), IPs (país, 4xx/5xx, tráfego, navegador, bloquear) — com pesquisa, paginação e "Ver pedidos".
+
 ## 2.15.0
 - Email → Importar: migração de caixas de outros servidores por IMAP (Dovecot doveadm + imapc), uma a uma ou em lista; testar ligação; criação das caixas com a mesma password; pastas, datas e estado de lida mantidos; incremental (sem duplicar); fila em segundo plano; passwords apagadas no fim.
 - Página "Brevemente" nova para os sites sem conteúdo: logótipo IDDigital, domínio do visitante, tema claro/escuro, sem informação técnica. Os sites com a página antiga do painel (exatamente igual) passam para a nova na atualização.

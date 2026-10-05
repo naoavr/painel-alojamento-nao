@@ -1,6 +1,6 @@
 <?php
 /**
- * IDDigital Hosting v2.15.0 — painel web (MiniPainel)
+ * IDDigital Hosting v2.15.1 — painel web (MiniPainel)
  * O painel não executa comandos: lê o estado (state.json) e coloca tarefas
  * numa fila, processadas como root pelo worker (mpanel worker).
  * As tarefas são assíncronas: o painel acompanha-as sem ficar bloqueado,
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-const MP_VERSION = '2.15.0';
+const MP_VERSION = '2.15.1';
 const MP_DATA    = '/var/lib/minipainel';
 const MP_QUEUE   = MP_DATA . '/queue';
 const MP_RESULTS = MP_DATA . '/results';
@@ -192,26 +192,38 @@ function log_parse(string $ln): ?array { // formato "combined" do nginx
     return ['ip' => $m[1], 't' => $t ? $t->getTimestamp() : 0, 'm' => $m[3], 'u' => $m[4], 's' => (int)$m[5], 'b' => $m[6] === '-' ? 0 : (int)$m[6], 'r' => $m[7], 'a' => $m[8], 'rt' => $rt, 'cs' => $cs];
 }
 function log_is_bot(string $ua): bool { return (bool)preg_match('/bot|crawl|spider|slurp|bingpreview|facebookexternalhit|curl|wget|python|go-http|semrush|ahrefs|mj12|petal|yandex|dotbot|scrapy/i', $ua); }
-function log_summary(string $f): array { // últimas 24 h
+function log_summary(string $f): array { // últimas 24 h — listas completas (até 300 por separador)
     $since = time() - 86400; $sum = ['total' => 0, 'c' => ['2' => 0, '3' => 0, '4' => 0, '5' => 0], 'bots' => 0, 'bytes' => 0, 'ips' => [], 'e404' => [], 'e5xx' => [], 'slow' => [], 'cache' => [], 'rtn' => 0, 'rts' => 0.0];
     foreach (log_tail($f, 300000, '', 67108864) as $ln) {
         $p = log_parse($ln); if (!$p || $p['t'] < $since) continue;
         $sum['total']++; $k = (string)intdiv($p['s'], 100); if (isset($sum['c'][$k])) $sum['c'][$k]++;
-        $sum['bytes'] += $p['b']; if (log_is_bot($p['a'])) $sum['bots']++;
-        $sum['ips'][$p['ip']] = ($sum['ips'][$p['ip']] ?? 0) + 1;
+        $bot = log_is_bot($p['a']); $sum['bytes'] += $p['b']; if ($bot) $sum['bots']++;
+        $ip = $p['ip'];
+        $r = $sum['ips'][$ip] ?? ['n' => 0, 'last' => 0, 'c4' => 0, 'c5' => 0, 'b' => 0, 'ua' => '', 'bot' => false];
+        $r['n']++; $r['last'] = max($r['last'], $p['t']); $r['b'] += $p['b']; $r['ua'] = $p['a']; $r['bot'] = $bot;
+        if ($p['s'] >= 400 && $p['s'] < 500) $r['c4']++; elseif ($p['s'] >= 500) $r['c5']++;
+        $sum['ips'][$ip] = $r;
         $u = strtok($p['u'], '?') ?: $p['u'];
-        if ($p['s'] === 404) $sum['e404'][$u] = ($sum['e404'][$u] ?? 0) + 1;
-        if ($p['s'] >= 500) $sum['e5xx'][$u] = ($sum['e5xx'][$u] ?? 0) + 1;
+        if ($p['s'] === 404 || $p['s'] >= 500) {
+            $k2 = $p['s'] === 404 ? 'e404' : 'e5xx';
+            $r = $sum[$k2][$u] ?? ['n' => 0, 'last' => 0, 'ips' => [], 'codes' => []];
+            $r['n']++; $r['last'] = max($r['last'], $p['t']); if (count($r['ips']) < 1000) $r['ips'][$ip] = 1;
+            $r['codes'][(string)$p['s']] = ($r['codes'][(string)$p['s']] ?? 0) + 1;
+            $sum[$k2][$u] = $r;
+        }
         if ($p['rt'] !== null && !preg_match('/\.(css|js|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|map)$/i', $u)) {
             $sum['rtn']++; $sum['rts'] += $p['rt'];
-            $q0 = $sum['slow'][$u] ?? [0, 0.0, 0.0]; $sum['slow'][$u] = [$q0[0] + 1, $q0[1] + $p['rt'], max($q0[2], $p['rt'])];
+            $q0 = $sum['slow'][$u] ?? ['n' => 0, 'sum' => 0.0, 'max' => 0.0]; $sum['slow'][$u] = ['n' => $q0['n'] + 1, 'sum' => $q0['sum'] + $p['rt'], 'max' => max($q0['max'], $p['rt'])];
         }
         if ($p['cs'] !== '') $sum['cache'][$p['cs']] = ($sum['cache'][$p['cs']] ?? 0) + 1;
     }
-    $sum['slow'] = array_filter($sum['slow'], function ($v) { return $v[0] >= 2; });
-    uasort($sum['slow'], function ($a, $b) { return ($b[1] / $b[0]) <=> ($a[1] / $a[0]); });
-    $sum['slow'] = array_slice($sum['slow'], 0, 10, true);
-    foreach (['ips', 'e404', 'e5xx'] as $k) { arsort($sum[$k]); $sum[$k] = array_slice($sum[$k], 0, 10, true); }
+    uasort($sum['slow'], function ($a, $b) { return ($b['sum'] / $b['n']) <=> ($a['sum'] / $a['n']); });
+    $sum['slow'] = array_slice($sum['slow'], 0, 300, true);
+    foreach (['e404', 'e5xx', 'ips'] as $k) {
+        uasort($sum[$k], function ($a, $b) { return $b['n'] <=> $a['n']; });
+        $sum[$k] = array_slice($sum[$k], 0, 300, true);
+        if ($k !== 'ips') foreach ($sum[$k] as $u => $r) { $sum[$k][$u]['ips'] = count($r['ips']); }
+    }
     return $sum;
 }
 /* ---------- países (base DB-IP Lite, consultada localmente) e paginação ---------- */
@@ -937,6 +949,27 @@ dialog.drawer{border-radius:24px 0 0 24px}
 .card table.list .who>div{min-width:0}
 @media (max-width:1250px){.lg-tab{table-layout:auto}.lg-tab col{width:auto!important}.lg-tab th:nth-child(6),.lg-tab td:nth-child(6),.lg-tab th:nth-child(7),.lg-tab td:nth-child(7){display:none}}
 .stats.lg-stats{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.lg-sub{display:flex;gap:6px;padding:6px;background:var(--card);border-radius:18px;box-shadow:var(--shadow,0 1px 2px rgba(0,0,0,.04));margin:0;flex-wrap:wrap}
+.lg-sub button{white-space:nowrap}
+.lg-sub a{flex:1;min-width:140px;padding:12px 16px;border-radius:13px;font-weight:600;color:var(--ink);text-decoration:none;display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.lg-sub a:hover{background:var(--hover)}
+.lg-sub a.on{background:var(--acc);color:#fff}
+.lg-top{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.lg-top .lg-site{width:260px;height:44px}
+.lg-live{display:flex;align-items:center;gap:8px;padding:10px 16px;white-space:nowrap;background:var(--card);border-radius:14px;font-weight:600}
+@media (max-width:900px){.lg-top .lg-site{width:100%}}
+@media (max-width:900px){.lg-top{flex-direction:column}.lg-top .lg-site{width:100%}}
+.lg-sub button{flex:1;min-width:150px;border:0;background:none;padding:12px 16px;border-radius:13px;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+.lg-sub button:hover{background:var(--hover)}
+.lg-sub button.on{background:var(--acc);color:#fff}
+.lg-sub .lg-n{font-size:12px;font-weight:700;padding:1px 8px;border-radius:99px;background:var(--line-2);color:var(--mu)}
+.lg-sub button.on .lg-n{background:rgba(255,255,255,.22);color:#fff}
+.lg-pane[hidden]{display:none!important}
+.lg-pq{height:38px;width:260px}
+.lg-pt{table-layout:fixed;width:100%}.lg-pt td{vertical-align:middle}
+.lg-pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.lg-pg .mu{margin-right:auto}
+.lg-acts{display:flex;gap:6px;justify-content:flex-end}.lg-acts form{margin:0}
+@media (max-width:1100px){.lg-pt{table-layout:auto}.lg-pq{width:100%}}
 .grid3.lg-grid{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));align-items:stretch}
 .lg-grid .item{gap:10px}.lg-grid .item>.grow{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lg-ban{width:34px;padding:0;justify-content:center}
@@ -4221,14 +4254,16 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 <?php if (!$names): ?>
       <section class="card"><div class="empty"><b>Ainda não há sites</b>Os logs aparecem aqui depois de criares o primeiro site.</div></section>
 <?php else: ?>
-      <nav class="tabs" aria-label="Site">
-        <select class="in" onchange="location.href='?p=logs&amp;t=<?= $lgT ?>&amp;site='+encodeURIComponent(this.value)" aria-label="Site" style="height:40px;min-width:200px;width:auto">
+      <div class="lg-top">
+        <select class="in lg-site" onchange="location.href='?p=logs&amp;t=<?= $lgT ?>&amp;site='+encodeURIComponent(this.value)" aria-label="Site">
           <?php foreach ($names as $sn): ?><option value="<?= h($sn) ?>"<?= $sn === $lgSite ? ' selected' : '' ?>><?= h($sn) ?></option><?php endforeach; ?>
         </select>
+        <label class="chk lg-live"><input type="checkbox" id="lg-live"> Ao vivo</label>
+      </div>
+      <nav class="lg-sub" aria-label="Tipo de registo">
         <?php foreach (['access' => 'Acessos', 'error' => 'Erros do servidor', 'php' => 'Erros do PHP', 'slow' => 'PHP lento', 'cron' => 'Tarefas agendadas'] as $tk => $tl): ?>
-          <a class="chip<?= $lgT === $tk ? ' prim' : '' ?>" href="?p=logs&amp;site=<?= h(rawurlencode($lgSite)) ?>&amp;t=<?= $tk ?>"><?= $tl ?></a>
+          <a class="<?= $lgT === $tk ? 'on' : '' ?>" href="?p=logs&amp;site=<?= h(rawurlencode($lgSite)) ?>&amp;t=<?= $tk ?>"<?= $lgT === $tk ? ' aria-current="page"' : '' ?>><?= $tl ?></a>
         <?php endforeach; ?>
-        <label class="chk" style="margin-left:auto"><input type="checkbox" id="lg-live"> Ao vivo</label>
       </nav>
 
   <?php if ($lgSum !== null): ?>
@@ -4239,26 +4274,62 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
         <div class="stat"><span class="tile t-vio"><?= ic('clock') ?></span><div><div class="k">Tempo médio (páginas)</div><div class="v"><?= $lgSum['rtn'] ? (int)round($lgSum['rts'] * 1000 / $lgSum['rtn']) . ' <small>ms</small>' : '—' ?></div></div></div>
         <?php $ch = $lgSum['cache']; $cht = array_sum($ch); if ($cht): ?><div class="stat"><span class="tile t-acc"><?= ic('pulse') ?></span><div><div class="k">Cache de página</div><div class="v"><?= (int)round(($ch['HIT'] ?? 0) * 100 / $cht) ?>% <small>da cache</small></div></div></div><?php endif; ?>
       </section>
-      <div class="grid3 lg-grid">
-        <?php foreach (['e5xx' => ['Erros 5xx (servidor/PHP)', 'Sem erros 5xx nas últimas 24 h.'], 'e404' => ['Páginas não encontradas (404)', 'Sem 404 nas últimas 24 h.']] as $k => $lbl): ?>
-        <section class="card"><div class="card-h"><h2><?= $lbl[0] ?></h2></div>
-          <?php if (!$lgSum[$k]): ?><div class="empty"><?= $lbl[1] ?></div><?php else: ?><div class="row-list">
-          <?php foreach ($lgSum[$k] as $u => $cnt): ?><div class="item"><div class="grow mono lg-url" title="<?= h($u) ?>"><?= h($u) ?></div><b><?= (int)$cnt ?></b></div><?php endforeach; ?></div><?php endif; ?>
-        </section>
-        <?php endforeach; ?>
-        <section class="card"><div class="card-h"><h2>Páginas mais lentas</h2></div>
-          <?php if (!$lgSum['slow']): ?><div class="empty">Sem dados de tempo ainda (o registo de tempos começa com esta versão).</div><?php else: ?><div class="row-list">
-          <?php foreach ($lgSum['slow'] as $u => $v): ?><div class="item"><div class="grow mono lg-url" title="<?= h($u) ?>"><?= h($u) ?></div><span class="mu"><?= (int)$v[0] ?>×</span><b style="<?= $v[1] / $v[0] >= 1 ? 'color:var(--err)' : '' ?>"><?= (int)round($v[1] * 1000 / $v[0]) ?> ms</b></div><?php endforeach; ?></div><?php endif; ?>
-        </section>
-        <section class="card"><div class="card-h"><h2>IPs mais ativos</h2></div>
-          <?php if (!$lgSum['ips']): ?><div class="empty">Sem pedidos nas últimas 24 h.</div><?php else: ?><div class="row-list">
-          <?php foreach ($lgSum['ips'] as $ip => $cnt): ?><div class="item"><div class="grow mono"><?= h($ip) ?></div><b><?= (int)$cnt ?></b>
-            <form method="post" data-confirm="Bloquear <?= h($ip) ?> durante 24 horas?"><?= act_fields('fw_block', ['ip' => (string)$ip, 'dur' => '24h', 'reason' => 'Bloqueado a partir dos logs de ' . $lgSite]) ?><button class="btn sm sec lg-ban" type="submit" title="Bloquear durante 24 horas" aria-label="Bloquear"><?= ic('ban') ?></button></form></div><?php endforeach; ?></div><?php endif; ?>
-        </section>
-      </div>
+      <?php
+        $lgTz = tz_off(live_stats());
+        $lgWhen = function ($t) use ($lgTz) { return $t ? gmdate('d/m H:i', (int)$t + $lgTz) : '—'; };
+        $lgDur = function ($sec) { return $sec >= 1 ? number_format($sec, $sec >= 10 ? 1 : 2, ',', '') . ' s' : (int)round($sec * 1000) . ' ms'; };
+        $lgProbe = '#(^/\.(env|git|svn|aws|ht)|wp-login|xmlrpc|wp-admin|phpmyadmin|pma|/admin|/config|\.php\d?$|/cgi-bin|/server-status|/console|/actuator|/vendor/|/\.well-known/security|_proxy_|/login\.action|/boaform|/HNAP1)#i';
+        $lgTabs = ['acessos' => ['Acessos', $lgSum['total']], 'e5xx' => ['Erros 5xx', count($lgSum['e5xx'])], 'e404' => ['Não encontradas', count($lgSum['e404'])], 'slow' => ['Mais lentas', count($lgSum['slow'])], 'ips' => ['IPs', count($lgSum['ips'])]];
+      ?>
+      <nav class="lg-sub" role="tablist" aria-label="Vistas dos acessos">
+        <?php foreach ($lgTabs as $tk => $tv): ?><button type="button" role="tab" data-lgtab="<?= $tk ?>"<?= $tk === 'acessos' ? ' class="on"' : '' ?>><?= h($tv[0]) ?> <span class="lg-n"><?= number_format((int)$tv[1], 0, ',', ' ') ?></span></button><?php endforeach; ?>
+      </nav>
+      <section class="card lg-pane" data-pane="e5xx" hidden>
+        <div class="card-h"><div><h2>Erros 5xx (servidor/PHP)</h2><p>Páginas que falharam no servidor nas últimas 24 h. Vê o motivo em Erros do PHP ou Erros do servidor.</p></div><input class="in lg-pq" type="search" placeholder="Procurar página…"></div>
+        <?php if (!$lgSum['e5xx']): ?><div class="empty">Sem erros 5xx nas últimas 24 h.</div><?php else: ?>
+        <table class="list lg-pt"><colgroup><col><col style="width:110px"><col style="width:200px"><col style="width:90px"><col style="width:130px"><col style="width:130px"></colgroup>
+          <thead><tr><th>Página</th><th class="r">Pedidos</th><th>Códigos</th><th class="r">IPs</th><th>Último</th><th></th></tr></thead><tbody>
+          <?php foreach ($lgSum['e5xx'] as $u => $r): ?><tr data-s="<?= h(strtolower($u)) ?>"><td class="mono lg-cut" title="<?= h($u) ?>"><?= h($u) ?></td><td class="r"><b><?= (int)$r['n'] ?></b></td>
+            <td><?php foreach ($r['codes'] as $cd => $cn): ?><span class="pill p-err"><?= h($cd) ?> × <?= (int)$cn ?></span> <?php endforeach; ?></td><td class="r"><?= (int)$r['ips'] ?></td><td class="mu"><?= h($lgWhen($r['last'])) ?></td>
+            <td class="r"><button type="button" class="btn sm sec" data-lgview='<?= h((string)json_encode(['q' => $u, 'st' => '5'])) ?>'>Ver pedidos</button></td></tr><?php endforeach; ?>
+          </tbody></table><div class="card-f lg-pg"></div><?php endif; ?>
+      </section>
+      <section class="card lg-pane" data-pane="e404" hidden>
+        <div class="card-h"><div><h2>Páginas não encontradas (404)</h2><p>Endereços pedidos que não existem. "Sondagem" assinala tentativas típicas de robôs à procura de falhas (.env, wp-login, .git…).</p></div><input class="in lg-pq" type="search" placeholder="Procurar página…"></div>
+        <?php if (!$lgSum['e404']): ?><div class="empty">Sem 404 nas últimas 24 h.</div><?php else: ?>
+        <table class="list lg-pt"><colgroup><col><col style="width:110px"><col style="width:120px"><col style="width:90px"><col style="width:130px"><col style="width:130px"></colgroup>
+          <thead><tr><th>Página</th><th class="r">Pedidos</th><th>Tipo</th><th class="r">IPs</th><th>Último</th><th></th></tr></thead><tbody>
+          <?php foreach ($lgSum['e404'] as $u => $r): $pr = preg_match($lgProbe, $u) === 1; ?><tr data-s="<?= h(strtolower($u)) ?>"><td class="mono lg-cut" title="<?= h($u) ?>"><?= h($u) ?></td><td class="r"><b><?= (int)$r['n'] ?></b></td>
+            <td><?= $pr ? '<span class="pill p-warn" title="Tentativa típica de robôs">Sondagem</span>' : '<span class="mu">Em falta</span>' ?></td><td class="r"><?= (int)$r['ips'] ?></td><td class="mu"><?= h($lgWhen($r['last'])) ?></td>
+            <td class="r"><button type="button" class="btn sm sec" data-lgview='<?= h((string)json_encode(['q' => $u, 'st' => '4'])) ?>'>Ver pedidos</button></td></tr><?php endforeach; ?>
+          </tbody></table><div class="card-f lg-pg"></div><?php endif; ?>
+      </section>
+      <section class="card lg-pane" data-pane="slow" hidden>
+        <div class="card-h"><div><h2>Páginas mais lentas</h2><p>Tempo de resposta médio de cada página nas últimas 24 h (sem imagens, CSS e JS). Para ver o que o PHP estava a fazer, usa PHP lento.</p></div><input class="in lg-pq" type="search" placeholder="Procurar página…"></div>
+        <?php if (!$lgSum['slow']): ?><div class="empty">Sem dados de tempo nas últimas 24 h.</div><?php else: ?>
+        <table class="list lg-pt"><colgroup><col><col style="width:110px"><col style="width:140px"><col style="width:140px"><col style="width:130px"></colgroup>
+          <thead><tr><th>Página</th><th class="r">Pedidos</th><th class="r">Tempo médio</th><th class="r">Máximo</th><th></th></tr></thead><tbody>
+          <?php foreach ($lgSum['slow'] as $u => $r): $av = $r['sum'] / max(1, $r['n']); ?><tr data-s="<?= h(strtolower($u)) ?>"><td class="mono lg-cut" title="<?= h($u) ?>"><?= h($u) ?></td><td class="r"><?= (int)$r['n'] ?></td>
+            <td class="r"><b style="<?= $av >= 1 ? 'color:var(--err)' : ($av >= .3 ? 'color:var(--warn)' : '') ?>"><?= h($lgDur($av)) ?></b></td><td class="r mu"><?= h($lgDur($r['max'])) ?></td>
+            <td class="r"><button type="button" class="btn sm sec" data-lgview='<?= h((string)json_encode(['q' => $u])) ?>'>Ver pedidos</button></td></tr><?php endforeach; ?>
+          </tbody></table><div class="card-f lg-pg"></div><?php endif; ?>
+      </section>
+      <section class="card lg-pane" data-pane="ips" hidden>
+        <div class="card-h"><div><h2>IPs mais ativos</h2><p>Quem mais pediu páginas nas últimas 24 h, com o país e os erros. Muitos 4xx de um só IP costumam ser um robô à procura de falhas.</p></div><input class="in lg-pq" type="search" placeholder="Procurar IP ou país…"></div>
+        <?php if (!$lgSum['ips']): ?><div class="empty">Sem pedidos nas últimas 24 h.</div><?php else: ?>
+        <table class="list lg-pt"><colgroup><col style="width:170px"><col style="width:170px"><col style="width:90px"><col style="width:64px"><col style="width:64px"><col style="width:90px"><col style="width:110px"><col><col style="width:175px"></colgroup>
+          <thead><tr><th>IP</th><th>País</th><th class="r">Pedidos</th><th class="r">4xx</th><th class="r">5xx</th><th class="r">Tráfego</th><th>Último</th><th>Navegador</th><th></th></tr></thead><tbody>
+          <?php foreach ($lgSum['ips'] as $ip => $r): $cc = geo_cc((string)$ip); ?><tr data-s="<?= h(strtolower($ip . ' ' . $cc . ' ' . cc_name($cc))) ?>">
+            <td class="mono"><?= h((string)$ip) ?></td><td class="lg-cut" title="<?= h(cc_name($cc)) ?>"><?= $cc !== '' ? cc_flag($cc) . ' ' . h(cc_name($cc)) : '<span class="mu">—</span>' ?></td><td class="r"><b><?= (int)$r['n'] ?></b></td>
+            <td class="r<?= $r['c4'] > $r['n'] / 2 ? '" style="color:var(--warn)' : '' ?>"><?= (int)$r['c4'] ?></td><td class="r"><?= (int)$r['c5'] ?></td><td class="r mu"><?= h(fmt_bytes((float)$r['b'])) ?></td><td class="mu"><?= h($lgWhen($r['last'])) ?></td>
+            <td class="lg-cut mu" title="<?= h((string)$r['ua']) ?>"><?= $r['bot'] ? '<span class="pill p-off">Robô</span> ' : '' ?><?= h((string)$r['ua']) ?></td>
+            <td class="r"><div class="lg-acts"><button type="button" class="btn sm sec" data-lgview='<?= h((string)json_encode(['ip' => (string)$ip])) ?>'>Ver pedidos</button>
+              <form method="post" data-confirm="Bloquear <?= h((string)$ip) ?> durante 24 horas?"><?= act_fields('fw_block', ['ip' => (string)$ip, 'dur' => '24h', 'reason' => 'Bloqueado a partir dos logs de ' . $lgSite]) ?><button class="btn sm sec lg-ban" type="submit" title="Bloquear durante 24 horas" aria-label="Bloquear"><?= ic('ban') ?></button></form></div></td></tr><?php endforeach; ?>
+          </tbody></table><div class="card-f lg-pg"></div><?php endif; ?>
+      </section>
   <?php endif; ?>
 
-      <section class="card" id="lg" data-site="<?= h($lgSite) ?>" data-t="<?= $lgT ?>">
+      <section class="card<?= $lgSum !== null ? ' lg-pane' : '' ?>" id="lg" data-pane="acessos" data-site="<?= h($lgSite) ?>" data-t="<?= $lgT ?>">
         <div class="card-h"><div><h2><?= ['access' => 'Acessos', 'error' => 'Erros do servidor (nginx)', 'php' => 'Erros do PHP', 'slow' => 'Scripts PHP lentos (ficheiro e função em curso)', 'cron' => 'Saída das tarefas agendadas'][$lgT] ?></h2><p class="mono"><?= h(['access' => MP_SITE_LOGS . "/$lgSite/access.log", 'error' => MP_SITE_LOGS . "/$lgSite/error.log", 'php' => "/srv/www/$lgSite/logs/php-error.log", 'slow' => MP_SITE_LOGS . "/$lgSite/php-slow.log (Sites → ⋮ → Desempenho)", 'cron' => "/srv/www/$lgSite/logs/cron-<id>.log"][$lgT]) ?></p></div>
           <div class="lg-filters">
             <?php if ($lgT === 'access'): ?>
@@ -5233,6 +5304,34 @@ elseif (qget('limites') !== '' && valid_site(qget('limites'))) $openOnLoad = 'dl
 (function () {
   var box = document.getElementById('lg'); if (!box) return;
   var site = box.getAttribute('data-site'), t = box.getAttribute('data-t'), body = document.getElementById('lg-body'), lgPg = 1;
+  /* separadores dos acessos: Acessos · 5xx · 404 · Mais lentas · IPs */
+  var subs = document.querySelectorAll('[data-lgtab]'), panes = document.querySelectorAll('.lg-pane');
+  function showTab(k) {
+    subs.forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-lgtab') === k); b.setAttribute('aria-selected', b.getAttribute('data-lgtab') === k ? 'true' : 'false'); });
+    panes.forEach(function (p) { p.hidden = p.getAttribute('data-pane') !== k; });
+    if (history.replaceState) history.replaceState(null, '', k === 'acessos' ? location.pathname + location.search : '#' + k);
+  }
+  subs.forEach(function (b) { b.addEventListener('click', function () { showTab(b.getAttribute('data-lgtab')); }); });
+  if (subs.length && /^#(e5xx|e404|slow|ips)$/.test(location.hash)) showTab(location.hash.slice(1));
+  document.querySelectorAll('.lg-pane[data-pane]:not(#lg)').forEach(function (pane) {
+    var rows = Array.prototype.slice.call(pane.querySelectorAll('tbody tr')), q = pane.querySelector('.lg-pq'), pgEl = pane.querySelector('.lg-pg'), pg = 1;
+    function draw() {
+      var v = q ? q.value.trim().toLowerCase() : '', vis = rows.filter(function (r) { return !v || r.getAttribute('data-s').indexOf(v) !== -1; }), pages = Math.max(1, Math.ceil(vis.length / 50));
+      if (pg > pages) pg = pages; rows.forEach(function (r) { r.hidden = true; }); vis.slice((pg - 1) * 50, pg * 50).forEach(function (r) { r.hidden = false; });
+      if (!pgEl) return; var h = '<span class="mu">' + vis.length + ' de ' + rows.length + '</span>';
+      if (pages > 1) for (var i = 1; i <= pages; i++) h += '<button type="button" class="chip sm' + (i === pg ? ' prim' : '') + '" data-p="' + i + '">' + i + '</button>';
+      pgEl.innerHTML = h;
+    }
+    if (q) q.addEventListener('input', function () { pg = 1; draw(); });
+    if (pgEl) pgEl.addEventListener('click', function (e) { var b = e.target.closest('[data-p]'); if (b) { pg = +b.getAttribute('data-p'); draw(); } });
+    draw();
+  });
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-lgview]'); if (!b) return;
+    var f = JSON.parse(b.getAttribute('data-lgview'));
+    if ($('lg-st')) $('lg-st').value = f.st || ''; if ($('lg-ip')) $('lg-ip').value = f.ip || ''; if ($('lg-q')) $('lg-q').value = f.q || '';
+    lgPg = 1; showTab('acessos'); load(); box.scrollIntoView({ block: 'start' });
+  });
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function pill(s) { var c = s >= 500 ? 'p-err' : (s >= 400 ? 'p-warn' : (s >= 300 ? 'p-off' : 'p-ok')); return '<span class="pill ' + c + '">' + s + '</span>'; }

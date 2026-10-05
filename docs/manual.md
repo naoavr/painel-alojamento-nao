@@ -546,7 +546,7 @@ Mostra o que consome CPU e memória, agrupado por origem: **cada site** (ex.: "S
 
 | Separador | O que mostra | Onde está o ficheiro |
 | --- | --- | --- |
-| Acessos | Cada pedido: IP, página, código, tempo, cache; resumo das 24 h e páginas mais lentas | `/var/log/minipainel/sites/<site>/access.log` |
+| Acessos | Cada pedido: IP, página, código, tempo, cache. Separadores das últimas 24 h: Erros 5xx, Não encontradas (404, com "Sondagem" para robôs), Mais lentas e IPs (país, erros, tráfego, bloquear); "Ver pedidos" filtra a lista | `/var/log/minipainel/sites/<site>/access.log` |
 | Erros do servidor | Erros do nginx | `/var/log/minipainel/sites/<site>/error.log` |
 | Erros do PHP | Avisos e erros fatais do PHP | `/srv/www/<site>/logs/php-error.log` |
 | PHP lento | Ficheiro, função e linha dos pedidos demorados | `/var/log/minipainel/sites/<site>/php-slow.log` |
